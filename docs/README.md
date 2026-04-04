@@ -27,7 +27,8 @@ cd ~/Mnemon
 # Open ~/path/to/your/vault/reader-context.md and fill in your profile
 
 # 3. Install the Claude Code plugin
-claude plugin install ~/Mnemon
+claude plugin marketplace add https://github.com/dkushnikov/mnemon-plugin
+claude plugin install mnemon@mnemon-plugin
 
 # 4. Add your first source
 /source-add https://example.com/interesting-article
