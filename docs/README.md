@@ -21,10 +21,10 @@ Every extract is framed by YOUR context — your role, domains, goals. Two peopl
 # 1. Clone and setup
 git clone https://github.com/dkushnikov/mnemon ~/Mnemon
 cd ~/Mnemon
-./setup.sh ~/Obsidian/Knowledge
+./setup.sh ~/path/to/your/vault
 
 # 2. Edit your reader context (personalizes extractions)
-# Open ~/Obsidian/Knowledge/reader-context.md and fill in your profile
+# Open ~/path/to/your/vault/reader-context.md and fill in your profile
 
 # 3. Install the Claude Code plugin
 claude plugin install ~/Mnemon

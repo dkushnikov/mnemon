@@ -32,5 +32,5 @@ The extraction template picks up domain tags from the reader context.
 ## Domain Naming Conventions
 
 - Lowercase, hyphenated: `inner-work`, not `Inner Work`
-- Namespaced with `/` for work contexts: `mc/engineering`, `mc/product`
+- Namespaced with `/` for work contexts: `mycompany/engineering`, `mycompany/product`
 - Keep the list to 7-15 domains — too many defeats the purpose

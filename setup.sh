@@ -18,8 +18,8 @@ Options:
   -h, --help          Show this help
 
 Example:
-  ./setup.sh ~/Obsidian/Knowledge
-  ./setup.sh ~/my-knowledge --non-interactive
+  ./setup.sh ~/my-knowledge
+  ./setup.sh ~/Obsidian/Knowledge --non-interactive
 EOF
   exit 0
 }
