@@ -37,6 +37,7 @@ EOF
 
 load_config "$TMPCONFIG2"
 assert_eq "$VAULT_PATH" "$HOME/my-vault" "vault_path from minimal config"
+assert_eq "$READER_CONTEXT_PATH" "$HOME/my-vault/reader-context.md" "reader_context_path derives from vault_path"
 assert_eq "$SEARCH_PROVIDER" "grep" "search_provider defaults to grep"
 assert_eq "$DEFAULT_MODEL" "sonnet" "default_model defaults to sonnet"
 assert_eq "$WHISPER_MODEL" "large-v3" "whisper_model defaults to large-v3"

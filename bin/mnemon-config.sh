@@ -12,7 +12,12 @@ MNEMON_ROOT="${MNEMON_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 _parse_yaml_value() {
   local key="$1" file="$2"
   local val
-  val=$(grep "^${key}:" "$file" 2>/dev/null | head -1 | sed "s/^${key}:[[:space:]]*//" | sed 's/[[:space:]]*$//')
+  # Use awk with exact string match (not regex) to avoid BRE metacharacter issues
+  val=$(awk -v k="$key" 'BEGIN { prefix = k ": " } substr($0, 1, length(prefix)) == prefix { print substr($0, length(prefix) + 1); exit }' "$file" 2>/dev/null)
+  # Strip inline comments (but not inside quotes)
+  val=$(echo "$val" | sed 's/[[:space:]]*#.*$//')
+  # Strip trailing whitespace
+  val=$(echo "$val" | sed 's/[[:space:]]*$//')
   # Strip surrounding quotes
   val="${val#\"}" ; val="${val%\"}"
   val="${val#\'}" ; val="${val%\'}"
