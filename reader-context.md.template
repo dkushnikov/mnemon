@@ -1,0 +1,47 @@
+# Reader Context
+
+This file personalizes your knowledge extractions. Every source you add is framed through YOUR context — your role, domains, and goals. Two people reading the same article get different extracts.
+
+Edit this file to match who you are and what you care about.
+
+## Who I Am
+
+<!-- Your role, background, what you do. 2-3 sentences. -->
+<!-- Example: "Software engineer at a fintech startup. 5 years experience. Interested in distributed systems and team leadership." -->
+
+## Domains of Interest
+
+<!-- Which areas do you want extracts tagged with? Use these as domain tags in Key Ideas. -->
+<!-- Default domains (Life Capital framework): -->
+- `learning` — what changes how I think
+- `health` — evidence-based, actionable
+- `relationships` — peers, network, community
+- `finance` — investment, wealth building
+- `career` — professional growth, leadership
+- `culture` — joy, enrichment, creativity
+- `inner-work` — self-awareness, coaching
+
+<!-- Add your own domains: -->
+<!-- - `my-domain` — what it means to me -->
+
+## Current Goals
+
+<!-- What are you focused on right now? This helps frame Executive Summaries. -->
+<!-- Example: -->
+<!-- - Preparing for a senior engineer promotion -->
+<!-- - Building a reading habit (3 articles/week) -->
+<!-- - Learning about AI agents and their applications -->
+
+## What I Want From Extracts
+
+<!-- How should the Executive Summary talk to you? -->
+- Challenge my assumptions — if the source contradicts my approach, say so
+- Be direct, no fluff. If the source is mediocre, say it's mediocre
+- Connect to my current priorities where genuine
+- Actionable implications over theoretical interest
+
+## Language
+
+<!-- What language should Executive Summaries be written in? -->
+<!-- Options: en, ru, or "match the source" -->
+Executive Summary language: en
