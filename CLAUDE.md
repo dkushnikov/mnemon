@@ -1,7 +1,7 @@
 # Mnemon — Developer Guide
 
 Open-source AI-powered personal knowledge extraction system.
-Repo: `dkushnikov/mnemon`. License: TBD (MIT or Apache 2.0).
+Repo: `dkushnikov/mnemon`. License: MIT.
 
 ## Architecture
 

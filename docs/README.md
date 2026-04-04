@@ -119,7 +119,7 @@ mnemon/
 
 ## License
 
-TBD (MIT or Apache 2.0)
+[MIT](../LICENSE)
 
 ## Author
 
