@@ -1,0 +1,21 @@
+# User config (created by setup.sh, not tracked)
+mnemon.yaml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Test artifacts
+/tmp-test-*/
