@@ -1,0 +1,10 @@
+{
+  "name": "mnemon",
+  "version": "0.1.0",
+  "description": "AI-powered personal knowledge extraction system. Capture articles, videos, podcasts, books — get structured, searchable knowledge artifacts framed by your personal context.",
+  "skills": [
+    "skills/source-add",
+    "skills/source-search",
+    "skills/source-status"
+  ]
+}
