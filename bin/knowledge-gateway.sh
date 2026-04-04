@@ -56,19 +56,19 @@ NO_WHISPER=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --origin)        ORIGIN="$2"; shift 2 ;;
-    --url)           URL="$2"; shift 2 ;;
-    --file)          FILE_PATH="$2"; shift 2 ;;
-    --title)         TITLE="$2"; shift 2 ;;
-    --author)        AUTHOR="$2"; shift 2 ;;
-    --source-type)   SOURCE_TYPE="$2"; shift 2 ;;
-    --context)       CONTEXT="$2"; shift 2 ;;
-    --session)       SESSION="$2"; shift 2 ;;
-    --intent)        INTENT="$2"; shift 2 ;;
-    --config)        CONFIG_PATH="$2"; shift 2 ;;
-    --model)         MODEL_FLAG="$2"; shift 2 ;;
+    --origin)        [[ $# -lt 2 ]] && { echo "ERROR: --origin requires a value" >&2; exit 1; }; ORIGIN="$2"; shift 2 ;;
+    --url)           [[ $# -lt 2 ]] && { echo "ERROR: --url requires a value" >&2; exit 1; }; URL="$2"; shift 2 ;;
+    --file)          [[ $# -lt 2 ]] && { echo "ERROR: --file requires a value" >&2; exit 1; }; FILE_PATH="$2"; shift 2 ;;
+    --title)         [[ $# -lt 2 ]] && { echo "ERROR: --title requires a value" >&2; exit 1; }; TITLE="$2"; shift 2 ;;
+    --author)        [[ $# -lt 2 ]] && { echo "ERROR: --author requires a value" >&2; exit 1; }; AUTHOR="$2"; shift 2 ;;
+    --source-type)   [[ $# -lt 2 ]] && { echo "ERROR: --source-type requires a value" >&2; exit 1; }; SOURCE_TYPE="$2"; shift 2 ;;
+    --context)       [[ $# -lt 2 ]] && { echo "ERROR: --context requires a value" >&2; exit 1; }; CONTEXT="$2"; shift 2 ;;
+    --session)       [[ $# -lt 2 ]] && { echo "ERROR: --session requires a value" >&2; exit 1; }; SESSION="$2"; shift 2 ;;
+    --intent)        [[ $# -lt 2 ]] && { echo "ERROR: --intent requires a value" >&2; exit 1; }; INTENT="$2"; shift 2 ;;
+    --config)        [[ $# -lt 2 ]] && { echo "ERROR: --config requires a value" >&2; exit 1; }; CONFIG_PATH="$2"; shift 2 ;;
+    --model)         [[ $# -lt 2 ]] && { echo "ERROR: --model requires a value" >&2; exit 1; }; MODEL_FLAG="$2"; shift 2 ;;
     --dry-run)       DRY_RUN=true; shift ;;
-    --whisper-model) WHISPER_MODEL_FLAG="$2"; shift 2 ;;
+    --whisper-model) [[ $# -lt 2 ]] && { echo "ERROR: --whisper-model requires a value" >&2; exit 1; }; WHISPER_MODEL_FLAG="$2"; shift 2 ;;
     --no-whisper)    NO_WHISPER=true; shift ;;
     *)               echo "Unknown option: $1" >&2; usage ;;
   esac
@@ -237,10 +237,15 @@ invoke_claude() {
     return 1
   fi
 
-  echo "$output"
+  # Show output without RESULT lines (narrative for human)
+  echo "$output" | grep -v "^RESULT:" || true
 
-  # Extract RESULT lines for caller
+  # Extract RESULT lines for caller (machine-parseable)
   echo "$output" | grep "^RESULT:" || true
+}
+
+_json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n' ' '
 }
 
 save_pending_write() {
@@ -249,18 +254,16 @@ save_pending_write() {
   mkdir -p "$pending_dir"
   local ts
   ts=$(date +%Y%m%d-%H%M%S)
-  local error_escaped
-  error_escaped=$(printf '%s' "$error_output" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n' ' ')
   cat > "$pending_dir/$ts.json" << PEND_EOF
 {
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "action": "$ACTION",
-  "origin": "$ORIGIN",
-  "url": "$URL",
-  "file": "$FILE_PATH",
-  "context": "$CONTEXT",
-  "session": "$SESSION",
-  "error": "$error_escaped"
+  "action": "$(_json_escape "$ACTION")",
+  "origin": "$(_json_escape "$ORIGIN")",
+  "url": "$(_json_escape "$URL")",
+  "file": "$(_json_escape "$FILE_PATH")",
+  "context": "$(_json_escape "$CONTEXT")",
+  "session": "$(_json_escape "$SESSION")",
+  "error": "$(_json_escape "$error_output")"
 }
 PEND_EOF
   echo "Saved to pending-writes: $pending_dir/$ts.json" >&2
@@ -284,7 +287,6 @@ case "$ACTION" in
           save_pending_write "$prompt" "" "media-extract.py failed for $URL"
           exit 1
         }
-        prompt=$(build_prompt)
         invoke_claude "$prompt" "$stdin_content"
       fi
 
@@ -301,7 +303,6 @@ case "$ACTION" in
           save_pending_write "$prompt" "" "media-extract.py failed for ${URL:-$FILE_PATH}"
           exit 1
         }
-        prompt=$(build_prompt)
         invoke_claude "$prompt" "$stdin_content"
       fi
 
@@ -326,7 +327,7 @@ case "$ACTION" in
       exit 0
     fi
     total=$(find "$VAULT_PATH/Sources" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-    extracted=$(grep -rl '^status: extracted' "$VAULT_PATH/Sources/"*/extract.md 2>/dev/null | wc -l | tr -d ' ') || extracted=0
+    extracted=$(grep -l '^status: extracted' "$VAULT_PATH/Sources/"*/extract.md 2>/dev/null | wc -l | tr -d ' ') || extracted=0
     echo "Total sources: $total"
     echo "Extracted: $extracted"
     echo ""
