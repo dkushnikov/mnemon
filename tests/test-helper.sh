@@ -4,7 +4,6 @@ set -euo pipefail
 
 PASS=0
 FAIL=0
-TEST_NAME=""
 
 pass() { echo "  ✓ $1"; ((PASS++)) || true; }
 fail() { echo "  ✗ $1: $2"; ((FAIL++)) || true; }
