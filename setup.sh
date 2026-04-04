@@ -48,7 +48,10 @@ fi
 
 # Resolve tilde and make absolute
 VAULT_PATH="${VAULT_PATH/#\~/$HOME}"
-VAULT_PATH="$(cd "$(dirname "$VAULT_PATH")" 2>/dev/null && pwd)/$(basename "$VAULT_PATH")" || VAULT_PATH="$VAULT_PATH"
+resolved_parent="$(cd "$(dirname "$VAULT_PATH")" 2>/dev/null && pwd)" || true
+if [[ -n "$resolved_parent" ]]; then
+  VAULT_PATH="$resolved_parent/$(basename "$VAULT_PATH")"
+fi
 
 echo "=== Mnemon Setup ==="
 echo "Vault: $VAULT_PATH"
@@ -84,7 +87,8 @@ copy_if_missing "$SCRIPT_DIR/reader-context.md.template" "$VAULT_PATH/reader-con
 echo "3. Generating config..."
 CONFIG_PATH="$SCRIPT_DIR/mnemon.yaml"
 if [[ ! -f "$CONFIG_PATH" ]]; then
-  sed "s|{{vault_path}}|$VAULT_PATH|g" "$SCRIPT_DIR/mnemon.yaml.template" > "$CONFIG_PATH"
+  escaped_path="${VAULT_PATH//&/\\&}"
+  sed "s|{{vault_path}}|$escaped_path|g" "$SCRIPT_DIR/mnemon.yaml.template" > "$CONFIG_PATH"
   echo "   ✓ Created mnemon.yaml"
 else
   echo "   ○ Skipped mnemon.yaml (exists)"
