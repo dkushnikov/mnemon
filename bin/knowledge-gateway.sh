@@ -137,10 +137,22 @@ load_reader_context() {
 
 # --- Prompt construction ---
 
+_sanitize_input() {
+  # Strip newlines and === delimiters from user-supplied values to prevent prompt injection
+  printf '%s' "$1" | tr '\n' ' ' | sed 's/===//g'
+}
+
 build_prompt() {
   local template reader_context
   template=$(load_template "$SOURCE_TYPE")
   reader_context=$(load_reader_context)
+
+  # Sanitize user-supplied fields
+  local safe_title safe_author safe_intent safe_session
+  safe_title="$(_sanitize_input "${TITLE:-}")"
+  safe_author="$(_sanitize_input "${AUTHOR:-}")"
+  safe_intent="$(_sanitize_input "${INTENT:-none specified}")"
+  safe_session="$(_sanitize_input "${SESSION:-unknown}")"
 
   local prompt="NON-INTERACTIVE GATEWAY REQUEST. Execute ONLY the requested action. No onboarding, no briefing, no questions, no summaries of what you plan to do. Just execute.
 
@@ -151,8 +163,8 @@ Source type: $SOURCE_TYPE"
 
   [[ -n "$URL" ]]       && prompt+=$'\n'"URL: $URL"
   [[ -n "$FILE_PATH" ]] && prompt+=$'\n'"File: $FILE_PATH"
-  [[ -n "$TITLE" ]]     && prompt+=$'\n'"Title: $TITLE"
-  [[ -n "$AUTHOR" ]]    && prompt+=$'\n'"Author: $AUTHOR"
+  [[ -n "$safe_title" ]]  && prompt+=$'\n'"Title: $safe_title"
+  [[ -n "$safe_author" ]] && prompt+=$'\n'"Author: $safe_author"
 
   if [[ "$ORIGIN" == "youtube" || "$ORIGIN" == "audio" ]]; then
     prompt+=$'\n'"Content format: transcript"
@@ -161,8 +173,8 @@ Source type: $SOURCE_TYPE"
 
   prompt+=$'\n\n'"=== CAPTURE CONTEXT ===
 Context: $CONTEXT
-Session: ${SESSION:-unknown}
-Intent: ${INTENT:-none specified}
+Session: $safe_session
+Intent: $safe_intent
 
 === READER CONTEXT ===
 $reader_context
