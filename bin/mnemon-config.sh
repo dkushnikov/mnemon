@@ -59,7 +59,11 @@ load_config() {
   AUTO_DETECT_ORIGIN="$(_parse_yaml_value auto_detect_origin "$config_file")"
 
   # Apply defaults
-  VAULT_PATH="${VAULT_PATH:-$HOME/Obsidian/Knowledge}"
+  VAULT_PATH="${VAULT_PATH:-}"
+  if [[ -z "$VAULT_PATH" ]]; then
+    echo "ERROR: vault_path not set in config. Run setup.sh first." >&2
+    return 1
+  fi
   READER_CONTEXT_PATH="${READER_CONTEXT_PATH:-$VAULT_PATH/reader-context.md}"
   SEARCH_PROVIDER="${SEARCH_PROVIDER:-grep}"
   QMD_COLLECTION="${QMD_COLLECTION:-mnemon}"
