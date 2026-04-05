@@ -8,16 +8,21 @@ echo "=== Integration Tests ==="
 TEST_TMPDIR=$(mktemp -d -t mnemon-integration-XXXX)
 VAULT="$TEST_TMPDIR/test-vault"
 
+# Isolate the test's config from the user's real ~/Mnemon/mnemon.yaml.
+# setup.sh and mnemon-config.sh both honor $MNEMON_CONFIG, so exporting it
+# here routes all config reads and writes into $TEST_TMPDIR.
+export MNEMON_CONFIG="$TEST_TMPDIR/mnemon.yaml"
+
 # --- Test 1: Full setup flow ---
 echo "--- Setup ---"
 bash "$MNEMON_ROOT/setup.sh" "$VAULT" --non-interactive --skip-qmd
 assert_dir_exists "$VAULT/Sources" "vault created"
-assert_file_exists "$MNEMON_ROOT/mnemon.yaml" "config generated"
+assert_file_exists "$MNEMON_CONFIG" "config generated"
 
 # --- Test 2: Config loads correctly ---
 echo "--- Config ---"
 source "$MNEMON_ROOT/bin/mnemon-config.sh"
-load_config "$MNEMON_ROOT/mnemon.yaml"
+load_config "$MNEMON_CONFIG"
 assert_eq "$VAULT_PATH" "$VAULT" "config vault_path matches"
 assert_file_exists "$READER_CONTEXT_PATH" "reader context exists"
 
@@ -26,7 +31,7 @@ echo "--- Gateway dry-run ---"
 output=$("$MNEMON_ROOT/bin/knowledge-gateway.sh" source-add \
   --url "https://example.com/test-article" \
   --intent "integration test" \
-  --config "$MNEMON_ROOT/mnemon.yaml" \
+  --config "$MNEMON_CONFIG" \
   --dry-run 2>&1)
 assert_contains "$output" "DRY RUN" "gateway dry-run works"
 assert_contains "$output" "https://example.com/test-article" "URL in prompt"
@@ -50,7 +55,7 @@ Test article for integration testing.
 EOF
 
 output=$("$MNEMON_ROOT/bin/knowledge-gateway.sh" status \
-  --config "$MNEMON_ROOT/mnemon.yaml" 2>&1)
+  --config "$MNEMON_CONFIG" 2>&1)
 assert_contains "$output" "Total sources: 1" "status counts sources"
 assert_contains "$output" "Integration Test Article" "status shows title"
 
@@ -58,7 +63,7 @@ assert_contains "$output" "Integration Test Article" "status shows title"
 echo "--- YouTube detection ---"
 output=$("$MNEMON_ROOT/bin/knowledge-gateway.sh" source-add \
   --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" \
-  --config "$MNEMON_ROOT/mnemon.yaml" \
+  --config "$MNEMON_CONFIG" \
   --dry-run 2>&1)
 assert_contains "$output" "Origin: youtube" "YouTube detected in full flow"
 assert_contains "$output" "Source type: video" "video source type"
@@ -76,8 +81,9 @@ assert_contains "$template_content" "STEPS" "template has STEPS section"
 assert_contains "$template_content" "OUTPUT INSTRUCTIONS" "template has OUTPUT INSTRUCTIONS"
 assert_contains "$template_content" "16 words" "template enforces 16-word discipline"
 
-# Cleanup
+# Cleanup — $MNEMON_CONFIG lives inside $TEST_TMPDIR, so removing the tmpdir
+# is enough. Do NOT touch $MNEMON_ROOT/mnemon.yaml — that's the user's real
+# config, which earlier versions of this test destroyed on every run.
 rm -rf "$TEST_TMPDIR"
-rm -f "$MNEMON_ROOT/mnemon.yaml"
 
 summary

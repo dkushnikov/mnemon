@@ -85,7 +85,12 @@ copy_if_missing "$SCRIPT_DIR/reader-context.md.template" "$VAULT_PATH/reader-con
 # --- 3. Generate mnemon.yaml ---
 
 echo "3. Generating config..."
-CONFIG_PATH="$SCRIPT_DIR/mnemon.yaml"
+# Honor $MNEMON_CONFIG so tests (and other automation) can isolate config
+# from the user's real ~/Mnemon/mnemon.yaml. Defaults to $SCRIPT_DIR/mnemon.yaml
+# for normal interactive use. mnemon-config.sh already honors the same env var
+# on the loader side — this keeps both ends symmetric.
+CONFIG_PATH="${MNEMON_CONFIG:-$SCRIPT_DIR/mnemon.yaml}"
+mkdir -p "$(dirname "$CONFIG_PATH")"
 if [[ ! -f "$CONFIG_PATH" ]]; then
   escaped_path="${VAULT_PATH//&/\\&}"
   sed "s|{{vault_path}}|$escaped_path|g" "$SCRIPT_DIR/mnemon.yaml.template" > "$CONFIG_PATH"
