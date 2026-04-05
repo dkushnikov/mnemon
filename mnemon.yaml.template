@@ -6,7 +6,11 @@ reader_context_path: {{vault_path}}/reader-context.md
 
 # Search: grep (zero deps) or qmd (hybrid BM25 + vector, needs QMD installed)
 search_provider: grep
-qmd_collection: mnemon
+# QMD collection name. Convention: obsidian-<vault-purpose> (matches the pattern
+# used for other Obsidian-vault collections like obsidian-personal). Change this
+# if you want a different name — setup.sh reads it from mnemon.yaml, not from
+# this template, so you can edit your generated config before re-running setup.
+qmd_collection: obsidian-knowledge
 
 # Extraction
 default_model: sonnet

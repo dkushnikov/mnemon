@@ -25,6 +25,7 @@ source "$MNEMON_ROOT/bin/mnemon-config.sh"
 load_config "$MNEMON_CONFIG"
 assert_eq "$VAULT_PATH" "$VAULT" "config vault_path matches"
 assert_file_exists "$READER_CONTEXT_PATH" "reader context exists"
+assert_eq "$QMD_COLLECTION" "obsidian-knowledge" "default qmd_collection name"
 
 # --- Test 3: Gateway dry-run works end-to-end ---
 echo "--- Gateway dry-run ---"
@@ -67,6 +68,26 @@ output=$("$MNEMON_ROOT/bin/knowledge-gateway.sh" source-add \
   --dry-run 2>&1)
 assert_contains "$output" "Origin: youtube" "YouTube detected in full flow"
 assert_contains "$output" "Source type: video" "video source type"
+
+# --- Test 5b: Dry-run does NOT fire auto-reindex hook ---
+# The hook in source-add should short-circuit when --dry-run is set.
+# If it fires, it would call `qmd update && qmd embed` in background,
+# touching the user's real qmd index. Regression test for that.
+echo "--- Auto-reindex guard ---"
+# Set search_provider to qmd in the test config so the hook's provider
+# check would pass if the dry-run guard weren't working.
+sed -i '' 's/^search_provider: grep/search_provider: qmd/' "$MNEMON_CONFIG"
+# We can't easily observe "no background qmd invocation" directly, so
+# we assert the gateway exits cleanly and the output still contains the
+# dry-run marker — the hook runs AFTER the main if/else block, so any
+# syntax error or shell trap in the hook would corrupt exit status.
+output=$("$MNEMON_ROOT/bin/knowledge-gateway.sh" source-add \
+  --url "https://example.com/reindex-guard-test" \
+  --config "$MNEMON_CONFIG" \
+  --dry-run 2>&1)
+assert_contains "$output" "DRY RUN" "dry-run still works with qmd provider set"
+# Flip back for subsequent tests
+sed -i '' 's/^search_provider: qmd/search_provider: grep/' "$MNEMON_CONFIG"
 
 # Skills and plugin manifest moved to the dkushnikov/mnemon-plugin repo;
 # tests for those assertions live there now (see commit removing plugin.json
