@@ -15,9 +15,10 @@ User → /source-add (skill) → knowledge-gateway.sh → claude -p → Sources/
 
 - **Gateway** (`bin/knowledge-gateway.sh`): core engine. Loads config, reads template + reader context, builds prompt, invokes `claude -p` in the vault directory.
 - **Config** (`mnemon.yaml`): flat YAML with vault path, search provider, model, etc. Created by `setup.sh`, gitignored.
-- **Skills** (`skills/`): thin Bash wrappers that call the gateway. Registered via `plugin.json`.
 - **Templates** (`templates/core/`): extraction prompt templates per source type. Fabric-inspired format.
 - **Vault template** (`vault-template/`): scaffold copied by `setup.sh` into user's vault.
+
+The Claude Code plugin (skills `/source-add`, `/source-search`, `/source-status` plus commands) lives in a separate repo: [`dkushnikov/mnemon-plugin`](https://github.com/dkushnikov/mnemon-plugin). Mnemon is the tool; the plugin is the Claude Code integration layer on top of it.
 
 ## Key Conventions
 
@@ -47,7 +48,6 @@ bash tests/test_setup.sh
 | Directory | Tracked | Notes |
 |-----------|---------|-------|
 | `bin/` | Yes | Core scripts |
-| `skills/` | Yes | Claude Code skills |
 | `templates/core/` | Yes | Official templates |
 | `templates/community/` | Yes | User contributions |
 | `vault-template/` | Yes | Scaffold for setup.sh |

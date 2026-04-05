@@ -106,17 +106,17 @@ All templates follow the Fabric-inspired format: IDENTITY → STEPS → OUTPUT I
 
 ```
 mnemon/
-├── plugin.json           # Claude Code plugin manifest
 ├── setup.sh              # One-command installation
 ├── bin/                   # Core scripts
 │   ├── knowledge-gateway.sh
 │   └── media-extract.py
-├── skills/               # Claude Code skills (/source-add, etc.)
 ├── templates/core/       # 7 extraction templates
 ├── protocols/            # Schema and convention docs
 ├── vault-template/       # Copied into vault by setup.sh
 └── docs/                 # Documentation
 ```
+
+> **Note:** Claude Code skills and commands (`/source-add`, `/source-search`, `/source-status`) live in a separate repo: [`dkushnikov/mnemon-plugin`](https://github.com/dkushnikov/mnemon-plugin). Mnemon is the tool; the plugin is the Claude Code integration layer on top of it.
 
 ## License
 

@@ -63,20 +63,9 @@ output=$("$MNEMON_ROOT/bin/knowledge-gateway.sh" source-add \
 assert_contains "$output" "Origin: youtube" "YouTube detected in full flow"
 assert_contains "$output" "Source type: video" "video source type"
 
-# --- Test 6: Skills exist ---
-echo "--- Skills ---"
-assert_file_exists "$MNEMON_ROOT/skills/source-add/SKILL.md" "source-add skill exists"
-assert_file_exists "$MNEMON_ROOT/skills/source-search/SKILL.md" "source-search skill exists"
-assert_file_exists "$MNEMON_ROOT/skills/source-status/SKILL.md" "source-status skill exists"
-
-# --- Test 7: Plugin manifest valid ---
-echo "--- Plugin ---"
-assert_file_exists "$MNEMON_ROOT/plugin.json" "plugin.json exists"
-# Check it mentions all three skills
-plugin_content=$(cat "$MNEMON_ROOT/plugin.json")
-assert_contains "$plugin_content" "source-add" "plugin has source-add"
-assert_contains "$plugin_content" "source-search" "plugin has source-search"
-assert_contains "$plugin_content" "source-status" "plugin has source-status"
+# Skills and plugin manifest moved to the dkushnikov/mnemon-plugin repo;
+# tests for those assertions live there now (see commit removing plugin.json
+# and skills/ from Mnemon tool repo).
 
 # --- Test 8: Template exists ---
 echo "--- Templates ---"
