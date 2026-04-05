@@ -71,10 +71,52 @@ Apple Notes doesn't need a custom script — use the official
 folder, then run `categorize.py` to classify.
 
 **Known gotchas:**
-- Attachments end up in vault root — move them to `_attachments/` manually or
-  with `find ~/Obsidian/Dump -maxdepth 1 -type f ! -name "*.md" -exec mv {} _attachments/ \;`
+- Attachments end up in vault root — move them after import (see
+  [Post-import cleanup](#post-import-cleanup) below)
 - Password-protected notes are skipped (plugin cannot decrypt)
 - Some notes fail with `ZIDENTIFIER` error (plugin bug with orphaned attachment rows)
+
+### Bear (via Bear export + Obsidian Importer)
+
+Bear notes are imported in two steps:
+
+1. **Export from Bear:** Bear → File → Export Notes → select all → format
+   "Markdown" → include attachments. Produces a folder of `.md` files with
+   inline images.
+2. **Import into Dump vault:** use Obsidian Importer's "Markdown" or
+   "Bear" source, pointing at the exported folder. Lands in `Bear/` subfolder.
+
+Bear uses standard markdown image syntax (`![](image.png)`) rather than
+wikilinks, but Obsidian still resolves bare filenames across the whole vault —
+so attachments can be moved to `_attachments/Bear/` after import without
+breaking references.
+
+**Known gotchas:**
+- Same as Apple Notes: attachments end up in vault root, need cleanup
+- Bear tags (`#tag/subtag`) become Obsidian tags automatically
+- Archive/trash subfolders come through — decide whether to delete them
+
+### Post-import cleanup
+
+After running any importer that drops attachments in the vault root
+(Apple Notes, Bear, etc.), move them into source-specific subfolders of
+`_attachments/`:
+
+```bash
+# After Apple Notes import
+mkdir -p ~/Obsidian/Dump/_attachments/Apple\ Notes
+cd ~/Obsidian/Dump && find . -maxdepth 1 -type f ! -name "*.md" ! -name ".*" \
+  -exec mv {} _attachments/Apple\ Notes/ \;
+
+# After Bear import
+mkdir -p ~/Obsidian/Dump/_attachments/Bear
+cd ~/Obsidian/Dump && find . -maxdepth 1 -type f ! -name "*.md" ! -name ".*" \
+  -exec mv {} _attachments/Bear/ \;
+```
+
+Since both Apple Notes (`[[name.png]]`) and Bear (`![](name.png)`) reference
+attachments by filename only, Obsidian resolves them vault-wide — moving files
+into subfolders doesn't break links.
 
 ### `categorize.py` — fast LLM categorizer
 
@@ -164,6 +206,7 @@ extract.md (framed by reader-context).
 
 - **telegram.py** — Telegram Saved Messages from Desktop export JSON
 - **youtube.py** — YouTube Watch Later / Liked from Google Takeout
-- **apple-notes.py** — AppleScript-based recovery for notes that failed Obsidian Importer
+- **apple-notes-recovery.py** — AppleScript-based recovery for notes that failed Obsidian Importer
+- **cleanup.py** — generic post-import attachment organizer (move root files into `_attachments/<source>/`)
 
 Contributions welcome.
