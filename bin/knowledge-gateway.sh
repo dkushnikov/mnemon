@@ -274,7 +274,7 @@ invoke_claude() {
   local output exit_code=0
   local -a claude_args=(--model "$MODEL" --output-format text)
   if [[ "$skip_allowed_tools" != "true" ]]; then
-    claude_args+=(--allowedTools Read,Write,Edit,Bash,Glob,Grep,WebFetch)
+    claude_args+=(--allowedTools=Read,Write,Edit,Bash,Glob,Grep,WebFetch)
   fi
 
   if [[ -n "$stdin_content" ]]; then
