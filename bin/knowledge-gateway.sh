@@ -490,6 +490,20 @@ case "$ACTION" in
         invoke_claude "$prompt"
       fi
     fi
+
+    # Post-success hook: keep the QMD index fresh after source-add.
+    # Only runs if:
+    #   - search_provider is qmd (grep users don't need this)
+    #   - qmd is on $PATH
+    #   - we're not in --dry-run mode (no real source was written)
+    # Fires in the background so source-add returns immediately to the
+    # caller. qmd update touches all collections (no per-collection flag
+    # in 2.0.1) but incremental runs are fast (~1-2s). qmd embed only
+    # processes newly-added content hashes.
+    if [[ "$SEARCH_PROVIDER" == "qmd" ]] && ! $DRY_RUN && command -v qmd >/dev/null 2>&1; then
+      (qmd update >/dev/null 2>&1 && qmd embed >/dev/null 2>&1) &
+      disown 2>/dev/null || true
+    fi
     ;;
 
   status)
