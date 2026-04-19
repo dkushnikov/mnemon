@@ -14,7 +14,8 @@ URL / file / text → knowledge-gateway.sh → claude -p → <your vault>/Source
                     templates/core/<type>.md
 ```
 
-- **Gateway** (`bin/knowledge-gateway.sh`) — shell tool that loads config, assembles a prompt from the extraction template + your reader context, and invokes `claude -p` inside the vault directory.
+- **Gateway** (`bin/knowledge-gateway.sh`) — shell tool that loads config, assembles a prompt from the extraction template + your reader context, and invokes `claude -p` inside the vault directory. Pass `--render` for client-side-rendered SPAs (React/Vue landings, docs sites) — the gateway pre-renders via Chrome headless before handing content to the extractor.
+- **Renderer** (`bin/render-url.sh`) — standalone helper that runs Chrome headless with `--dump-dom`, strips tags via a block-preserving Python extractor, and emits clean text. Callable directly or via the gateway's `--render` flag. Gracefully fails if Chrome/Chromium isn't installed.
 - **Vault layout** — `Sources/YYYY-MM-DD_<hash8>/{source.md, extract.md}`. `source.md` is immutable once written; `extract.md` can be re-generated.
 - **Templates** — Fabric-inspired extraction prompts per source type (article, video, podcast, paper, book, idea, conversation). Live in `templates/core/`.
 - **Reader context** — a markdown profile of the reader that personalizes every extract's framing, key ideas, and ranking.
