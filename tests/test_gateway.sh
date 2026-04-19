@@ -153,6 +153,12 @@ output=$($GW source-add --url "https://example.com/test" --import-source "safari
 assert_contains "$output" "Import source: safari" "import-source in prompt"
 assert_contains "$output" "Import batch: 2026-04-05-safari" "import-batch in prompt"
 
+# --- Test 19: --render flag recognized and injects pre-render note into prompt ---
+output=$($GW source-add --url "https://example.com/spa" --render --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
+assert_not_contains "$output" "Unknown option" "--render flag recognized"
+assert_contains "$output" "pre-rendered via Chrome headless" "--render injects pre-render note"
+assert_contains "$output" "Do NOT refetch via WebFetch" "--render tells extractor to use stdin"
+
 # Cleanup
 rm -rf "$TEST_TMPDIR"
 

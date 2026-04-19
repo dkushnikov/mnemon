@@ -35,6 +35,9 @@ Options:
   --dry-run             Show prompt without executing
   --whisper-model <m>   Whisper model (default from config)
   --no-whisper          Disable whisper fallback for YouTube
+  --render              Pre-render URL via Chrome headless (for SPAs with client-side rendering).
+                        Content is piped as stdin to the extractor; URL stays canonical in metadata.
+                        Requires Google Chrome or Chromium. Falls back with clear error if unavailable.
 USAGE
   exit 1
 }
@@ -65,6 +68,7 @@ MODEL_FLAG=""
 DRY_RUN=false
 WHISPER_MODEL_FLAG=""
 NO_WHISPER=false
+RENDER=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -88,6 +92,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run)       DRY_RUN=true; shift ;;
     --whisper-model) [[ $# -lt 2 ]] && { echo "ERROR: --whisper-model requires a value" >&2; exit 1; }; WHISPER_MODEL_FLAG="$2"; shift 2 ;;
     --no-whisper)    NO_WHISPER=true; shift ;;
+    --render)        RENDER=true; shift ;;
     *)               echo "Unknown option: $1" >&2; usage ;;
   esac
 done
@@ -210,6 +215,8 @@ Source type: $SOURCE_TYPE"
     prompt+=$'\n'"Note: Source content is provided via stdin. Create source.md with ref_path: $safe_ref_path in frontmatter. The source REFERENCES the original note, not copies it."
   elif [[ "$ORIGIN" == "ref:mcp" ]]; then
     prompt+=$'\n'"Note: Use the MCP tool for '$safe_ref_source' to fetch content by ID '$safe_ref_id'. Create source.md with ref_source and ref_id fields in frontmatter."
+  elif [[ "$ORIGIN" == "url" && "$RENDER" == "true" ]]; then
+    prompt+=$'\n'"Note: Page was pre-rendered via Chrome headless (client-side-rendered SPA). Source content is provided via stdin — use it as the source body. URL stays canonical in frontmatter. Do NOT refetch via WebFetch."
   fi
 
   prompt+=$'\n\n'"=== CAPTURE CONTEXT ===
@@ -485,6 +492,20 @@ case "$ACTION" in
         fi
         stdin_content=$(cat)
         invoke_claude "$prompt" "$stdin_content"
+
+      elif [[ "$ORIGIN" == "url" && "$RENDER" == "true" ]]; then
+        # SPA / JS-heavy page: pre-render via Chrome headless, pipe content as stdin.
+        # Origin stays 'url' so the canonical URL is preserved in frontmatter.
+        if $DRY_RUN; then
+          invoke_claude "$prompt"
+        else
+          [[ -z "$URL" ]] && { echo "ERROR: --render requires --url" >&2; exit 1; }
+          stdin_content=$("$SCRIPT_DIR/render-url.sh" "$URL") || {
+            save_pending_write "$prompt" "" "render-url.sh failed for $URL"
+            exit 1
+          }
+          invoke_claude "$prompt" "$stdin_content"
+        fi
 
       else
         invoke_claude "$prompt"
