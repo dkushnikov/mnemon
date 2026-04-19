@@ -1,6 +1,6 @@
 # Mnemon
 
-AI-assisted personal knowledge extraction. Ingest sources (articles, papers, YouTube, podcasts, ideas); an LLM produces structured extracts under a reader-context profile you control. Your vault stays in plain Markdown under your Obsidian vault — Mnemon is the engine, not a storage silo.
+AI-assisted personal knowledge extraction. Ingest sources (articles, papers, PDFs, YouTube, podcasts, ideas); an LLM produces structured extracts under a reader-context profile you control. Your vault stays in plain Markdown under your Obsidian vault — Mnemon is the engine, not a storage silo.
 
 **Principle:** *AI does filing, human does understanding.* Extraction is mechanical; synthesis is not.
 

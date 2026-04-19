@@ -159,6 +159,29 @@ assert_not_contains "$output" "Unknown option" "--render flag recognized"
 assert_contains "$output" "pre-rendered via Chrome headless" "--render injects pre-render note"
 assert_contains "$output" "Do NOT refetch via WebFetch" "--render tells extractor to use stdin"
 
+# --- Test 20: PDF origin auto-detected from --file extension ---
+touch "$TEST_TMPDIR/paper.pdf"
+output=$($GW source-add --file "$TEST_TMPDIR/paper.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
+assert_contains "$output" "Origin: pdf" "pdf origin auto-detected from .pdf file"
+assert_contains "$output" "Source type: paper" "pdf → paper source_type"
+assert_contains "$output" "Content format: pdf" "content format marked pdf in prompt"
+assert_contains "$output" "Read tool natively handles PDFs" "prompt instructs Read-tool usage"
+assert_contains "$output" "paper.pdf" "file path present in prompt"
+
+# --- Test 21: PDF origin auto-detected from URL ending in .pdf ---
+output=$($GW source-add --url "https://arxiv.org/pdf/2401.12345.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
+assert_contains "$output" "Origin: pdf" "pdf origin auto-detected from .pdf URL"
+assert_contains "$output" "URL: https://arxiv.org/pdf/2401.12345.pdf" "URL preserved in prompt"
+
+# --- Test 22: PDF URL with query string still detected ---
+output=$($GW source-add --url "https://example.com/download.pdf?v=2" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
+assert_contains "$output" "Origin: pdf" "pdf origin detected with URL query string"
+
+# --- Test 23: explicit --origin pdf with --file works ---
+output=$($GW source-add --origin pdf --file "$TEST_TMPDIR/paper.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
+assert_contains "$output" "Origin: pdf" "explicit pdf origin works"
+assert_contains "$output" "Source type: paper" "pdf → paper source_type (explicit)"
+
 # Cleanup
 rm -rf "$TEST_TMPDIR"
 

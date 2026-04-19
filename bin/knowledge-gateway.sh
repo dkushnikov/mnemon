@@ -15,9 +15,9 @@ Actions:
   status        Show pipeline status
 
 Options:
-  --origin <type>       url|text|youtube|audio|book|idea
-  --url <url>           Source URL
-  --file <path>         Local file path (for audio)
+  --origin <type>       url|text|youtube|audio|pdf|book|idea
+  --url <url>           Source URL (auto-detected: .pdf → pdf, youtube → youtube)
+  --file <path>         Local file path (audio/pdf; auto-detected by extension)
   --title <title>       Source title (optional, inferred if not given)
   --author <author>     Source author (optional)
   --source-type <type>  article|video|podcast|book|paper|idea|conversation
@@ -116,11 +116,15 @@ if [[ -z "$ORIGIN" && "$AUTO_DETECT_ORIGIN" == "true" ]]; then
   elif [[ -n "$URL" ]]; then
     if [[ "$URL" =~ (youtube\.com/watch|youtu\.be/|youtube\.com/shorts/) ]]; then
       ORIGIN="youtube"
+    elif [[ "$URL" =~ \.pdf(\?|#|$) ]]; then
+      ORIGIN="pdf"
     else
       ORIGIN="url"
     fi
   elif [[ -n "$FILE_PATH" ]]; then
-    if command -v ffprobe >/dev/null 2>&1 && \
+    if [[ "$FILE_PATH" =~ \.pdf$ ]]; then
+      ORIGIN="pdf"
+    elif command -v ffprobe >/dev/null 2>&1 && \
        ffprobe -v quiet -show_entries format=format_name -of csv=p=0 "$FILE_PATH" 2>/dev/null | \
        grep -qiE 'mp3|wav|flac|ogg|aac|m4a|opus'; then
       ORIGIN="audio"
@@ -137,6 +141,7 @@ if [[ -z "$SOURCE_TYPE" ]]; then
     url)        SOURCE_TYPE="article" ;;
     youtube)    SOURCE_TYPE="video" ;;
     audio)      SOURCE_TYPE="podcast" ;;
+    pdf)        SOURCE_TYPE="paper" ;;
     book)       SOURCE_TYPE="book" ;;
     idea)       SOURCE_TYPE="idea" ;;
     text)       SOURCE_TYPE="article" ;;
@@ -217,6 +222,9 @@ Source type: $SOURCE_TYPE"
     prompt+=$'\n'"Note: Use the MCP tool for '$safe_ref_source' to fetch content by ID '$safe_ref_id'. Create source.md with ref_source and ref_id fields in frontmatter."
   elif [[ "$ORIGIN" == "url" && "$RENDER" == "true" ]]; then
     prompt+=$'\n'"Note: Page was pre-rendered via Chrome headless (client-side-rendered SPA). Source content is provided via stdin — use it as the source body. URL stays canonical in frontmatter. Do NOT refetch via WebFetch."
+  elif [[ "$ORIGIN" == "pdf" ]]; then
+    prompt+=$'\n'"Content format: pdf"
+    prompt+=$'\n'"Note: Source is a PDF file. Use the Read tool on the File path — Claude Code's Read tool natively handles PDFs (text, layout, images). Include page count in frontmatter (\`pages: N\`). If URL is also set (PDF was downloaded from remote), URL stays canonical, file is the local copy used for extraction."
   fi
 
   prompt+=$'\n\n'"=== CAPTURE CONTEXT ===
@@ -505,6 +513,28 @@ case "$ACTION" in
             exit 1
           }
           invoke_claude "$prompt" "$stdin_content"
+        fi
+
+      elif [[ "$ORIGIN" == "pdf" ]]; then
+        # PDF: no stdin piping — Claude's Read tool natively handles PDFs.
+        # If URL is set without local FILE_PATH, download to /tmp first, then rebuild
+        # prompt so the File: line reflects the downloaded copy.
+        if $DRY_RUN; then
+          invoke_claude "$prompt"
+        else
+          if [[ -z "$FILE_PATH" && -n "$URL" ]]; then
+            pdf_tmp=$(mktemp -t mnemon-pdf.XXXXXX.pdf)
+            if ! curl -sfL -A "Mozilla/5.0" "$URL" -o "$pdf_tmp"; then
+              save_pending_write "$prompt" "" "curl failed for PDF URL $URL"
+              rm -f "$pdf_tmp"
+              exit 1
+            fi
+            FILE_PATH="$pdf_tmp"
+            prompt=$(build_prompt)
+          fi
+          [[ -z "$FILE_PATH" ]] && { echo "ERROR: pdf origin requires --file or --url" >&2; exit 1; }
+          [[ ! -f "$FILE_PATH" ]] && { echo "ERROR: PDF file not found: $FILE_PATH" >&2; exit 1; }
+          invoke_claude "$prompt"
         fi
 
       else
