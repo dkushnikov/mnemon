@@ -225,7 +225,26 @@ else
   echo "   Install QMD for hybrid semantic + keyword search."
 fi
 
-# --- 6. Summary ---
+# --- 6. Claude Code plugin ---
+
+echo ""
+echo "6. Installing Claude Code plugin..."
+if command -v claude >/dev/null 2>&1; then
+  if claude plugin marketplace add https://github.com/dkushnikov/mnemon-plugin 2>/dev/null && \
+     claude plugin install mnemon@mnemon-plugin 2>/dev/null; then
+    echo "   ✓ Plugin installed (/source-add, /source-search, /source-status)"
+  else
+    echo "   ○ Plugin may already be installed, or install failed"
+    echo "     Manual install: claude plugin marketplace add https://github.com/dkushnikov/mnemon-plugin"
+    echo "                     claude plugin install mnemon@mnemon-plugin"
+  fi
+else
+  echo "   ○ Claude Code not found — install plugin later:"
+  echo "     claude plugin marketplace add https://github.com/dkushnikov/mnemon-plugin"
+  echo "     claude plugin install mnemon@mnemon-plugin"
+fi
+
+# --- 7. Summary ---
 
 echo ""
 echo "=== Setup Complete ==="
@@ -234,10 +253,6 @@ echo "Next steps:"
 echo "  1. Edit your reader context (personalizes extractions):"
 echo "     $VAULT_PATH/reader-context.md"
 echo ""
-echo "  2. Install the Claude Code plugin (lives in a separate repo):"
-echo "     claude plugin marketplace add https://github.com/dkushnikov/mnemon-plugin"
-echo "     claude plugin install mnemon@mnemon-plugin"
-echo ""
-echo "  3. Add your first source:"
+echo "  2. Add your first source:"
 echo "     /source-add https://example.com/interesting-article"
 echo ""

@@ -34,23 +34,14 @@ URL / file / text → knowledge-gateway.sh → claude -p → <your vault>/Source
 
 ## Install
 
+Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Mnemon uses `claude` internally for extraction).
+
 ```bash
 git clone https://github.com/dkushnikov/mnemon.git ~/Mnemon
 ~/Mnemon/setup.sh ~/path/to/your/vault
 ```
 
-`setup.sh` scaffolds the vault, generates `mnemon.yaml`, and checks for optional dependencies (`yt-dlp`, `whisper`, `ffprobe`, [QMD](https://github.com/tobi/qmd)).
-
-## Claude Code plugin
-
-Mnemon itself is a tool; the Claude Code integration (slash commands, skills, prompts) lives in a **separate repo**: [`dkushnikov/mnemon-plugin`](https://github.com/dkushnikov/mnemon-plugin).
-
-Install the plugin after `setup.sh`:
-
-```bash
-claude plugin marketplace add https://github.com/dkushnikov/mnemon-plugin
-claude plugin install mnemon@mnemon-plugin
-```
+`setup.sh` scaffolds the vault, generates config, installs the [Claude Code plugin](https://github.com/dkushnikov/mnemon-plugin), and checks optional dependencies (`yt-dlp`, `whisper`, `ffprobe`, [QMD](https://github.com/tobi/qmd)).
 
 Then from any Claude Code session:
 
@@ -59,6 +50,8 @@ Then from any Claude Code session:
 /source-search "organizational design"
 /source-status
 ```
+
+Update plugin: `claude plugin marketplace update mnemon-plugin && claude plugin update mnemon@mnemon-plugin`
 
 ## Documentation
 
