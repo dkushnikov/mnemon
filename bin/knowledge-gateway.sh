@@ -177,8 +177,7 @@ load_reader_context() {
 # --- L1 archive helpers ---
 
 _l1_archive_dir() {
-  local icloud="${ICLOUD_DATA:-$HOME/Library/Mobile Documents/com~apple~CloudDocs/Claude Data}"
-  echo "${icloud}/Mnemon/originals"
+  echo "${ARCHIVE_DIR:-}"
 }
 
 _l1_archive_name() {
@@ -192,10 +191,11 @@ _l1_archive_text() {
   local content="$1" canonical="$2" ext="${3:-txt}"
   local dir name
   dir=$(_l1_archive_dir)
+  [[ -z "$dir" ]] && return 0
   name=$(_l1_archive_name "$canonical" "$ext")
   mkdir -p "$dir"
   printf '%s' "$content" > "${dir}/${name}"
-  echo "Mnemon/originals/${name}"
+  echo "${name}"
 }
 
 _l1_archive_file() {
@@ -203,10 +203,11 @@ _l1_archive_file() {
   local ext="${source_file##*.}"
   local dir name
   dir=$(_l1_archive_dir)
+  [[ -z "$dir" ]] && return 0
   name=$(_l1_archive_name "$canonical" "$ext")
   mkdir -p "$dir"
   cp "$source_file" "${dir}/${name}"
-  echo "Mnemon/originals/${name}"
+  echo "${name}"
 }
 
 # --- Prompt construction ---
@@ -265,7 +266,7 @@ Source type: $SOURCE_TYPE"
   fi
 
   [[ -n "$ORIGIN_PATH" ]] && prompt+=$'\n'"Origin path: $ORIGIN_PATH"
-  [[ -n "$ARCHIVE_PATH" ]] && prompt+=$'\n'"Archive: $ARCHIVE_PATH (relative to iCloud Claude Data/)"
+  [[ -n "$ARCHIVE_PATH" ]] && prompt+=$'\n'"Archive: $ARCHIVE_PATH (in archive_dir: ${ARCHIVE_DIR:-not configured})"
 
   prompt+=$'\n\n'"=== CAPTURE CONTEXT ===
 Context: $CONTEXT
@@ -496,7 +497,7 @@ case "$ACTION" in
 
       if [[ "$ORIGIN" == "youtube" ]]; then
         if $DRY_RUN; then
-          ARCHIVE_PATH="Mnemon/originals/<date>_<hash>.txt"
+          ARCHIVE_PATH="<date>_<hash>.txt"
           prompt=$(build_prompt)
           invoke_claude "$prompt"
         else
@@ -513,7 +514,7 @@ case "$ACTION" in
 
       elif [[ "$ORIGIN" == "audio" ]]; then
         if $DRY_RUN; then
-          ARCHIVE_PATH="Mnemon/originals/<date>_<hash>.<ext>"
+          ARCHIVE_PATH="<date>_<hash>.<ext>"
           [[ -n "$FILE_PATH" ]] && ORIGIN_PATH="$FILE_PATH"
           prompt=$(build_prompt)
           invoke_claude "$prompt"
@@ -567,7 +568,7 @@ case "$ACTION" in
 
       elif [[ "$ORIGIN" == "url" && "$RENDER" == "true" ]]; then
         if $DRY_RUN; then
-          ARCHIVE_PATH="Mnemon/originals/<date>_<hash>.txt"
+          ARCHIVE_PATH="<date>_<hash>.txt"
           prompt=$(build_prompt)
           invoke_claude "$prompt"
         else
@@ -583,28 +584,40 @@ case "$ACTION" in
 
       elif [[ "$ORIGIN" == "pdf" ]]; then
         if $DRY_RUN; then
-          ARCHIVE_PATH="Mnemon/originals/<date>_<hash>.pdf"
+          ARCHIVE_PATH="<date>_<hash>.pdf"
           [[ -n "$FILE_PATH" ]] && ORIGIN_PATH="$FILE_PATH"
           prompt=$(build_prompt)
           invoke_claude "$prompt"
         else
           pdf_canonical="${URL:-${FILE_PATH:-unknown}}"
+          pdf_archive_dir=$(_l1_archive_dir)
           if [[ -z "$FILE_PATH" && -n "$URL" ]]; then
-            pdf_archive_name=$(_l1_archive_name "$pdf_canonical" "pdf")
-            pdf_archive_dir=$(_l1_archive_dir)
-            mkdir -p "$pdf_archive_dir"
-            pdf_archive_file="${pdf_archive_dir}/${pdf_archive_name}"
-            if ! curl -sfL -A "Mozilla/5.0" "$URL" -o "$pdf_archive_file"; then
-              save_pending_write "$prompt" "" "curl failed for PDF URL $URL"
-              rm -f "$pdf_archive_file"
-              exit 1
+            if [[ -n "$pdf_archive_dir" ]]; then
+              pdf_archive_name=$(_l1_archive_name "$pdf_canonical" "pdf")
+              mkdir -p "$pdf_archive_dir"
+              pdf_archive_file="${pdf_archive_dir}/${pdf_archive_name}"
+              if ! curl -sfL -A "Mozilla/5.0" "$URL" -o "$pdf_archive_file"; then
+                save_pending_write "$prompt" "" "curl failed for PDF URL $URL"
+                rm -f "$pdf_archive_file"
+                exit 1
+              fi
+              FILE_PATH="$pdf_archive_file"
+              ARCHIVE_PATH="${pdf_archive_name}"
+            else
+              pdf_tmp=$(mktemp -t mnemon-pdf.XXXXXX.pdf)
+              if ! curl -sfL -A "Mozilla/5.0" "$URL" -o "$pdf_tmp"; then
+                save_pending_write "$prompt" "" "curl failed for PDF URL $URL"
+                rm -f "$pdf_tmp"
+                exit 1
+              fi
+              FILE_PATH="$pdf_tmp"
             fi
-            FILE_PATH="$pdf_archive_file"
-            ARCHIVE_PATH="Mnemon/originals/${pdf_archive_name}"
           elif [[ -n "$FILE_PATH" ]]; then
             ORIGIN_PATH="$FILE_PATH"
             ARCHIVE_PATH=$(_l1_archive_file "$FILE_PATH" "$pdf_canonical")
-            FILE_PATH="$(_l1_archive_dir)/$(_l1_archive_name "$pdf_canonical" "pdf")"
+            if [[ -n "$pdf_archive_dir" && -n "$ARCHIVE_PATH" ]]; then
+              FILE_PATH="${pdf_archive_dir}/${ARCHIVE_PATH}"
+            fi
           fi
           [[ -z "$FILE_PATH" ]] && { echo "ERROR: pdf origin requires --file or --url" >&2; exit 1; }
           [[ ! -f "$FILE_PATH" ]] && { echo "ERROR: PDF file not found: $FILE_PATH" >&2; exit 1; }

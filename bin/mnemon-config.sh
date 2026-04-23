@@ -57,6 +57,7 @@ load_config() {
   DEFAULT_LANGUAGE="$(_parse_yaml_value default_language "$config_file")"
   WHISPER_MODEL="$(_parse_yaml_value whisper_model "$config_file")"
   AUTO_DETECT_ORIGIN="$(_parse_yaml_value auto_detect_origin "$config_file")"
+  ARCHIVE_DIR="$(_parse_yaml_value archive_dir "$config_file")"
 
   # Apply defaults
   VAULT_PATH="${VAULT_PATH:-}"
@@ -71,7 +72,8 @@ load_config() {
   DEFAULT_LANGUAGE="${DEFAULT_LANGUAGE:-en}"
   WHISPER_MODEL="${WHISPER_MODEL:-large-v3}"
   AUTO_DETECT_ORIGIN="${AUTO_DETECT_ORIGIN:-true}"
+  ARCHIVE_DIR="${ARCHIVE_DIR:-}"
 
   export MNEMON_ROOT VAULT_PATH READER_CONTEXT_PATH SEARCH_PROVIDER
-  export QMD_COLLECTION DEFAULT_MODEL DEFAULT_LANGUAGE WHISPER_MODEL AUTO_DETECT_ORIGIN
+  export QMD_COLLECTION DEFAULT_MODEL DEFAULT_LANGUAGE WHISPER_MODEL AUTO_DETECT_ORIGIN ARCHIVE_DIR
 }

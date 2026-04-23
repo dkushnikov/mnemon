@@ -184,8 +184,8 @@ assert_contains "$output" "Source type: paper" "pdf → paper source_type (expli
 
 # --- Test 24: PDF dry-run includes archive placeholder ---
 output=$($GW source-add --file "$TEST_TMPDIR/paper.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Archive: Mnemon/originals/" "pdf dry-run shows archive path placeholder"
-assert_contains "$output" "iCloud Claude Data" "pdf dry-run mentions L1 iCloud path"
+assert_contains "$output" "Archive:" "pdf dry-run shows archive field"
+assert_contains "$output" "archive_dir:" "pdf dry-run shows archive_dir reference"
 
 # --- Test 25: PDF from local file shows origin_path in dry-run ---
 output=$($GW source-add --file "$TEST_TMPDIR/paper.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
@@ -200,25 +200,25 @@ assert_contains "$output" "Archive:" "pdf from URL still has archive"
 # --- Test 27: PDF prompt includes archive frontmatter instruction ---
 output=$($GW source-add --file "$TEST_TMPDIR/paper.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
 assert_contains "$output" 'archive:' "prompt instructs archive field in frontmatter"
-assert_contains "$output" "archived to L1" "prompt explains L1 archival"
+assert_contains "$output" "archived to L1" "prompt explains L1 iCloud archival"
 
 # --- Test 28: YouTube dry-run shows archive placeholder ---
 output=$($GW source-add --url "https://youtube.com/watch?v=test123" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Archive: Mnemon/originals/" "youtube dry-run shows archive path"
+assert_contains "$output" "Archive:" "youtube dry-run shows archive path"
 
 # --- Test 29: Render dry-run shows archive placeholder ---
 output=$($GW source-add --url "https://example.com/spa" --render --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Archive: Mnemon/originals/" "render dry-run shows archive path"
+assert_contains "$output" "Archive:" "render dry-run shows archive path"
 
 # --- Test 30: Audio dry-run shows archive placeholder ---
 touch "$TEST_TMPDIR/recording.mp3"
 output=$($GW source-add --file "$TEST_TMPDIR/recording.mp3" --origin audio --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Archive: Mnemon/originals/" "audio dry-run shows archive path"
+assert_contains "$output" "Archive:" "audio dry-run shows archive path"
 assert_contains "$output" "Origin path:" "audio file shows origin_path"
 
 # --- Test 31: Archive/origin_path lines appear generically (not only PDF) ---
 output=$($GW source-add --url "https://youtube.com/watch?v=test123" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "iCloud Claude Data" "youtube archive mentions iCloud"
+assert_contains "$output" "archive_dir:" "youtube archive shows archive_dir"
 
 # Cleanup
 rm -rf "$TEST_TMPDIR"
