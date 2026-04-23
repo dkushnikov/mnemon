@@ -1,25 +1,36 @@
 # Mnemon
 
-AI-assisted personal knowledge extraction. Ingest sources (articles, papers, PDFs, YouTube, podcasts, ideas); an LLM produces structured extracts under a reader-context profile you control. Your vault stays in plain Markdown under your Obsidian vault — Mnemon is the engine, not a storage silo.
+Your personal library with an AI reader.
+
+You save articles, papers, podcasts. Most rot unread. URLs die. Your "read later" list is a graveyard. And when you do read something — the insights stay in your head, never making it into your knowledge system.
+
+Mnemon fixes this: capture any source → AI extracts what matters *for you* → originals archived forever → knowledge lives in your Obsidian vault, searchable, linkable, yours.
+
+**Library** — originals preserved (PDFs, audio, page snapshots, transcripts). Models improve → re-extract from the original. URL goes offline → you have the copy.
+
+**Brain** — AI-generated extracts framed by your reader context. Same article, different reader → different insights. Your context is your filter.
+
+Everything stays in plain Markdown in your Obsidian vault. Not a SaaS, not a lock-in — your files on your disk.
+
+*Replaces: Readwise, Pocket, Instapaper, Safari Reading List, "save for later" bookmarks, manual note-taking from articles.*
 
 **Principle:** *AI does filing, human does understanding.* Extraction is mechanical; synthesis is not.
 
-## Architecture at a glance
+## How it works
 
 ```
 URL / file / text → knowledge-gateway.sh → claude -p → <your vault>/Sources/
-                          ↓                    ↓             ├── source.md   (immutable raw)
-                    mnemon.yaml          archive_dir/         └── extract.md  (AI-generated, structured)
-                    reader-context.md    (original files,
+                          ↓                    ↓             ├── source.md   (metadata)
+                    mnemon.yaml          archive_dir/         └── extract.md  (AI extract)
+                    reader-context.md    (originals,
                     templates/core/       optional)
 ```
 
-- **Gateway** (`bin/knowledge-gateway.sh`) — shell tool that loads config, assembles a prompt from the extraction template + your reader context, and invokes `claude -p` inside the vault directory. Pass `--render` for client-side-rendered SPAs (React/Vue landings, docs sites) — the gateway pre-renders via Chrome headless before handing content to the extractor.
-- **Source archival** — when `archive_dir` is set in `mnemon.yaml`, the gateway saves original source files (PDFs, audio, page snapshots, transcripts) before extraction. This enables re-extraction when models improve, without re-fetching from URLs that may go offline. Any directory works — iCloud, NAS, local folder. Omit to disable.
-- **Renderer** (`bin/render-url.sh`) — standalone helper that runs Chrome headless with `--dump-dom`, strips tags via a block-preserving Python extractor, and emits clean text. Callable directly or via the gateway's `--render` flag. Gracefully fails if Chrome/Chromium isn't installed.
-- **Vault layout** — `Sources/YYYY-MM-DD_<hash8>/{source.md, extract.md}`. `source.md` is immutable once written; `extract.md` can be re-generated.
-- **Templates** — Fabric-inspired extraction prompts per source type (article, video, podcast, paper, book, idea, conversation). Live in `templates/core/`.
-- **Reader context** — a markdown profile of the reader that personalizes every extract's framing, key ideas, and ranking.
+- **Gateway** (`bin/knowledge-gateway.sh`) — captures a source, assembles a prompt from the extraction template + your reader context, and invokes `claude -p`. Handles articles, PDFs, YouTube, podcasts, ideas, SPAs. Pass `--render` for JS-heavy sites (Chrome headless pre-rendering).
+- **Library** (`archive_dir` in config) — saves original source files before extraction. Any directory — iCloud, NAS, local folder. Omit to disable.
+- **Brain** (`Sources/` in vault) — `source.md` (immutable metadata) + `extract.md` (AI-generated, re-generable). Searchable via Obsidian or [QMD](https://github.com/tobi/qmd) hybrid search.
+- **Reader context** — a markdown profile of you that personalizes every extract's framing, key ideas, and rating. The same article produces different outputs for different readers.
+- **Templates** — Fabric-inspired extraction prompts per source type (article, video, podcast, paper, book, idea, conversation).
 
 ## Install
 
