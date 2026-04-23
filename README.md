@@ -32,6 +32,25 @@ URL / file / text → knowledge-gateway.sh → claude -p → <your vault>/Source
 - **Reader context** — a markdown profile of you that personalizes every extract's framing, key ideas, and rating. The same article produces different outputs for different readers.
 - **Templates** — Fabric-inspired extraction prompts per source type (article, video, podcast, paper, book, idea, conversation).
 
+### Same article, two readers
+
+An article about AI agents in customer support, extracted for two different reader profiles:
+
+**CTO reader** → Executive Summary focuses on build-vs-buy, infra costs, team readiness. Key Ideas tagged `engineering`, `career`. Rating: 7 — "directly applicable to your Q3 platform decision."
+
+**Product designer** → Executive Summary focuses on conversation UX, handoff patterns, trust signals. Key Ideas tagged `culture`, `learning`. Rating: 5 — "useful mental model, but no actionable design patterns yet."
+
+Same source. Same extraction template. Different reader context → different knowledge.
+
+### Using your knowledge
+
+Extracts live in your Obsidian vault — searchable, linkable, always available:
+
+- **In Claude Code sessions:** `/source-search "agent orchestration"` finds relevant extracts instantly. Your past reading informs current work.
+- **In Obsidian:** graph view connects sources to your notes. Wikilinks from projects to evidence.
+- **On mobile:** Obsidian Sync gives you your full knowledge base offline.
+- **For re-extraction:** models improve every few months. Re-run extraction from archived originals — your Library doesn't decay, your Brain gets sharper.
+
 ## Install
 
 Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Mnemon uses `claude` internally for extraction).
