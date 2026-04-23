@@ -200,7 +200,7 @@ assert_contains "$output" "Archive:" "pdf from URL still has archive"
 # --- Test 27: PDF prompt includes archive frontmatter instruction ---
 output=$($GW source-add --file "$TEST_TMPDIR/paper.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
 assert_contains "$output" 'archive:' "prompt instructs archive field in frontmatter"
-assert_contains "$output" "archived to L1" "prompt explains L1 iCloud archival"
+assert_contains "$output" "archive_dir" "prompt references configured archive_dir"
 
 # --- Test 28: YouTube dry-run shows archive placeholder ---
 output=$($GW source-add --url "https://youtube.com/watch?v=test123" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)

@@ -288,7 +288,7 @@ $template
 4. If folder exists, append -2, -3, etc.
 5. Write source.md — immutable raw content with frontmatter:
    type: source, source_type: $SOURCE_TYPE, content_format: <text|transcript|reference|pdf>, origin: $ORIGIN, url: \"$URL\", author: \"${AUTHOR:-}\", captured: <today>, captured_by: agent
-   If Archive is provided above: add \`archive: \"<value>\"\` (original archived to L1 iCloud).
+   If Archive is provided above: add \`archive: \"<value>\"\` (original file in configured archive_dir).
    If Origin path is provided above: add \`origin_path: \"<value>\"\` (original file location).
 6. Apply the EXTRACTION TEMPLATE above to generate extract.md.
 7. Executive Summary MUST be framed by the READER CONTEXT — not generic, but personal to the reader.
