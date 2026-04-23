@@ -13,13 +13,14 @@ Arguments:
   vault-path          Where to create/use the knowledge vault
 
 Options:
-  --non-interactive   Skip interactive prompts, use defaults
-  --skip-qmd          Don't configure QMD search collection
-  -h, --help          Show this help
+  --reader-context <path>  Use existing reader-context.md (e.g. from Obsidian Seed)
+  --non-interactive        Skip interactive prompts, use defaults
+  --skip-qmd               Don't configure QMD search collection
+  -h, --help               Show this help
 
 Example:
   ./setup.sh ~/my-knowledge
-  ./setup.sh ~/Obsidian/Knowledge --non-interactive
+  ./setup.sh ~/Obsidian/Knowledge --reader-context ~/Obsidian/Personal/reader-context.md
 EOF
   exit 0
 }
@@ -29,9 +30,11 @@ EOF
 VAULT_PATH=""
 NON_INTERACTIVE=false
 SKIP_QMD=false
+READER_CONTEXT_SRC=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --reader-context)  [[ $# -lt 2 ]] && { echo "ERROR: --reader-context requires a path" >&2; exit 1; }; READER_CONTEXT_SRC="$2"; shift 2; continue ;;
     --non-interactive) NON_INTERACTIVE=true; shift ;;
     --skip-qmd)        SKIP_QMD=true; shift ;;
     -h|--help)         usage ;;
@@ -80,7 +83,23 @@ copy_if_missing() {
 
 copy_if_missing "$SCRIPT_DIR/vault-template/CLAUDE.md" "$VAULT_PATH/CLAUDE.md" "CLAUDE.md"
 copy_if_missing "$SCRIPT_DIR/vault-template/_meta/Protocol.md" "$VAULT_PATH/_meta/Protocol.md" "_meta/Protocol.md"
-copy_if_missing "$SCRIPT_DIR/reader-context.md.template" "$VAULT_PATH/reader-context.md" "reader-context.md"
+
+if [[ -n "$READER_CONTEXT_SRC" ]]; then
+  READER_CONTEXT_SRC="${READER_CONTEXT_SRC/#\~/$HOME}"
+  if [[ -f "$READER_CONTEXT_SRC" ]]; then
+    if [[ ! -f "$VAULT_PATH/reader-context.md" ]]; then
+      cp "$READER_CONTEXT_SRC" "$VAULT_PATH/reader-context.md"
+      echo "   ✓ Created reader-context.md (from $READER_CONTEXT_SRC)"
+    else
+      echo "   ○ Skipped reader-context.md (exists)"
+    fi
+  else
+    echo "   ✗ Reader context not found: $READER_CONTEXT_SRC" >&2
+    exit 1
+  fi
+else
+  copy_if_missing "$SCRIPT_DIR/reader-context.md.template" "$VAULT_PATH/reader-context.md" "reader-context.md (generic — edit to personalize)"
+fi
 
 # --- 3. Generate mnemon.yaml ---
 

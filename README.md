@@ -41,6 +41,14 @@ git clone https://github.com/dkushnikov/mnemon.git ~/Mnemon
 ~/Mnemon/setup.sh ~/path/to/your/vault
 ```
 
+**Already have a reader-context from [Obsidian Seed](https://github.com/dkushnikov/obsidian-seed)?** Pass it to get personalized extracts from day one:
+
+```bash
+~/Mnemon/setup.sh ~/path/to/vault --reader-context ~/path/to/your/vault/reader-context.md
+```
+
+Without `--reader-context`, setup creates a generic template — extracts will work but won't be personalized until you edit it.
+
 `setup.sh` scaffolds the vault, generates config, installs the [Claude Code plugin](https://github.com/dkushnikov/mnemon-plugin), and checks optional dependencies (`yt-dlp`, `whisper`, `ffprobe`, [QMD](https://github.com/tobi/qmd)).
 
 Then from any Claude Code session:
@@ -95,9 +103,13 @@ Remove the wrapper once qmd v2.0.2+ is published — the released launcher will 
 
 **Seed builds the vault. Mnemon fills it with knowledge.**
 
-Without Seed, Mnemon still works — you just write `reader-context.md` yourself. With Seed, it's already there from your discovery session, tuned to how you think. Same article → insights framed for *you*, not a generic summary.
+Without Seed, Mnemon still works — you write `reader-context.md` yourself. With Seed, it's already there from your discovery session, tuned to how you think. Pass it at setup:
 
-If you're starting fresh: Seed first (vault setup, 1-2 hours) → Mnemon next (ongoing capture). If you already have a vault: Mnemon works standalone.
+```bash
+~/Mnemon/setup.sh ~/Obsidian/Knowledge --reader-context ~/Obsidian/Personal/reader-context.md
+```
+
+Starting fresh? Seed first (vault setup, 1-2 hours) → Mnemon next (ongoing capture). Already have a vault? Mnemon works standalone.
 
 ## License
 
