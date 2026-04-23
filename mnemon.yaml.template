@@ -19,3 +19,8 @@ default_language: en
 # Media (optional deps: yt-dlp, whisper, ffprobe)
 whisper_model: large-v3
 auto_detect_origin: true
+
+# Source archival: save original files (PDF, audio, page snapshots) before
+# extraction. Enables re-extraction when models improve, without re-fetching
+# from URLs that may go offline. Set to any directory path. Omit to disable.
+# archive_dir: ~/mnemon-archive

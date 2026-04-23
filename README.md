@@ -9,12 +9,13 @@ AI-assisted personal knowledge extraction. Ingest sources (articles, papers, PDF
 ```
 URL / file / text → knowledge-gateway.sh → claude -p → <your vault>/Sources/
                           ↓                    ↓             ├── source.md   (immutable raw)
-                    mnemon.yaml          iCloud Claude Data/  └── extract.md  (AI-generated, structured)
-                    reader-context.md    Mnemon/originals/
-                    templates/core/       (PDF archive, L1)
+                    mnemon.yaml          archive_dir/         └── extract.md  (AI-generated, structured)
+                    reader-context.md    (original files,
+                    templates/core/       optional)
 ```
 
-- **Gateway** (`bin/knowledge-gateway.sh`) — shell tool that loads config, assembles a prompt from the extraction template + your reader context, and invokes `claude -p` inside the vault directory. Pass `--render` for client-side-rendered SPAs (React/Vue landings, docs sites) — the gateway pre-renders via Chrome headless before handing content to the extractor. PDFs are automatically archived to `iCloud Claude Data/Mnemon/originals/` (L1) before extraction; the archive path is recorded in `source.md` frontmatter (`archive:` field).
+- **Gateway** (`bin/knowledge-gateway.sh`) — shell tool that loads config, assembles a prompt from the extraction template + your reader context, and invokes `claude -p` inside the vault directory. Pass `--render` for client-side-rendered SPAs (React/Vue landings, docs sites) — the gateway pre-renders via Chrome headless before handing content to the extractor.
+- **Source archival** — when `archive_dir` is set in `mnemon.yaml`, the gateway saves original source files (PDFs, audio, page snapshots, transcripts) before extraction. This enables re-extraction when models improve, without re-fetching from URLs that may go offline. Any directory works — iCloud, NAS, local folder. Omit to disable.
 - **Renderer** (`bin/render-url.sh`) — standalone helper that runs Chrome headless with `--dump-dom`, strips tags via a block-preserving Python extractor, and emits clean text. Callable directly or via the gateway's `--render` flag. Gracefully fails if Chrome/Chromium isn't installed.
 - **Vault layout** — `Sources/YYYY-MM-DD_<hash8>/{source.md, extract.md}`. `source.md` is immutable once written; `extract.md` can be re-generated.
 - **Templates** — Fabric-inspired extraction prompts per source type (article, video, podcast, paper, book, idea, conversation). Live in `templates/core/`.
