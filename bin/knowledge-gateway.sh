@@ -174,6 +174,41 @@ load_reader_context() {
   fi
 }
 
+# --- L1 archive helpers ---
+
+_l1_archive_dir() {
+  local icloud="${ICLOUD_DATA:-$HOME/Library/Mobile Documents/com~apple~CloudDocs/Claude Data}"
+  echo "${icloud}/Mnemon/originals"
+}
+
+_l1_archive_name() {
+  local canonical="$1" ext="$2"
+  local hash8
+  hash8=$(printf '%s' "$canonical" | shasum -a 256 | cut -c1-8)
+  echo "$(date +%Y-%m-%d)_${hash8}.${ext}"
+}
+
+_l1_archive_text() {
+  local content="$1" canonical="$2" ext="${3:-txt}"
+  local dir name
+  dir=$(_l1_archive_dir)
+  name=$(_l1_archive_name "$canonical" "$ext")
+  mkdir -p "$dir"
+  printf '%s' "$content" > "${dir}/${name}"
+  echo "Mnemon/originals/${name}"
+}
+
+_l1_archive_file() {
+  local source_file="$1" canonical="$2"
+  local ext="${source_file##*.}"
+  local dir name
+  dir=$(_l1_archive_dir)
+  name=$(_l1_archive_name "$canonical" "$ext")
+  mkdir -p "$dir"
+  cp "$source_file" "${dir}/${name}"
+  echo "Mnemon/originals/${name}"
+}
+
 # --- Prompt construction ---
 
 _sanitize_input() {
@@ -226,10 +261,11 @@ Source type: $SOURCE_TYPE"
     prompt+=$'\n'"Note: Page was pre-rendered via Chrome headless (client-side-rendered SPA). Source content is provided via stdin — use it as the source body. URL stays canonical in frontmatter. Do NOT refetch via WebFetch."
   elif [[ "$ORIGIN" == "pdf" ]]; then
     prompt+=$'\n'"Content format: pdf"
-    [[ -n "$ORIGIN_PATH" ]] && prompt+=$'\n'"Origin path: $ORIGIN_PATH"
-    [[ -n "$ARCHIVE_PATH" ]] && prompt+=$'\n'"Archive: $ARCHIVE_PATH (relative to iCloud Claude Data/)"
-    prompt+=$'\n'"Note: Source is a PDF file. Use the Read tool on the File path — Claude Code's Read tool natively handles PDFs (text, layout, images). Include page count in frontmatter (\`pages: N\`). If URL is also set, URL stays canonical. If Archive path is provided, include \`archive: <value>\` in source.md frontmatter (L1 path, relative to iCloud Claude Data/). If Origin path is provided, include \`origin_path: <value>\` in source.md frontmatter (original file location before archival)."
+    prompt+=$'\n'"Note: Source is a PDF file. Use the Read tool on the File path — Claude Code's Read tool natively handles PDFs (text, layout, images). Include page count in frontmatter (\`pages: N\`). If URL is also set, URL stays canonical."
   fi
+
+  [[ -n "$ORIGIN_PATH" ]] && prompt+=$'\n'"Origin path: $ORIGIN_PATH"
+  [[ -n "$ARCHIVE_PATH" ]] && prompt+=$'\n'"Archive: $ARCHIVE_PATH (relative to iCloud Claude Data/)"
 
   prompt+=$'\n\n'"=== CAPTURE CONTEXT ===
 Context: $CONTEXT
@@ -459,8 +495,9 @@ case "$ACTION" in
       prompt=$(build_prompt)
 
       if [[ "$ORIGIN" == "youtube" ]]; then
-        # In dry-run mode, skip transcript fetch — just show the prompt
         if $DRY_RUN; then
+          ARCHIVE_PATH="Mnemon/originals/<date>_<hash>.txt"
+          prompt=$(build_prompt)
           invoke_claude "$prompt"
         else
           media_args=("youtube" "$URL" "--whisper-model" "$WHISPER_MODEL")
@@ -469,12 +506,16 @@ case "$ACTION" in
             save_pending_write "$prompt" "" "media-extract.py failed for $URL"
             exit 1
           }
+          ARCHIVE_PATH=$(_l1_archive_text "$stdin_content" "$URL" "txt")
+          prompt=$(build_prompt)
           invoke_claude "$prompt" "$stdin_content"
         fi
 
       elif [[ "$ORIGIN" == "audio" ]]; then
-        # In dry-run mode, skip transcript fetch — just show the prompt
         if $DRY_RUN; then
+          ARCHIVE_PATH="Mnemon/originals/<date>_<hash>.<ext>"
+          [[ -n "$FILE_PATH" ]] && ORIGIN_PATH="$FILE_PATH"
+          prompt=$(build_prompt)
           invoke_claude "$prompt"
         else
           media_args=("audio" "--whisper-model" "$WHISPER_MODEL")
@@ -485,6 +526,18 @@ case "$ACTION" in
             save_pending_write "$prompt" "" "media-extract.py failed for ${URL:-$FILE_PATH}"
             exit 1
           }
+          audio_canonical="${URL:-${FILE_PATH:-unknown}}"
+          if [[ -n "$FILE_PATH" && -f "$FILE_PATH" ]]; then
+            ORIGIN_PATH="$FILE_PATH"
+            ARCHIVE_PATH=$(_l1_archive_file "$FILE_PATH" "$audio_canonical")
+          elif [[ -n "$URL" ]]; then
+            audio_tmp=$(mktemp -t mnemon-audio.XXXXXX)
+            if curl -sfL -A "Mozilla/5.0" "$URL" -o "$audio_tmp" 2>/dev/null; then
+              ARCHIVE_PATH=$(_l1_archive_file "$audio_tmp" "$audio_canonical")
+              rm -f "$audio_tmp"
+            fi
+          fi
+          prompt=$(build_prompt)
           invoke_claude "$prompt" "$stdin_content"
         fi
 
@@ -505,12 +558,17 @@ case "$ACTION" in
           echo "Paste content, then press Ctrl+D:" >&2
         fi
         stdin_content=$(cat)
+        if ! $DRY_RUN && [[ -n "$stdin_content" ]]; then
+          text_canonical="${TITLE:-${ORIGIN}_$(date +%s)}"
+          ARCHIVE_PATH=$(_l1_archive_text "$stdin_content" "$text_canonical" "txt")
+          prompt=$(build_prompt)
+        fi
         invoke_claude "$prompt" "$stdin_content"
 
       elif [[ "$ORIGIN" == "url" && "$RENDER" == "true" ]]; then
-        # SPA / JS-heavy page: pre-render via Chrome headless, pipe content as stdin.
-        # Origin stays 'url' so the canonical URL is preserved in frontmatter.
         if $DRY_RUN; then
+          ARCHIVE_PATH="Mnemon/originals/<date>_<hash>.txt"
+          prompt=$(build_prompt)
           invoke_claude "$prompt"
         else
           [[ -z "$URL" ]] && { echo "ERROR: --render requires --url" >&2; exit 1; }
@@ -518,6 +576,8 @@ case "$ACTION" in
             save_pending_write "$prompt" "" "render-url.sh failed for $URL"
             exit 1
           }
+          ARCHIVE_PATH=$(_l1_archive_text "$stdin_content" "$URL" "txt")
+          prompt=$(build_prompt)
           invoke_claude "$prompt" "$stdin_content"
         fi
 
@@ -529,14 +589,11 @@ case "$ACTION" in
           invoke_claude "$prompt"
         else
           pdf_canonical="${URL:-${FILE_PATH:-unknown}}"
-          pdf_hash=$(printf '%s' "$pdf_canonical" | shasum -a 256 | cut -c1-8)
-          pdf_archive_name="$(date +%Y-%m-%d)_${pdf_hash}.pdf"
-          pdf_icloud="${ICLOUD_DATA:-$HOME/Library/Mobile Documents/com~apple~CloudDocs/Claude Data}"
-          pdf_archive_dir="${pdf_icloud}/Mnemon/originals"
-          mkdir -p "$pdf_archive_dir"
-          pdf_archive_file="${pdf_archive_dir}/${pdf_archive_name}"
-
           if [[ -z "$FILE_PATH" && -n "$URL" ]]; then
+            pdf_archive_name=$(_l1_archive_name "$pdf_canonical" "pdf")
+            pdf_archive_dir=$(_l1_archive_dir)
+            mkdir -p "$pdf_archive_dir"
+            pdf_archive_file="${pdf_archive_dir}/${pdf_archive_name}"
             if ! curl -sfL -A "Mozilla/5.0" "$URL" -o "$pdf_archive_file"; then
               save_pending_write "$prompt" "" "curl failed for PDF URL $URL"
               rm -f "$pdf_archive_file"
@@ -546,9 +603,8 @@ case "$ACTION" in
             ARCHIVE_PATH="Mnemon/originals/${pdf_archive_name}"
           elif [[ -n "$FILE_PATH" ]]; then
             ORIGIN_PATH="$FILE_PATH"
-            cp "$FILE_PATH" "$pdf_archive_file"
-            FILE_PATH="$pdf_archive_file"
-            ARCHIVE_PATH="Mnemon/originals/${pdf_archive_name}"
+            ARCHIVE_PATH=$(_l1_archive_file "$FILE_PATH" "$pdf_canonical")
+            FILE_PATH="$(_l1_archive_dir)/$(_l1_archive_name "$pdf_canonical" "pdf")"
           fi
           [[ -z "$FILE_PATH" ]] && { echo "ERROR: pdf origin requires --file or --url" >&2; exit 1; }
           [[ ! -f "$FILE_PATH" ]] && { echo "ERROR: PDF file not found: $FILE_PATH" >&2; exit 1; }
@@ -557,6 +613,13 @@ case "$ACTION" in
         fi
 
       else
+        if ! $DRY_RUN && [[ "$ORIGIN" == "url" && -n "$URL" ]]; then
+          url_raw=$(curl -sfL -A "Mozilla/5.0" --max-time 30 "$URL" 2>/dev/null) || url_raw=""
+          if [[ -n "$url_raw" ]]; then
+            ARCHIVE_PATH=$(_l1_archive_text "$url_raw" "$URL" "html")
+            prompt=$(build_prompt)
+          fi
+        fi
         invoke_claude "$prompt"
       fi
     fi
