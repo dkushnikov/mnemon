@@ -96,6 +96,16 @@ Remove the wrapper once qmd v2.0.2+ is published — the released launcher will 
 
 `qmd update` and `qmd embed` have to run for newly added sources to be searchable via the semantic provider. Mnemon's gateway fires a background `qmd update && qmd embed` after every successful `source-add` when `search_provider: qmd` is active, so the index stays fresh during normal use. But cron jobs, manual `source.md` edits, or external tools that touch the vault without going through the gateway won't trigger reindexing. If semantic search starts missing obvious content, run `qmd update && qmd embed` manually.
 
+## Works with Obsidian Seed
+
+[Obsidian Seed](https://github.com/dkushnikov/obsidian-seed) builds a personal vault through a discovery conversation — your structure, your conventions, your `reader-context.md`. That reader context is exactly what Mnemon uses to personalize every extract.
+
+**Seed builds the vault. Mnemon fills it with knowledge.**
+
+Without Seed, Mnemon still works — you just write `reader-context.md` yourself. With Seed, it's already there from your discovery session, tuned to how you think. Same article → insights framed for *you*, not a generic summary.
+
+If you're starting fresh: Seed first (vault setup, 1-2 hours) → Mnemon next (ongoing capture). If you already have a vault: Mnemon works standalone.
+
 ## License
 
 [MIT](LICENSE)
