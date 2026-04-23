@@ -101,6 +101,8 @@ else
   copy_if_missing "$SCRIPT_DIR/reader-context.md.template" "$VAULT_PATH/reader-context.md" "reader-context.md (generic — edit to personalize)"
 fi
 
+copy_if_missing "$SCRIPT_DIR/mnemon-seed.md" "$VAULT_PATH/mnemon-seed.md" "mnemon-seed.md (reader profile builder)"
+
 # --- 3. Generate mnemon.yaml ---
 
 echo "3. Generating config..."
@@ -271,8 +273,9 @@ echo ""
 echo "=== Setup Complete ==="
 echo ""
 echo "Next steps:"
-echo "  1. Edit your reader context (personalizes extractions):"
-echo "     $VAULT_PATH/reader-context.md"
+echo "  1. Build your reader profile (5-10 min, personalizes all extractions):"
+echo "     cd $VAULT_PATH && claude"
+echo "     Then say: \"Follow mnemon-seed.md\""
 echo ""
 echo "  2. Add your first source:"
 echo "     /source-add https://example.com/interesting-article"

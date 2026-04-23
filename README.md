@@ -41,13 +41,20 @@ git clone https://github.com/dkushnikov/mnemon.git ~/Mnemon
 ~/Mnemon/setup.sh ~/path/to/your/vault
 ```
 
-**Already have a reader-context from [Obsidian Seed](https://github.com/dkushnikov/obsidian-seed)?** Pass it to get personalized extracts from day one:
+After setup, build your reader profile (5-10 min conversation with Claude):
 
 ```bash
-~/Mnemon/setup.sh ~/path/to/vault --reader-context ~/path/to/your/vault/reader-context.md
+cd ~/path/to/your/vault && claude
+# Then say: "Follow mnemon-seed.md"
 ```
 
-Without `--reader-context`, setup creates a generic template — extracts will work but won't be personalized until you edit it.
+Claude detects existing identity artifacts (from [Obsidian Seed](https://github.com/dkushnikov/obsidian-seed) or your vault) and assembles your profile, or runs a short discovery if starting fresh. Skip this step for generic extracts — you can run it anytime later.
+
+**Already have a reader-context.md?** Pass it directly:
+
+```bash
+~/Mnemon/setup.sh ~/path/to/vault --reader-context ~/path/to/existing/reader-context.md
+```
 
 `setup.sh` scaffolds the vault, generates config, installs the [Claude Code plugin](https://github.com/dkushnikov/mnemon-plugin), and checks optional dependencies (`yt-dlp`, `whisper`, `ffprobe`, [QMD](https://github.com/tobi/qmd)).
 
