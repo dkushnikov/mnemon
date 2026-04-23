@@ -69,6 +69,8 @@ DRY_RUN=false
 WHISPER_MODEL_FLAG=""
 NO_WHISPER=false
 RENDER=false
+ARCHIVE_PATH=""
+ORIGIN_PATH=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -224,7 +226,9 @@ Source type: $SOURCE_TYPE"
     prompt+=$'\n'"Note: Page was pre-rendered via Chrome headless (client-side-rendered SPA). Source content is provided via stdin — use it as the source body. URL stays canonical in frontmatter. Do NOT refetch via WebFetch."
   elif [[ "$ORIGIN" == "pdf" ]]; then
     prompt+=$'\n'"Content format: pdf"
-    prompt+=$'\n'"Note: Source is a PDF file. Use the Read tool on the File path — Claude Code's Read tool natively handles PDFs (text, layout, images). Include page count in frontmatter (\`pages: N\`). If URL is also set (PDF was downloaded from remote), URL stays canonical, file is the local copy used for extraction."
+    [[ -n "$ORIGIN_PATH" ]] && prompt+=$'\n'"Origin path: $ORIGIN_PATH"
+    [[ -n "$ARCHIVE_PATH" ]] && prompt+=$'\n'"Archive: $ARCHIVE_PATH (relative to iCloud Claude Data/)"
+    prompt+=$'\n'"Note: Source is a PDF file. Use the Read tool on the File path — Claude Code's Read tool natively handles PDFs (text, layout, images). Include page count in frontmatter (\`pages: N\`). If URL is also set, URL stays canonical. If Archive path is provided, include \`archive: <value>\` in source.md frontmatter (L1 path, relative to iCloud Claude Data/). If Origin path is provided, include \`origin_path: <value>\` in source.md frontmatter (original file location before archival)."
   fi
 
   prompt+=$'\n\n'"=== CAPTURE CONTEXT ===
@@ -246,7 +250,9 @@ $template
 3. Create folder: Sources/\$(date +%Y-%m-%d)_<hash8>/
 4. If folder exists, append -2, -3, etc.
 5. Write source.md — immutable raw content with frontmatter:
-   type: source, source_type: $SOURCE_TYPE, content_format: <text|transcript|reference>, origin: $ORIGIN, url: \"$URL\", author: \"${AUTHOR:-}\", captured: <today>, captured_by: agent
+   type: source, source_type: $SOURCE_TYPE, content_format: <text|transcript|reference|pdf>, origin: $ORIGIN, url: \"$URL\", author: \"${AUTHOR:-}\", captured: <today>, captured_by: agent
+   If Archive is provided above: add \`archive: \"<value>\"\` (original archived to L1 iCloud).
+   If Origin path is provided above: add \`origin_path: \"<value>\"\` (original file location).
 6. Apply the EXTRACTION TEMPLATE above to generate extract.md.
 7. Executive Summary MUST be framed by the READER CONTEXT — not generic, but personal to the reader.
 8. Key Ideas MUST use domain tags from the Reader Context.
@@ -516,24 +522,37 @@ case "$ACTION" in
         fi
 
       elif [[ "$ORIGIN" == "pdf" ]]; then
-        # PDF: no stdin piping — Claude's Read tool natively handles PDFs.
-        # If URL is set without local FILE_PATH, download to /tmp first, then rebuild
-        # prompt so the File: line reflects the downloaded copy.
         if $DRY_RUN; then
+          ARCHIVE_PATH="Mnemon/originals/<date>_<hash>.pdf"
+          [[ -n "$FILE_PATH" ]] && ORIGIN_PATH="$FILE_PATH"
+          prompt=$(build_prompt)
           invoke_claude "$prompt"
         else
+          pdf_canonical="${URL:-${FILE_PATH:-unknown}}"
+          pdf_hash=$(printf '%s' "$pdf_canonical" | shasum -a 256 | cut -c1-8)
+          pdf_archive_name="$(date +%Y-%m-%d)_${pdf_hash}.pdf"
+          pdf_icloud="${ICLOUD_DATA:-$HOME/Library/Mobile Documents/com~apple~CloudDocs/Claude Data}"
+          pdf_archive_dir="${pdf_icloud}/Mnemon/originals"
+          mkdir -p "$pdf_archive_dir"
+          pdf_archive_file="${pdf_archive_dir}/${pdf_archive_name}"
+
           if [[ -z "$FILE_PATH" && -n "$URL" ]]; then
-            pdf_tmp=$(mktemp -t mnemon-pdf.XXXXXX.pdf)
-            if ! curl -sfL -A "Mozilla/5.0" "$URL" -o "$pdf_tmp"; then
+            if ! curl -sfL -A "Mozilla/5.0" "$URL" -o "$pdf_archive_file"; then
               save_pending_write "$prompt" "" "curl failed for PDF URL $URL"
-              rm -f "$pdf_tmp"
+              rm -f "$pdf_archive_file"
               exit 1
             fi
-            FILE_PATH="$pdf_tmp"
-            prompt=$(build_prompt)
+            FILE_PATH="$pdf_archive_file"
+            ARCHIVE_PATH="Mnemon/originals/${pdf_archive_name}"
+          elif [[ -n "$FILE_PATH" ]]; then
+            ORIGIN_PATH="$FILE_PATH"
+            cp "$FILE_PATH" "$pdf_archive_file"
+            FILE_PATH="$pdf_archive_file"
+            ARCHIVE_PATH="Mnemon/originals/${pdf_archive_name}"
           fi
           [[ -z "$FILE_PATH" ]] && { echo "ERROR: pdf origin requires --file or --url" >&2; exit 1; }
           [[ ! -f "$FILE_PATH" ]] && { echo "ERROR: PDF file not found: $FILE_PATH" >&2; exit 1; }
+          prompt=$(build_prompt)
           invoke_claude "$prompt"
         fi
 

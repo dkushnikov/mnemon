@@ -182,6 +182,26 @@ output=$($GW source-add --origin pdf --file "$TEST_TMPDIR/paper.pdf" --config "$
 assert_contains "$output" "Origin: pdf" "explicit pdf origin works"
 assert_contains "$output" "Source type: paper" "pdf → paper source_type (explicit)"
 
+# --- Test 24: PDF dry-run includes archive placeholder ---
+output=$($GW source-add --file "$TEST_TMPDIR/paper.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
+assert_contains "$output" "Archive: Mnemon/originals/" "pdf dry-run shows archive path placeholder"
+assert_contains "$output" "iCloud Claude Data" "pdf dry-run mentions L1 iCloud path"
+
+# --- Test 25: PDF from local file shows origin_path in dry-run ---
+output=$($GW source-add --file "$TEST_TMPDIR/paper.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
+assert_contains "$output" "Origin path: $TEST_TMPDIR/paper.pdf" "pdf from file shows origin_path"
+assert_contains "$output" "origin_path" "prompt instructs origin_path in frontmatter"
+
+# --- Test 26: PDF from URL does NOT show origin_path in dry-run ---
+output=$($GW source-add --url "https://arxiv.org/pdf/2401.12345.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
+assert_not_contains "$output" "Origin path:" "pdf from URL has no origin_path"
+assert_contains "$output" "Archive:" "pdf from URL still has archive"
+
+# --- Test 27: PDF prompt includes archive frontmatter instruction ---
+output=$($GW source-add --file "$TEST_TMPDIR/paper.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
+assert_contains "$output" 'archive:' "prompt instructs archive field in frontmatter"
+assert_contains "$output" "archived to L1" "prompt explains L1 archival"
+
 # Cleanup
 rm -rf "$TEST_TMPDIR"
 
