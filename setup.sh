@@ -229,19 +229,21 @@ fi
 
 echo ""
 echo "6. Installing Claude Code plugin..."
+PLUGIN_REPO="https://github.com/dkushnikov/mnemon-plugin"
+PLUGIN_ID="mnemon@mnemon-plugin"
 if command -v claude >/dev/null 2>&1; then
-  if claude plugin marketplace add https://github.com/dkushnikov/mnemon-plugin 2>/dev/null && \
-     claude plugin install mnemon@mnemon-plugin 2>/dev/null; then
+  claude plugin marketplace add "$PLUGIN_REPO" 2>/dev/null || true
+  if claude plugin install "$PLUGIN_ID" 2>/dev/null; then
     echo "   ✓ Plugin installed (/source-add, /source-search, /source-status)"
   else
-    echo "   ○ Plugin may already be installed, or install failed"
-    echo "     Manual install: claude plugin marketplace add https://github.com/dkushnikov/mnemon-plugin"
-    echo "                     claude plugin install mnemon@mnemon-plugin"
+    echo "   ○ Plugin already installed or install failed"
+    echo "     Manual: claude plugin marketplace add $PLUGIN_REPO"
+    echo "             claude plugin install $PLUGIN_ID"
   fi
 else
   echo "   ○ Claude Code not found — install plugin later:"
-  echo "     claude plugin marketplace add https://github.com/dkushnikov/mnemon-plugin"
-  echo "     claude plugin install mnemon@mnemon-plugin"
+  echo "     claude plugin marketplace add $PLUGIN_REPO"
+  echo "     claude plugin install $PLUGIN_ID"
 fi
 
 # --- 7. Summary ---
