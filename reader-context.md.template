@@ -1,6 +1,6 @@
 ---
 type: reader-context
-synced: 2026-05-24
+synced: "YYYY-MM-DD"   # set to today (run: date +%Y-%m-%d); extracts flag stale framing if this drifts far behind
 ---
 
 # Reader Context
