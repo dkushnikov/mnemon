@@ -64,7 +64,7 @@ After setup, build your reader profile (5-10 min conversation with Claude):
 
 ```bash
 cd ~/path/to/your/vault && claude
-# Then say: "Follow mnemon-seed.md"
+# Then say: "Follow mnemon-seed.md"  (setup.sh placed it in your vault root)
 ```
 
 Claude detects existing identity artifacts (from [Obsidian Seed](https://github.com/dkushnikov/obsidian-seed) or your vault) and assembles your profile, or runs a short discovery if starting fresh. Skip this step for generic extracts — you can run it anytime later.

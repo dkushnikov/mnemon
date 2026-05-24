@@ -67,6 +67,22 @@ If the user isn't sure, offer defaults:
 
 Draft `reader-context.md`. Show it. Ask for edits. Write the final version.
 
+### Always include (both assembly and discovery)
+
+Every `reader-context.md` you write MUST include:
+
+1. **Frontmatter** with `type: reader-context` and `synced: <today's date>` (run `date +%Y-%m-%d`). The extractor flags framing as stale when `synced:` drifts far behind today — set it to today on write, and tell the user to bump it when they refresh their goals.
+2. **A `## Value Scale` section** — the single source of truth for how a 1-10 rating maps to the reader's bar. Use this default unless the user gives their own:
+
+   - 1-3 — low value, obvious, or wrong
+   - 4-5 — useful, some points worth keeping (most sources)
+   - 6 — changes one concrete decision or gives a usable tactic
+   - 7 — shifts a mental model (should be rare)
+   - 8-9 — reshapes approach AND immediately actionable
+   - 10 — reference-grade
+
+   Tend critical; 7+ should be rare.
+
 ### Step 3 — Confirm
 
 Show the path to the written file. Say:

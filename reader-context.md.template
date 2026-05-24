@@ -1,8 +1,13 @@
+---
+type: reader-context
+synced: 2026-05-24
+---
+
 # Reader Context
 
 This file personalizes your knowledge extractions. Every source you add is framed through YOUR context — your role, domains, and goals. Two people reading the same article get different extracts.
 
-Edit this file to match who you are and what you care about.
+Edit this file to match who you are and what you care about. Bump `synced:` (frontmatter) whenever you refresh your goals — extracts flag your framing as stale if it drifts far behind today.
 
 ## Who I Am
 
@@ -39,6 +44,18 @@ Edit this file to match who you are and what you care about.
 - Be direct, no fluff. If the source is mediocre, say it's mediocre
 - Connect to my current priorities where genuine
 - Actionable implications over theoretical interest
+
+## Value Scale
+
+<!-- How a 1-10 rating maps to YOUR bar. The extractor uses this as the single source of truth for ratings — keep it, or tune the thresholds. -->
+- 1-3 — low value, obvious, or wrong
+- 4-5 — useful, some points worth keeping (most sources land here)
+- 6 — changes one concrete decision or gives a usable tactic
+- 7 — shifts a mental model / how you think about a domain (should be rare)
+- 8-9 — reshapes your approach AND immediately actionable
+- 10 — reference-grade, exceptional
+
+<!-- Tend critical. 7+ should be rare. Don't drift to a comfortable middle. -->
 
 ## Language
 

@@ -59,12 +59,12 @@ capture_context:
   vault: <from capture context>
   session: "<from capture context>"
   intent: "<from capture context>"
-  import_source: gateway
-  import_batch: ""
+  import_source: "<from capture context, e.g. gateway>"
+  import_batch: "<from capture context, empty if none>"
 ---
 ```
 
-Rating guide: apply the reader's value-scale from the Reader Context (single source of truth). Use the per-type idea budget below.
+Rating guide: apply the reader's value-scale from the Reader Context (single source of truth).
 
 ## Body
 

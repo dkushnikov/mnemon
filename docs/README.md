@@ -18,19 +18,16 @@ Every extract is framed by YOUR context — your role, domains, goals. Two peopl
 ## Quick Start
 
 ```bash
-# 1. Clone and setup
-git clone https://github.com/dkushnikov/mnemon ~/Mnemon
+# 1. Clone and setup (scaffolds the vault, generates config, installs the Claude Code plugin)
+git clone https://github.com/dkushnikov/mnemon.git ~/Mnemon
 cd ~/Mnemon
 ./setup.sh ~/path/to/your/vault
 
-# 2. Edit your reader context (personalizes extractions)
-# Open ~/path/to/your/vault/reader-context.md and fill in your profile
+# 2. Build your reader profile (personalizes extractions; setup.sh placed mnemon-seed.md in your vault)
+cd ~/path/to/your/vault && claude
+# Then say: "Follow mnemon-seed.md"
 
-# 3. Install the Claude Code plugin
-claude plugin marketplace add https://github.com/dkushnikov/mnemon-plugin
-claude plugin install mnemon@mnemon-plugin
-
-# 4. Add your first source
+# 3. Add your first source
 /source-add https://example.com/interesting-article
 ```
 
@@ -93,7 +90,7 @@ Mnemon ships 7 extraction templates in `templates/core/`:
 | Template | For | Special Features |
 |----------|-----|-----------------|
 | `article.md` | Web articles, blog posts | Two-pass IDEAS→INSIGHTS extraction |
-| `youtube.md` | YouTube videos | Transcript-based, format-value note |
+| `video.md` | YouTube videos | Transcript-based, format-value note |
 | `podcast.md` | Podcasts, audio content | Speaker attribution, signal-to-noise |
 | `book.md` | Books (notes/highlights) | Central Thesis, framework extraction |
 | `paper.md` | Academic papers | Methodology Note, evidence grading |
