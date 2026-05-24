@@ -63,7 +63,7 @@ capture_context:
 ---
 ```
 
-Rating guide: 1-3 = routine, no significant decisions. 4-5 = useful context shared. 6-7 = important decisions or insights. 8-9 = pivotal conversation. 10 = life-changing discussion.
+Rating guide: apply the reader's value-scale from the Reader Context (single source of truth). Use the per-type idea budget below.
 
 ## Body
 
@@ -91,13 +91,9 @@ If no action items, write "No action items identified."
 
 ### Executive Summary
 
-0.5 page. Frame through the Reader Context.
-
-Requirements:
-- What does this conversation mean for the reader specifically?
-- If decisions affect the reader's work — highlight implications
-- Note any unresolved tensions or open questions
-- Write in the reader's preferred language (check Reader Context)
+0.5 page.
+Apply the reader's framing preferences from the Reader Context (value lens, verdict, contradiction surfacing, scale-to-source, anti-patterns, language).
+If decisions affect the reader's work — highlight implications. Note any unresolved tensions or open questions.
 
 ### Key Ideas
 

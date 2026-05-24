@@ -63,7 +63,7 @@ capture_context:
 ---
 ```
 
-Rating guide: 1-3 = low value, could be a blog post. 4-5 = average, one or two useful ideas. 6-7 = good, multiple frameworks worth keeping. 8-9 = excellent, fundamentally changes thinking. 10 = exceptional, reference-grade.
+Rating guide: apply the reader's value-scale from the Reader Context (single source of truth). Use the per-type idea budget below.
 
 ## Body
 
@@ -77,15 +77,9 @@ One paragraph. What is the ONE core argument this book makes? State it clearly a
 
 ### Executive Summary
 
-0.5 to 1 page. Frame ENTIRELY through the Reader Context.
-
-Requirements:
-- Reference specific elements from the reader's context (role, domains, goals)
-- Identify which frameworks or mental models are most applicable to the reader
-- If the book contradicts the reader's current approach — highlight it
-- Note honestly: is this a "one idea" book padded to 300 pages, or genuinely deep?
-- End with a clear verdict: worth the reader's time? Which chapters/sections?
-- Write in the reader's preferred language (check Reader Context)
+0.5 to 1 page.
+Apply the reader's framing preferences from the Reader Context (value lens, verdict, contradiction surfacing, scale-to-source, anti-patterns, language).
+Identify which frameworks or mental models are most applicable to the reader. Note honestly: is this a "one idea" book padded to 300 pages, or genuinely deep? Verdict: which chapters/sections are worth the reader's time?
 
 ### Key Ideas
 

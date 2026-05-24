@@ -61,7 +61,7 @@ capture_context:
 ---
 ```
 
-Rating guide: 1-3 = low value, obvious or rehashed. 4-5 = average, some useful points. 6-7 = good, multiple actionable insights. 8-9 = excellent, changes thinking. 10 = exceptional, reference-grade.
+Rating guide: apply the reader's value-scale from the Reader Context (single source of truth). Use the per-type idea budget below.
 
 ## Body
 
@@ -71,15 +71,9 @@ Rating guide: 1-3 = low value, obvious or rehashed. 4-5 = average, some useful p
 
 ### Executive Summary
 
-0.5 to 1 page. Frame ENTIRELY through the Reader Context.
-
-Requirements:
-- Reference specific elements from the reader's context (role, domains, goals)
-- If the video contradicts the reader's current approach — highlight it
-- If the video is a rehash of common knowledge — say so directly
-- Note the format value: was this better as video than text would have been? (demos, visuals, live coding)
-- End with a clear verdict: worth the reader's time? Why or why not?
-- Write in the reader's preferred language (check Reader Context)
+0.5 to 1 page.
+Apply the reader's framing preferences from the Reader Context (value lens, verdict, contradiction surfacing, scale-to-source, anti-patterns, language).
+If the video is a rehash of common knowledge — say so directly. Note the format value: was this better as video than text would have been? (demos, visuals, live coding)
 
 ### Key Ideas
 

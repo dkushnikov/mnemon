@@ -63,7 +63,7 @@ capture_context:
 ---
 ```
 
-Rating guide: 1-3 = weak methodology or trivial findings. 4-5 = average, incremental. 6-7 = good, solid methodology with practical findings. 8-9 = excellent, field-shifting. 10 = exceptional, landmark paper.
+Rating guide: apply the reader's value-scale from the Reader Context (single source of truth). Use the per-type idea budget below.
 
 ## Body
 
@@ -77,15 +77,9 @@ Rating guide: 1-3 = weak methodology or trivial findings. 4-5 = average, increme
 
 ### Executive Summary
 
-0.5 to 1 page. Frame ENTIRELY through the Reader Context.
-
-Requirements:
-- Reference specific elements from the reader's context (role, domains, goals)
-- Clearly separate "what the data shows" from "what authors interpret"
-- If findings contradict the reader's current approach — highlight it
-- Note practical applicability: can the reader act on these findings?
-- End with a verdict: worth the reader's time? How trustworthy are the findings?
-- Write in the reader's preferred language (check Reader Context)
+0.5 to 1 page.
+Apply the reader's framing preferences from the Reader Context (value lens, verdict, contradiction surfacing, scale-to-source, anti-patterns, language).
+Clearly separate "what the data shows" from "what authors interpret". Note practical applicability: can the reader act on these findings? How trustworthy are they?
 
 ### Key Ideas
 

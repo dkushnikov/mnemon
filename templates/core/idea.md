@@ -54,7 +54,7 @@ capture_context:
 ---
 ```
 
-Rating guide: 1-3 = fleeting thought, low reuse value. 4-5 = decent observation. 6-7 = actionable insight. 8-9 = paradigm-shifting personal insight. 10 = life-changing realization.
+Rating guide: apply the reader's value-scale from the Reader Context (single source of truth). Use the per-type idea budget below.
 
 ## Body
 
@@ -64,9 +64,8 @@ Rating guide: 1-3 = fleeting thought, low reuse value. 4-5 = decent observation.
 
 ### Executive Summary
 
-2-4 sentences. Why does this idea matter to THIS reader, given their context? How might it connect to their current priorities? What could they do with it?
-
-Write in the reader's preferred language (check Reader Context).
+2-4 sentences.
+Apply the reader's framing preferences from the Reader Context (value lens, verdict, contradiction surfacing, scale-to-source, anti-patterns, language).
 
 ### Key Ideas
 

@@ -57,6 +57,10 @@ assert_contains "$output" "Origin: url" "regular URL → origin=url"
 output=$($GW source-add --url "https://example.com/post" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
 assert_contains "$output" "Source type: article" "URL → source_type=article"
 
+# --- Test 4b: Article template no longer carries its own rating scale ---
+output=$($GW source-add --url "https://example.com/post" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
+assert_not_contains "$output" "obvious or wrong. 4-5 = average" "template rating guide removed (article)"
+
 # --- Test 5: Missing origin fails ---
 output=$($GW source-add --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1) && {
   fail "missing origin" "should have failed"

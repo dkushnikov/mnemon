@@ -59,7 +59,7 @@ capture_context:
 ---
 ```
 
-Rating guide: 1-3 = low value, obvious or wrong. 4-5 = average, some useful points. 6-7 = good, multiple actionable insights. 8-9 = excellent, changes thinking. 10 = exceptional, reference-grade.
+Rating guide: apply the reader's value-scale from the Reader Context (single source of truth). Use the per-type idea budget below.
 
 ## Body
 
@@ -70,15 +70,7 @@ Rating guide: 1-3 = low value, obvious or wrong. 4-5 = average, some useful poin
 ### Executive Summary
 
 0.5 to 1 page. This is the most important section.
-
-Frame ENTIRELY through the Reader Context. Not "what does this article say?" but "what does this mean for THIS reader, given THEIR role, goals, and current priorities?"
-
-Requirements:
-- Reference specific elements from the reader's context (role, domains, goals)
-- If the article contradicts the reader's current approach — highlight the contradiction explicitly
-- If the article is mediocre — say so directly. "This article covers well-trodden ground" is fine
-- End with a clear verdict: is this worth the reader's time? Why or why not?
-- Write in the reader's preferred language (check Reader Context)
+Apply the reader's framing preferences from the Reader Context (value lens, verdict, contradiction surfacing, scale-to-source, anti-patterns, language).
 
 ### Key Ideas
 
