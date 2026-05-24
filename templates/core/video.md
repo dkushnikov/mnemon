@@ -42,6 +42,7 @@ content_format: transcript
 origin: youtube
 visibility: personal
 status: extracted
+context: "<from capture context: personal | mc>"
 title: "<video title>"
 author: "<channel name or speaker>"
 url: "<YouTube URL>"

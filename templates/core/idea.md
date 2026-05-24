@@ -35,6 +35,7 @@ content_format: text
 origin: idea
 visibility: personal
 status: extracted
+context: "<from capture context: personal | mc>"
 title: "<concise title capturing the idea — max 8 words>"
 author: "<person's name from capture context, or 'self'>"
 url: ""

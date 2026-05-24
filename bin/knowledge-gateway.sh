@@ -292,7 +292,7 @@ $template
    If Origin path is provided above: add \`origin_path: \"<value>\"\` (original file location).
 6. Apply the EXTRACTION TEMPLATE above to generate extract.md.
 7. Executive Summary MUST be framed by the READER CONTEXT (identity + current priorities) — personal to the reader, not generic. If the reader-context "synced:" date is well before today, note in the Executive Summary that the framing context may be stale.
-8. Key Ideas MUST use domain tags from the Reader Context.
+8. Key Ideas MUST use domain tags from the Reader Context. In extract.md frontmatter, also write the capture context as a top-level \`context:\` field (value = the Context from CAPTURE CONTEXT above).
 9. Rating: 1-10. Apply the reader's value-scale defined in the READER CONTEXT (single source of truth). Be critical — most sources are average; high ratings are rare.
 10. Print results exactly as (no other text after these lines):
     RESULT:path=Sources/<folder>/

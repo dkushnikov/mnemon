@@ -40,6 +40,7 @@ content_format: text
 origin: url
 visibility: personal
 status: extracted
+context: "<from capture context: personal | mc>"
 title: "<article title — use the actual title, not a summary>"
 author: "<author name>"
 url: "<source URL>"

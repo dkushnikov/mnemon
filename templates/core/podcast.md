@@ -45,6 +45,7 @@ content_format: transcript
 origin: audio
 visibility: personal
 status: extracted
+context: "<from capture context: personal | mc>"
 title: "<episode title>"
 author: "<podcast name — host name>"
 url: "<podcast/episode URL>"

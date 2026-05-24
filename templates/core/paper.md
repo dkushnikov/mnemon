@@ -44,6 +44,7 @@ content_format: text
 origin: url
 visibility: personal
 status: extracted
+context: "<from capture context: personal | mc>"
 title: "<paper title>"
 author: "<first author et al.>"
 url: "<paper URL or DOI>"

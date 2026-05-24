@@ -162,6 +162,11 @@ output=$($GW source-add --url "https://example.com/test" --import-source "safari
 assert_contains "$output" "Import source: safari" "import-source in prompt"
 assert_contains "$output" "Import batch: 2026-04-05-safari" "import-batch in prompt"
 
+# --- Test 18b: gateway instructs writing the context tag into extract frontmatter ---
+output=$($GW source-add --url "https://example.com/test" --context mc --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
+assert_contains "$output" "Context: mc" "gateway carries context label in CAPTURE CONTEXT block"
+assert_contains "$output" "write the capture context as a top-level" "gateway instructs context field in frontmatter"
+
 # --- Test 19: --render flag recognized and injects pre-render note into prompt ---
 output=$($GW source-add --url "https://example.com/spa" --render --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
 assert_not_contains "$output" "Unknown option" "--render flag recognized"

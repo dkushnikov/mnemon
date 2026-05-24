@@ -44,6 +44,7 @@ content_format: transcript
 origin: <url|audio|text — depends on how captured>
 visibility: personal
 status: extracted
+context: "<from capture context: personal | mc>"
 title: "<conversation topic — max 8 words>"
 author: "<participants, comma-separated>"
 url: "<if available>"

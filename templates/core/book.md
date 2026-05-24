@@ -44,6 +44,7 @@ content_format: text
 origin: book
 visibility: personal
 status: extracted
+context: "<from capture context: personal | mc>"
 title: "<book title>"
 author: "<author name>"
 url: "<url if available, otherwise empty>"
