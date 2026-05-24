@@ -103,5 +103,19 @@ export STUB_CURL=fail STUB_RENDER=fail
 "$GW" source-add --url "https://example.com/t4" --config "$TEST_TMPDIR/noarchive.yaml" >/dev/null 2>&1 || true
 assert_not_contains "$(cat "$CLAUDE_CAPTURE")" "Archive:" "archival disabled -> no Archive line (no spurious unarchivable)"
 
+# --- T6: dedup — re-adding an already-captured URL skips with a warning, unless --force ---
+mkdir -p "$VAULT/Sources/2026-01-01_existing"
+printf '%s\n' '---' 'type: source' 'origin: url' 'url: "https://dup.test/x"' '---' '' '# body' > "$VAULT/Sources/2026-01-01_existing/source.md"
+reset
+dout=$("$GW" source-add --url "https://dup.test/x" --config "$CONFIG" 2>&1) || true
+assert_contains "$dout" "skipped-duplicate" "duplicate URL is skipped"
+assert_eq "$(cat "$CLAUDE_CAPTURE")" "" "skipped duplicate does not invoke claude"
+reset
+STUB_CURL=fail STUB_RENDER=fail "$GW" source-add --url "https://dup.test/x" --force --config "$CONFIG" >/dev/null 2>&1 || true
+assert_contains "$(cat "$CLAUDE_CAPTURE")" "source-add" "--force re-captures the duplicate (claude invoked)"
+reset
+STUB_CURL=fail STUB_RENDER=fail "$GW" source-add --url "https://fresh.test/y" --config "$CONFIG" >/dev/null 2>&1 || true
+assert_contains "$(cat "$CLAUDE_CAPTURE")" "source-add" "non-duplicate URL proceeds normally"
+
 rm -rf "$TEST_TMPDIR"
 summary

@@ -69,6 +69,7 @@ DRY_RUN=false
 WHISPER_MODEL_FLAG=""
 NO_WHISPER=false
 RENDER=false
+FORCE=false
 ARCHIVE_PATH=""
 ORIGIN_PATH=""
 
@@ -95,6 +96,7 @@ while [[ $# -gt 0 ]]; do
     --whisper-model) [[ $# -lt 2 ]] && { echo "ERROR: --whisper-model requires a value" >&2; exit 1; }; WHISPER_MODEL_FLAG="$2"; shift 2 ;;
     --no-whisper)    NO_WHISPER=true; shift ;;
     --render)        RENDER=true; shift ;;
+    --force)         FORCE=true; shift ;;
     *)               echo "Unknown option: $1" >&2; usage ;;
   esac
 done
@@ -152,6 +154,16 @@ if [[ -z "$SOURCE_TYPE" ]]; then
     batch)      SOURCE_TYPE="" ;;  # determined per-item
     *)          SOURCE_TYPE="article" ;;
   esac
+fi
+
+# --- Dedup: skip if this URL is already captured (unless --force) ---
+if [[ "$ACTION" == "source-add" && -z "$MANIFEST" && -n "$URL" && "$FORCE" != true && "$DRY_RUN" != true ]]; then
+  existing=$(grep -rlF --include="source.md" "url: \"$URL\"" "$VAULT_PATH/Sources" 2>/dev/null | head -1) || true
+  if [[ -n "$existing" ]]; then
+    echo "WARNING: '$URL' already captured at $(basename "$(dirname "$existing")"). Skipping — use --force to re-capture." >&2
+    echo "RESULT:status=skipped-duplicate"
+    exit 0
+  fi
 fi
 
 # --- Template and context loading ---
