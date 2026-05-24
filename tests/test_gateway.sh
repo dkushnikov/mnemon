@@ -36,6 +36,11 @@ assert_contains "$output" "https://example.com/test" "URL in prompt"
 assert_contains "$output" "READER CONTEXT" "reader context section present"
 assert_contains "$output" "EXTRACTION TEMPLATE" "extraction template section present"
 assert_contains "$output" "Test reader context" "reader context content embedded"
+# --- Test 1b: Rating rubric is NOT duplicated in gateway INSTRUCTIONS (owned by reader-context) ---
+assert_not_contains "$output" "5 = average, 7 = good, 9+ = exceptional" "gateway no longer hardcodes rating scale"
+assert_contains "$output" "value-scale defined in the READER CONTEXT" "gateway points rating to reader-context"
+# --- Test 1c: Framing instruction references staleness ---
+assert_contains "$output" "framing context may be stale" "gateway instructs staleness check"
 
 # --- Test 2: Auto-detection of YouTube URLs ---
 output=$($GW source-add --url "https://youtube.com/watch?v=abc123" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
