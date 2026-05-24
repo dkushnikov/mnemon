@@ -42,20 +42,35 @@ _l1_archive_file() {
   echo "${name}"
 }
 
+_detect_ext() {  # downloaded file -> archive extension, from content type
+  case "$(file -b --mime-type "$1" 2>/dev/null)" in
+    application/pdf) echo pdf ;;
+    image/png)       echo png ;;
+    image/jpeg)      echo jpg ;;
+    image/gif)       echo gif ;;
+    *)               echo html ;;   # default for web fetches (html/text)
+  esac
+}
+
 _l1_archive_url() {
-  # Archive a URL's content to L1, trying curl then a render fallback.
-  # Echoes the archive filename on success, or "unarchivable" if both fetches
-  # come back empty (the extractor still runs via WebFetch — this just records
-  # that the original could not be preserved, instead of failing silently).
+  # Archive a URL's content to L1. Downloads to a file (binary-safe — $(...) strips
+  # null bytes and would corrupt PDFs/images) with gzip decoded; extension inferred
+  # from content. Falls back to a rendered text capture, else marks unarchivable.
+  # Echoes the archive filename, or "unarchivable" if both fetches come back empty.
   local url="$1"
-  local dir raw
+  local dir tmp name ext raw
   dir=$(_l1_archive_dir)
   [[ -z "$dir" ]] && return 0   # archival disabled — stay silent, like other origins
-  raw=$(curl -sfL -A "Mozilla/5.0" --max-time 30 "$url" 2>/dev/null) || raw=""
-  if [[ -n "$raw" ]]; then
-    _l1_archive_text "$raw" "$url" "html"
+  mkdir -p "$dir"
+  tmp=$(mktemp)
+  if curl -fsSL --compressed -A "Mozilla/5.0" --max-time 30 -o "$tmp" "$url" 2>/dev/null && [[ -s "$tmp" ]]; then
+    ext=$(_detect_ext "$tmp")
+    name=$(_l1_archive_name "$url" "$ext")
+    mv "$tmp" "$dir/$name"
+    echo "$name"
     return 0
   fi
+  rm -f "$tmp"
   raw=$("$RENDER_URL_CMD" "$url" 2>/dev/null) || raw=""
   if [[ -n "$raw" ]]; then
     _l1_archive_text "$raw" "$url" "txt"

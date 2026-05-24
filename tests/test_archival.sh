@@ -36,11 +36,16 @@ echo "RESULT:path=Sources/test/"
 echo "RESULT:status=extracted"
 STUB
 
-# stub: curl — STUB_CURL=ok prints content (success), else exit 1 (fetch failed)
+# stub: curl — writes to the -o target (binary-safe path). ok=html, pdf=binary(+nulls), else fail
 cat > "$STUBS/curl" << 'STUB'
 #!/usr/bin/env bash
-[[ "${STUB_CURL:-fail}" == "ok" ]] && { echo "<html>curl content</html>"; exit 0; }
-exit 1
+out=""; prev=""
+for a in "$@"; do [[ "$prev" == "-o" ]] && out="$a"; prev="$a"; done
+case "${STUB_CURL:-fail}" in
+  ok)  [[ -n "$out" ]] && printf '<html>curl content</html>' > "$out"; exit 0 ;;
+  pdf) [[ -n "$out" ]] && printf '%%PDF-1.7\000\000\000END' > "$out"; exit 0 ;;
+  *)   exit 1 ;;
+esac
 STUB
 
 # stub: render-url.sh — STUB_RENDER=ok prints content (success), else exit 1
@@ -65,6 +70,13 @@ reset
 run_gw ok fail "https://example.com/t1"
 assert_eq "$(nfiles '*.html')" "1" "curl success archives .html"
 assert_contains "$(cat "$CLAUDE_CAPTURE")" "Archive:" "curl-success prompt carries Archive line"
+
+# T1b: url-origin serving binary (PDF w/ null bytes), URL has NO .pdf extension
+# (else the gateway routes to its already-binary-safe pdf branch). -> .pdf, byte-exact.
+reset
+run_gw pdf fail "https://example.com/q4-report"
+assert_eq "$(nfiles '*.pdf')" "1" "binary download archived as .pdf (ext from content)"
+assert_eq "$(cat "$ARCHIVE"/*.pdf | wc -c | tr -d ' ')" "14" "pdf bytes preserved exactly (no null stripping)"
 
 # T2: curl fails, render succeeds -> archived via render as .txt (NEW fallback)
 reset
