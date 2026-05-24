@@ -210,6 +210,31 @@ _l1_archive_file() {
   echo "${name}"
 }
 
+# Renderer command — overridable so tests can stub Chrome.
+RENDER_URL_CMD="${RENDER_URL_CMD:-$SCRIPT_DIR/render-url.sh}"
+
+_l1_archive_url() {
+  # Archive a URL's content to L1, trying curl then a render fallback.
+  # Echoes the archive filename on success, or "unarchivable" if both fetches
+  # come back empty (the extractor still runs via WebFetch — this just records
+  # that the original could not be preserved, instead of failing silently).
+  local url="$1"
+  local dir raw
+  dir=$(_l1_archive_dir)
+  [[ -z "$dir" ]] && return 0   # archival disabled — stay silent, like other origins
+  raw=$(curl -sfL -A "Mozilla/5.0" --max-time 30 "$url" 2>/dev/null) || raw=""
+  if [[ -n "$raw" ]]; then
+    _l1_archive_text "$raw" "$url" "html"
+    return 0
+  fi
+  raw=$("$RENDER_URL_CMD" "$url" 2>/dev/null) || raw=""
+  if [[ -n "$raw" ]]; then
+    _l1_archive_text "$raw" "$url" "txt"
+    return 0
+  fi
+  echo "unarchivable"
+}
+
 # --- Prompt construction ---
 
 _sanitize_input() {
@@ -627,11 +652,8 @@ case "$ACTION" in
 
       else
         if ! $DRY_RUN && [[ "$ORIGIN" == "url" && -n "$URL" ]]; then
-          url_raw=$(curl -sfL -A "Mozilla/5.0" --max-time 30 "$URL" 2>/dev/null) || url_raw=""
-          if [[ -n "$url_raw" ]]; then
-            ARCHIVE_PATH=$(_l1_archive_text "$url_raw" "$URL" "html")
-            prompt=$(build_prompt)
-          fi
+          ARCHIVE_PATH=$(_l1_archive_url "$URL")
+          prompt=$(build_prompt)
         fi
         invoke_claude "$prompt"
       fi
