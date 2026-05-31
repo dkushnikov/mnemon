@@ -626,6 +626,16 @@ case "$ACTION" in
       (qmd update >/dev/null 2>&1 && qmd embed >/dev/null 2>&1) &
       disown 2>/dev/null || true
     fi
+
+    # Post-success hook: keep index.md fresh after source-add.
+    # /source-process step 4 ("Update index.md") only runs in interactive
+    # sessions; gateway/autonomous extracts via `claude -p` silently skip it,
+    # so index.md drifts. This rebuilds it in the background after a real
+    # extract (skipped on --dry-run).
+    if ! $DRY_RUN && [[ -x "$SCRIPT_DIR/knowledge-reindex.py" ]]; then
+      ("$SCRIPT_DIR/knowledge-reindex.py" "$VAULT_PATH" >/dev/null 2>&1) &
+      disown 2>/dev/null || true
+    fi
     ;;
 
   status)
