@@ -581,6 +581,11 @@ def write_output(items: list[dict], clusters: list[dict],
                  output_path: Path, staleness: int | None,
                  elapsed_sec: float) -> None:
 
+    # v0.7: filter out duplicates (already in Knowledge) — they're done, no
+    # decision needed. Count them for summary but don't display.
+    duplicates = [it for it in items if it.get('reason') == 'duplicate']
+    items = [it for it in items if it.get('reason') != 'duplicate']
+
     by_verdict = defaultdict(list)
     for it in items:
         by_verdict[it['verdict']].append(it)
@@ -620,6 +625,8 @@ def write_output(items: list[dict], clusters: list[dict],
     out.append(f'- **⊘ Skip:** {len(by_verdict["skip"])}')
     out.append(f'- **🌱 Synthesis-seed clusters:** {len(clusters)} '
                f'({sum(len(c["items"]) for c in clusters)} items tagged)')
+    if duplicates:
+        out.append(f'- **🚫 Already in Knowledge** (hidden): {len(duplicates)}')
     out.append('')
     out.append(f'Runtime: {elapsed_sec:.1f}s. Tier distribution: {dict(tier_count)}.')
     out.append('')
@@ -636,7 +643,8 @@ def write_output(items: list[dict], clusters: list[dict],
             out.append(f'Common keywords: {", ".join("`"+k+"`" for k in c["common_keywords"])}')
             out.append('')
             for it in c['items']:
-                out.append(f'- {it["verdict"]}: **{it["title"][:70]}** — `{it["url"]}`')
+                display_url = it.get('normalized') or it["url"]
+                out.append(f'- {it["verdict"]}: **{it["title"][:70]}** — <{display_url}>')
             out.append('')
 
     # Verdict sections
@@ -657,8 +665,11 @@ def write_output(items: list[dict], clusters: list[dict],
             out.append('')
             for it in sorted(domain_items, key=lambda x: -x.get('substance', 0)):
                 title = (it.get('title', '') or '(no title)').replace('|', '\\|')[:80]
+                # v0.7: bare URL (no backticks) so Obsidian auto-links it.
+                # Also use normalized URL — that's what the verdict was computed on.
+                display_url = it.get('normalized') or it["url"]
                 out.append(f'- [x] **{title}**')
-                out.append(f'  `{it["url"]}`')
+                out.append(f'  <{display_url}>')
                 tags = [f"substance:{it.get('substance', '?')}"]
                 if it.get('domain_confidence'):
                     tags.append(f"domain-conf:{it['domain_confidence']:.2f}")
@@ -678,7 +689,7 @@ def write_output(items: list[dict], clusters: list[dict],
         # Auto-skip (Tier 1) — fully collapsed
         auto_skip = [it for it in skip_items if it.get('tier') == 1]
         if auto_skip:
-            out.append(f'> [!info]- Tier-1 auto-skip ({len(auto_skip)}) — junk/dup/lifestyle/auth/deeplink')
+            out.append(f'> [!info]- Tier-1 auto-skip ({len(auto_skip)}) — junk/lifestyle/auth/deeplink')
             for reason, cnt in reason_count.most_common():
                 if cnt > 0:
                     out.append(f'> - {reason}: {cnt}')
@@ -686,7 +697,8 @@ def write_output(items: list[dict], clusters: list[dict],
             out.append('> <details><summary>Full list</summary>')
             out.append('>')
             for it in auto_skip:
-                out.append(f'> - `{it["url"]}` — *{it.get("note", it.get("reason"))}*')
+                display_url = it.get('normalized') or it["url"]
+                out.append(f'> - <{display_url}> — *{it.get("note", it.get("reason"))}*')
             out.append('> </details>')
             out.append('')
         # Substance-skip (Tier 2 said low-substance) — collapsed but visible
@@ -695,7 +707,8 @@ def write_output(items: list[dict], clusters: list[dict],
             out.append(f'> [!info]- Tier-2 substance-skip ({len(substance_skip)}) — fetched but thin')
             for it in substance_skip:
                 title = (it.get('title') or '(no title)')[:60]
-                out.append(f'> - **{title}** — `{it["url"]}` — substance:{it.get("substance", "?")} · domain:{it.get("domain", "?")}')
+                display_url = it.get('normalized') or it["url"]
+                out.append(f'> - **{title}** — <{display_url}> — substance:{it.get("substance", "?")} · domain:{it.get("domain", "?")}')
             out.append('')
 
     # Footer: how to use
