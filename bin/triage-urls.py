@@ -52,13 +52,58 @@ def normalize_url(u: str) -> str:
         return u
     if not p.scheme:
         return u
+
+    # v0.5: Strip auth-redirect wrapper.
+    # If URL is /login (or similar) and has ?next=X (or redirect=X) where X
+    # is a URL in same domain, use X as canonical instead of the auth gate.
+    path_lower = p.path.lower()
+    if AUTH_PATH_RE_FOR_NORM.search(path_lower):
+        q_dict = dict(urllib.parse.parse_qsl(p.query))
+        for redirect_key in ('next', 'redirect', 'return', 'returnurl', 'return_to', 'r'):
+            if redirect_key in q_dict:
+                dest = urllib.parse.unquote(q_dict[redirect_key])
+                if dest.startswith('http'):
+                    try:
+                        dest_host = urllib.parse.urlparse(dest).hostname or ''
+                        if dest_host.lower() == p.netloc.lower():
+                            return normalize_url(dest)
+                    except Exception:
+                        pass
+                break
+
+    # v0.6: Aggregator redirect — community.bvp.com/links?url=X, similar share
+    # patterns. Extract destination URL even if cross-domain (the destination
+    # IS what we care about, not the share/wrapper service).
+    q_dict_all = dict(urllib.parse.parse_qsl(p.query))
+    for redirect_key in ('url', 'u', 'target', 'link'):
+        if redirect_key in q_dict_all:
+            dest = urllib.parse.unquote(q_dict_all[redirect_key])
+            if dest.startswith('http'):
+                # Only follow if dest is plausibly an article URL (has path)
+                try:
+                    dest_p = urllib.parse.urlparse(dest)
+                    if dest_p.hostname and dest_p.path and dest_p.path != '/':
+                        return normalize_url(dest)
+                except Exception:
+                    pass
+
+    # v0.6: GitHub /tree/main and /tree/master are default branches = repo root.
+    # Strip them so GH_REPO_ROOT_RE catches the URL as repo root.
+    if 'github.com' in p.netloc.lower():
+        path = re.sub(r'/tree/(main|master)/?$', '/', p.path)
+    else:
+        path = p.path
+
     q = [(k, v) for k, v in urllib.parse.parse_qsl(p.query)
          if k.lower() not in TRACKING
          and not any(k.lower().startswith(pr) for pr in TRACKING_PREFIXES)]
     new = urllib.parse.urlunparse((p.scheme.lower(), p.netloc.lower(),
-                                    p.path, p.params, urllib.parse.urlencode(q),
+                                    path, p.params, urllib.parse.urlencode(q),
                                     p.fragment))
     return new.rstrip('?')
+
+
+AUTH_PATH_RE_FOR_NORM = re.compile(r'/(login|signin|signup|auth|oauth)')
 
 
 def host_of(u: str) -> str:
@@ -92,17 +137,22 @@ GH_DEEPLINK_RE = re.compile(r'github\.com/.+/(blob|tree|commit|issues|pull|wiki|
 
 
 def tier1(url: str, normalized: str, known_index: dict) -> dict | None:
-    """Return verdict dict if Tier 1 decides; None means → Tier 2."""
+    """Return verdict dict if Tier 1 decides; None means → Tier 2.
+
+    v0.6: all pattern checks now run against NORMALIZED URL (not original) so
+    that auth-wrappers / aggregator-redirects stripped in normalize_url take
+    effect before hard-skip patterns are evaluated.
+    """
     if normalized in known_index:
         return {'verdict': 'skip', 'reason': 'duplicate', 'note': f'already in Knowledge as {known_index[normalized]}', 'tier': 1}
-    if any(p.search(url) for p in JUNK_PATTERNS):
+    if any(p.search(normalized) for p in JUNK_PATTERNS):
         return {'verdict': 'skip', 'reason': 'junk', 'note': 'search/chat/bot URL', 'tier': 1}
-    if AUTH_PATH_RE.search(url.lower()):
+    if AUTH_PATH_RE.search(normalized.lower()):
         return {'verdict': 'skip', 'reason': 'auth', 'note': 'auth/checkout page', 'tier': 1}
-    h = host_of(url)
+    h = host_of(normalized)
     if any(lh in h for lh in LIFESTYLE_HOSTS):
         return {'verdict': 'skip', 'reason': 'lifestyle', 'note': 'shopping/transactional', 'tier': 1}
-    if GH_DEEPLINK_RE.search(url):
+    if GH_DEEPLINK_RE.search(normalized):
         return {'verdict': 'skip', 'reason': 'deeplink', 'note': 'GitHub specific file/issue', 'tier': 1}
     return None
 
@@ -264,6 +314,10 @@ HIGH_SIGNAL_HOSTS = {
     'refactoring.fm': 4,
     'zamesin.ru': 4,
     'newsletter.pragmaticengineer.com': 4,
+    # v0.5 additions from Dima's spike feedback (2026-05-31)
+    'codespeak.dev': 4,
+    'aicouncil.com': 4,
+    'fastcompany.com': 4,
 }
 
 
@@ -276,6 +330,20 @@ def apply_host_substance_override(url: str, base_substance: int) -> int:
     return base_substance
 
 
+# v0.5: GitHub repo root URL (no deeplink) — repo existence is signal even if
+# README is thin. Minimum substance = 3 so it gets bookmark verdict on med-bar.
+GH_REPO_ROOT_RE = re.compile(r'^https?://github\.com/[^/]+/[^/]+/?$')
+
+
+def apply_github_repo_boost(url: str, base_substance: int) -> int:
+    """GitHub repo root URLs get min substance 3 (defuddle often returns thin README,
+    but the project itself has signal — preserve as bookmark via med-bar bookmark rule).
+    """
+    if GH_REPO_ROOT_RE.match(url):
+        return max(base_substance, 3)
+    return base_substance
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Verdict logic per per-domain bar
 # ──────────────────────────────────────────────────────────────────────
@@ -285,6 +353,9 @@ HIGH_BAR_DOMAINS = {'mc/strategy', 'mc/legal', 'mc/people',
 
 
 def verdict_from(substance: int, domain: str) -> str:
+    """v0.5: false-skip asymmetry fix — substance=2 + med-bar now bookmark, not skip.
+    Preserves pointer when unsure; high-bar still skips low-substance (culture/news/etc
+    don't benefit from low-quality pointers)."""
     is_high = domain in HIGH_BAR_DOMAINS
     if substance >= 5:
         return 'capture'
@@ -292,7 +363,9 @@ def verdict_from(substance: int, domain: str) -> str:
         return 'bookmark' if is_high else 'capture'
     if substance == 3:
         return 'skip' if is_high else 'bookmark'
-    return 'skip'
+    if substance == 2:
+        return 'skip' if is_high else 'bookmark'  # CHANGED v0.5
+    return 'skip'  # substance 1: skip everywhere (fetch-failed/empty)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -690,10 +763,30 @@ def main():
                   file=sys.stderr)
             continue
 
-        # Tier 2
-        print(f'  [{i:3}/{len(items)}] T2 fetching … {url[:60]}', file=sys.stderr)
-        content, err = fetch_content(url)
+        # Tier 2 — use normalized URL for fetch + classification
+        print(f'  [{i:3}/{len(items)}] T2 fetching … {nu[:60]}', file=sys.stderr)
+        content, err = fetch_content(nu)
         if err:
+            # v0.6: even on fetch-failed, apply HIGH_SIGNAL host boost.
+            # Known-good hosts (Pimenov, FastCompany, etc.) → preserve as bookmark
+            # even when defuddle returns nothing (paywalls, JS-only sites).
+            base_substance = 1
+            boosted = apply_host_substance_override(nu, base_substance)
+            boosted = apply_github_repo_boost(nu, boosted)
+            if boosted > base_substance:
+                # Host-known good but fetch failed → bookmark via med-bar at substance=4
+                # Use the boosted substance with default domain learning if no content to classify
+                it['content'] = ''
+                it['substance'] = boosted
+                it['host_boost'] = True
+                it['domain'] = 'learning'  # fallback when no content for classification
+                it['domain_confidence'] = 0.0
+                it['verdict'] = verdict_from(boosted, 'learning')
+                it['reason'] = f'substance={boosted}* (host-boost, fetch-failed: {err})'
+                it['tier'] = 2
+                print(f'         → {it["verdict"]:10} substance={boosted}* (host-boost, fetch-failed)',
+                      file=sys.stderr)
+                continue
             it.update({'verdict': 'skip', 'reason': 'fetch-failed',
                        'note': err, 'tier': 2, 'substance': 1})
             print(f'         → fetch-failed: {err}', file=sys.stderr)
@@ -701,10 +794,12 @@ def main():
 
         it['content'] = content
         base_substance = substance_score(content)
-        it['substance'] = apply_host_substance_override(url, base_substance)
+        boosted = apply_host_substance_override(nu, base_substance)
+        boosted = apply_github_repo_boost(nu, boosted)
+        it['substance'] = boosted
         if it['substance'] > base_substance:
             it['host_boost'] = True
-        domain, conf = classify_domain(url, content)
+        domain, conf = classify_domain(nu, content)
         it['domain'] = domain
         it['domain_confidence'] = conf
         it['verdict'] = verdict_from(it['substance'], domain)
