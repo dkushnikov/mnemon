@@ -564,25 +564,38 @@ def staleness_days(personal_context_path: Path) -> int | None:
 
 
 def evidence_snippet(content: str | None, max_chars: int = 160) -> str:
+    """v0.8: cleaner snippet — strip HTML/image markdown/code blocks first
+    so reader sees actual prose, not page chrome."""
     if not content:
         return '(no content fetched)'
-    # First non-empty paragraph
-    for para in content.split('\n\n'):
+    cleaned = clean_content_for_keywords(content)
+    for para in cleaned.split('\n\n'):
         p = para.strip()
         if p and not p.startswith('#') and not p.startswith('```'):
+            # Collapse whitespace runs
+            p = re.sub(r'\s+', ' ', p)
             snippet = p[:max_chars]
             if len(p) > max_chars:
                 snippet += '…'
-            return snippet.replace('\n', ' ')
-    return content[:max_chars].replace('\n', ' ')
+            return snippet
+    return re.sub(r'\s+', ' ', cleaned[:max_chars])
 
 
 def write_output(items: list[dict], clusters: list[dict],
                  output_path: Path, staleness: int | None,
                  elapsed_sec: float) -> None:
+    """v0.8: redesigned for reading ergonomics.
 
-    # v0.7: filter out duplicates (already in Knowledge) — they're done, no
-    # decision needed. Count them for summary but don't display.
+    Key changes:
+      - One-line per item: [**title**](url) · key-tags
+        (was 4 lines: title/url/snippet/tags)
+      - Markdown links — title itself is clickable
+      - Evidence snippet moved to foldable per-item callout (only seen on demand)
+      - Drop domain-conf decimal noise from default view
+      - Cluster info as inline badge (no duplicate section)
+      - Skip section: just counts + foldable details
+      - Compact summary line, not bullet list
+    """
     duplicates = [it for it in items if it.get('reason') == 'duplicate']
     items = [it for it in items if it.get('reason') != 'duplicate']
 
@@ -590,138 +603,129 @@ def write_output(items: list[dict], clusters: list[dict],
     for it in items:
         by_verdict[it['verdict']].append(it)
 
-    tier_count = Counter(it.get('tier', '?') for it in items)
     reason_count = Counter(it.get('reason', '') for it in items if it['verdict'] == 'skip')
-    domain_count = Counter(it.get('domain', '—') for it in items if it.get('domain'))
 
     today = datetime.now().strftime('%Y-%m-%d %H:%M')
     out = []
 
-    # Header
+    # ── Header ──
     out.append('---')
     out.append('type: tabs-triage-verdicts')
     out.append('status: review')
     out.append(f'created: {today}')
     out.append(f'total-items: {len(items)}')
-    out.append('generated-by: triage-urls.py v0.1 (spike)')
+    out.append('generated-by: triage-urls.py v0.8 (spike)')
     out.append('---')
     out.append('')
-    out.append('# Triage Verdicts — content-aware spike')
+    out.append('# Triage')
     out.append('')
 
-    # Staleness warning
+    # Staleness warning (compact)
     if staleness is not None and staleness > 14:
-        out.append(f'> [!warning] Reader Context **{staleness} days stale**')
-        out.append(f'> `Personal Context.md` last updated {staleness} days ago. '
-                   f'Per `_meta/Protocol.md:79`, context > 90 days stale should warn before extracting. '
-                   f'Verdicts may be miscalibrated against current agenda. Recalibrate or proceed with eyes open.')
+        out.append(f'> [!warning] Reader Context **{staleness} days stale** — verdicts may be miscalibrated against current agenda.')
         out.append('')
 
-    # Summary stats
-    out.append('## Summary')
-    out.append('')
-    out.append(f'- **🎯 Capture:** {len(by_verdict["capture"])}')
-    out.append(f'- **🔖 Bookmark:** {len(by_verdict["bookmark"])}')
-    out.append(f'- **⊘ Skip:** {len(by_verdict["skip"])}')
-    out.append(f'- **🌱 Synthesis-seed clusters:** {len(clusters)} '
-               f'({sum(len(c["items"]) for c in clusters)} items tagged)')
-    if duplicates:
-        out.append(f'- **🚫 Already in Knowledge** (hidden): {len(duplicates)}')
-    out.append('')
-    out.append(f'Runtime: {elapsed_sec:.1f}s. Tier distribution: {dict(tier_count)}.')
-    out.append('')
-
-    # Clusters first (cross-cutting)
+    # ── Summary as one tight line ──
+    summary_parts = [
+        f'**🎯 {len(by_verdict["capture"])}** capture',
+        f'**🔖 {len(by_verdict["bookmark"])}** bookmark',
+        f'**⊘ {len(by_verdict["skip"])}** skip',
+    ]
     if clusters:
-        out.append('## 🌱 Synthesis-seed clusters')
-        out.append('')
-        out.append('Items in these clusters keep their individual verdict AND get tagged for the synthesis-candidates registry. Member items appear in their verdict section below with `cluster:<name>` tag.')
-        out.append('')
-        for c in sorted(clusters, key=lambda x: -len(x['items'])):
-            out.append(f'### `{c["name"]}` ({c["domain"]}, {len(c["items"])} items)')
-            out.append('')
-            out.append(f'Common keywords: {", ".join("`"+k+"`" for k in c["common_keywords"])}')
-            out.append('')
-            for it in c['items']:
-                display_url = it.get('normalized') or it["url"]
-                out.append(f'- {it["verdict"]}: **{it["title"][:70]}** — <{display_url}>')
-            out.append('')
+        summary_parts.append(f'**🌱 {len(clusters)}** cluster ({sum(len(c["items"]) for c in clusters)} items)')
+    if duplicates:
+        summary_parts.append(f'**🚫 {len(duplicates)}** already in Knowledge (hidden)')
+    out.append(' · '.join(summary_parts) + f'  ·  *{elapsed_sec:.0f}s runtime*')
+    out.append('')
 
-    # Verdict sections
-    for verdict, emoji in [('capture', '🎯'), ('bookmark', '🔖')]:
+    # ── Capture + Bookmark sections (the actionable ones) ──
+    for verdict, emoji, label in [('capture', '🎯', 'Capture'), ('bookmark', '🔖', 'Bookmark')]:
         section_items = by_verdict[verdict]
         if not section_items:
             continue
-        out.append(f'## {emoji} {verdict.title()} ({len(section_items)})')
+        out.append(f'## {emoji} {label} ({len(section_items)})')
         out.append('')
-        # Group by domain within section
+
+        # Group by domain, sorted by section size desc
         by_domain = defaultdict(list)
         for it in section_items:
             by_domain[it.get('domain', '—')].append(it)
-        for domain in sorted(by_domain.keys()):
+
+        for domain in sorted(by_domain.keys(), key=lambda d: (-len(by_domain[d]), d)):
             domain_items = by_domain[domain]
             bar = 'HIGH' if domain in HIGH_BAR_DOMAINS else 'med'
-            out.append(f'### {domain} ({bar}-bar · {len(domain_items)})')
+            out.append(f'### {domain} · {len(domain_items)} · *{bar}-bar*')
             out.append('')
+
             for it in sorted(domain_items, key=lambda x: -x.get('substance', 0)):
-                title = (it.get('title', '') or '(no title)').replace('|', '\\|')[:80]
-                # v0.7: bare URL (no backticks) so Obsidian auto-links it.
-                # Also use normalized URL — that's what the verdict was computed on.
+                title = (it.get('title', '') or '(no title)').replace('|', '\\|').strip()
+                title = title.replace('[', '⟦').replace(']', '⟧')  # escape for md link
                 display_url = it.get('normalized') or it["url"]
-                out.append(f'- [x] **{title}**')
-                out.append(f'  <{display_url}>')
-                tags = [f"substance:{it.get('substance', '?')}"]
-                if it.get('domain_confidence'):
-                    tags.append(f"domain-conf:{it['domain_confidence']:.2f}")
+
+                # Compact tag list: only show what matters
+                tags = []
+                substance = it.get('substance', '?')
+                if it.get('host_boost'):
+                    tags.append('host-boost')
+                else:
+                    tags.append(f's{substance}')
                 if it.get('cluster_id'):
-                    tags.append(f"cluster:`{it['cluster_id']}`")
-                if it.get('tier'):
-                    tags.append(f"T{it['tier']}")
-                out.append(f'  *{evidence_snippet(it.get("content"), 140)}*')
-                out.append(f'  {" · ".join(tags)}')
+                    tags.append(f'🌱 `{it["cluster_id"]}`')
+
+                tag_str = ' · '.join(tags)
+                # One-line item: clickable title-as-link + tags
+                out.append(f'- [x] [**{title}**]({display_url}) · {tag_str}')
+
+                # Evidence snippet only as foldable (no default visual weight)
+                snippet = evidence_snippet(it.get('content'), 160)
+                if snippet and snippet != '(no content fetched)':
+                    out.append(f'  > [!example]- evidence')
+                    out.append(f'  > {snippet}')
                 out.append('')
 
-    # Skip section (collapsed in Obsidian via foldable callout)
+    # ── Clusters: compact section, just summary (items already shown above with badge) ──
+    if clusters:
+        out.append('## 🌱 Clusters')
+        out.append('')
+        out.append('*Items in clusters keep their individual verdict (see badge inline above) AND will be added to synthesis-candidates registry when applied.*')
+        out.append('')
+        for c in sorted(clusters, key=lambda x: -len(x['items'])):
+            common_kw = ', '.join('`'+k+'`' for k in c['common_keywords'][:4])
+            out.append(f'- **`{c["name"]}`** ({c["domain"]}, {len(c["items"])} items) — keywords: {common_kw}')
+        out.append('')
+
+    # ── Skip section: minimal visual weight, full data behind folds ──
     skip_items = by_verdict['skip']
     if skip_items:
-        out.append('## ⊘ Skip — auto + low-substance')
+        out.append('## ⊘ Skip')
         out.append('')
-        # Auto-skip (Tier 1) — fully collapsed
+
         auto_skip = [it for it in skip_items if it.get('tier') == 1]
         if auto_skip:
-            out.append(f'> [!info]- Tier-1 auto-skip ({len(auto_skip)}) — junk/lifestyle/auth/deeplink')
-            for reason, cnt in reason_count.most_common():
-                if cnt > 0:
-                    out.append(f'> - {reason}: {cnt}')
-            out.append('>')
-            out.append('> <details><summary>Full list</summary>')
+            reasons_summary = ', '.join(f'{r}: {c}' for r, c in reason_count.most_common() if c)
+            out.append(f'> [!info]- **{len(auto_skip)} Tier-1 auto-skip** — {reasons_summary}')
+            out.append('> ')
+            out.append('> <details><summary>Full URL list</summary>')
             out.append('>')
             for it in auto_skip:
                 display_url = it.get('normalized') or it["url"]
                 out.append(f'> - <{display_url}> — *{it.get("note", it.get("reason"))}*')
             out.append('> </details>')
             out.append('')
-        # Substance-skip (Tier 2 said low-substance) — collapsed but visible
+
         substance_skip = [it for it in skip_items if it.get('tier') == 2]
         if substance_skip:
-            out.append(f'> [!info]- Tier-2 substance-skip ({len(substance_skip)}) — fetched but thin')
+            out.append(f'> [!info]- **{len(substance_skip)} Tier-2 low-substance** — fetched но contentтонкий или high-bar threshold')
             for it in substance_skip:
-                title = (it.get('title') or '(no title)')[:60]
+                title = (it.get('title') or '(no title)').replace('[', '⟦').replace(']', '⟧')
                 display_url = it.get('normalized') or it["url"]
-                out.append(f'> - **{title}** — <{display_url}> — substance:{it.get("substance", "?")} · domain:{it.get("domain", "?")}')
+                out.append(f'> - [{title[:60]}]({display_url}) — s{it.get("substance", "?")} {it.get("domain", "?")}')
             out.append('')
 
-    # Footer: how to use
+    # ── Footer ──
     out.append('---')
     out.append('')
-    out.append('## How to use (spike: no executor yet)')
-    out.append('')
-    out.append('1. Review verdicts in 🎯 Capture and 🔖 Bookmark sections (cluster tags shown inline).')
-    out.append('2. Uncheck items you disagree with. (No executor in spike — apply manually for now.)')
-    out.append('3. ⊘ Skip section is auto-classified; expand callouts to audit.')
-    out.append('4. Synthesis-seed clusters are FLAGGED, не override verdict — clustered items still get their capture/bookmark/skip individually.')
-    out.append('')
-    out.append('This is a **content-aware spike** built on top of the v2 spec. Comparison against the URL-pattern triage output is the validation.')
+    out.append('*How to use*: scan capture + bookmark sections, uncheck items you disagree with. Skip section is folded — expand to audit if needed. (Spike has no executor — apply manually for now.)')
     out.append('')
 
     output_path.write_text('\n'.join(out))
