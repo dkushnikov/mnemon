@@ -239,7 +239,16 @@ Rejected candidates: <url> (medium, no backlink). External refs (не свёрн
 - `lib-url.py` — существует ли уже (triage-спек планировал его создать); если нет — создаём здесь.
 
 ## Status
-v2 spec, ready for review. Council confidence: high (Opus 8 · Gemini 8 · GPT 7, stage-2 degraded 2/3 но конвергентен). Все unanimous must-fixes вшиты; 3 форка решены Димой; async — escape hatch. Следующее: review Димы → writing-plans → impl.
+v2 spec approved (Дима: «верю тебе»). Council confidence: high (Opus 8 · Gemini 8 · GPT 7, stage-2 degraded 2/3 но конвергентен). Все unanimous must-fixes вшиты; 3 форка решены; async — escape hatch.
+
+### Implementation progress (2026-06-01)
+- ✅ **Steps 1-2 DONE + validated + committed** (`c65e2e1`): `bin/lib_url.py` (normalize + registrable-domain + github_repo) + `bin/kb-probe-deeper.py` (рендер SPA-landing → discovery same-entity целей: linked github via API homepage-backlink, content-verified llms.txt + docs; confidence high/medium/low + evidence; SSRF/redirect/byte/timeout caps). E2E на openviking.ai: `volcengine/OpenViking` HIGH, `docs.openviking.ai` HIGH, sibling `MineContext` MEDIUM (fail-safe не свернёт), ложные SPA-200 отброшены. Hermetic тесты: `tests/test_depth.sh` (PASS).
+- ⬜ **Step 3** — `kb-depth-fold.py` (fetch high-confidence целей → composite md + manifest folded_sources/depth) + gateway preflight-glue (зеркало `--render`: probe→fold→stdin) + `--depth` флаг.
+- ⬜ **Step 4** — extract injection-isolation (fenced untrusted).
+- ⬜ **Step 5** — triage Tier-2 probe-хук (D6a, cross-spec).
+- ⬜ **Step 6-7** — `/source-add` `--depth`/ask-on-ambiguous · dedup folded_sources в reindex.
+
+Остаток сидит НА закоммиченном ядре — discovery (самая нетривиальная часть) доказана на реальном кейсе.
 
 ---
 
