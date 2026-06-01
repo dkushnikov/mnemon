@@ -51,4 +51,25 @@ assert d['candidates']==[], d
 print('  ok: rich landing not thin, no candidates')
 " || bad "probe rich fixture"
 
+echo "== D6a: depth-probe gate no-ops when disabled / high-substance =="
+MNEMON_TRIAGE_DEPTH_PROBE=0 python3 - "$BIN" <<'PY' && ok "D6a gate no-op" || bad "D6a gate"
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location('t', sys.argv[1] + '/triage-urls.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+assert m.apply_depth_probe_boost('https://x.test/', 2, 'short') == (2, None)
+assert m.apply_depth_probe_boost('https://x.test/', 4, None) == (4, None)
+PY
+
+echo "== D4: gateway dedup regex matches folded_sources + canonical, not unrelated =="
+tmp="$(mktemp -d)"; mkdir -p "$tmp/Sources/x"
+printf 'url: "https://openviking.ai"\nfolded_sources:\n  - url: https://github.com/volcengine/OpenViking\n' > "$tmp/Sources/x/source.md"
+d4=0
+for U in "https://github.com/volcengine/OpenViking" "https://openviking.ai"; do
+  ure="$(printf '%s' "$U" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
+  grep -rqE --include="source.md" "url: \"?${ure}\"?[[:space:]]*\$" "$tmp/Sources" || d4=1
+done
+ureN="$(printf '%s' 'https://github.com/other/repo' | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
+grep -rqE --include="source.md" "url: \"?${ureN}\"?[[:space:]]*\$" "$tmp/Sources" && d4=1
+[[ $d4 -eq 0 ]] && ok "D4 dedup regex (folded+canonical match, unrelated no-match)" || bad "D4 dedup regex"
+
 [[ $fail -eq 0 ]] && echo "PASS test_depth.sh" || { echo "FAIL test_depth.sh"; exit 1; }

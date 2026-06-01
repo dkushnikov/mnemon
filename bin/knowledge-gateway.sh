@@ -161,9 +161,13 @@ fi
 
 # --- Dedup: skip if this URL is already captured (unless --force) ---
 if [[ "$ACTION" == "source-add" && -z "$MANIFEST" && -n "$URL" && "$FORCE" != true && "$DRY_RUN" != true ]]; then
-  existing=$(grep -rlF --include="source.md" "url: \"$URL\"" "$VAULT_PATH/Sources" 2>/dev/null | head -1) || true
+  # D4: match the URL in any url-suffixed field — canonical `url:`, the depth
+  # aliases (posted_url/final_url/canonical_url), AND `folded_sources` entries —
+  # so a deeper target already folded into a composite isn't re-captured as a dup.
+  url_re=$(printf '%s' "$URL" | sed 's/[][\\.^$*+?(){}|]/\\&/g')
+  existing=$(grep -rlE --include="source.md" "url: \"?${url_re}\"?[[:space:]]*$" "$VAULT_PATH/Sources" 2>/dev/null | head -1) || true
   if [[ -n "$existing" ]]; then
-    echo "WARNING: '$URL' already captured at $(basename "$(dirname "$existing")"). Skipping — use --force to re-capture." >&2
+    echo "WARNING: '$URL' already captured (or folded) at $(basename "$(dirname "$existing")"). Skipping — use --force to re-capture." >&2
     echo "RESULT:status=skipped-duplicate"
     exit 0
   fi

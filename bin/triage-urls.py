@@ -26,6 +26,7 @@ INPUT: markdown file with ``url`` checklist items (extracts URLs) OR
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -342,6 +343,36 @@ def apply_github_repo_boost(url: str, base_substance: int) -> int:
     if GH_REPO_ROOT_RE.match(url):
         return max(base_substance, 3)
     return base_substance
+
+
+# D6a (depth cross-spec): rescue a thin/SPA landing whose real content is one hop
+# deeper (repo/docs/llms.txt) from a FALSE skip. Runs kb-probe-deeper ONLY on the
+# skip-boundary (substance<=2, thin content) — narrow trigger, so batch cost stays
+# bounded. If a HIGH-confidence same-entity target exists, boost substance to 4 so
+# the verdict escalates skip→capture. Best-effort. Disable: MNEMON_TRIAGE_DEPTH_PROBE=0
+DEPTH_PROBE_ENABLED = os.environ.get('MNEMON_TRIAGE_DEPTH_PROBE', '1') != '0'
+_PROBE = str(Path(__file__).resolve().parent / 'kb-probe-deeper.py')
+
+
+def apply_depth_probe_boost(url: str, base_substance: int, content: str | None):
+    """Returns (substance, note_or_None). Escalates skip-boundary thin landings
+    that hide high-confidence same-entity depth."""
+    if not DEPTH_PROBE_ENABLED or base_substance > 2:
+        return base_substance, None
+    if content and len(content.split()) >= 400:
+        return base_substance, None
+    try:
+        r = subprocess.run([sys.executable, _PROBE, url],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            return base_substance, None
+        pj = json.loads(r.stdout)
+    except Exception:
+        return base_substance, None
+    highs = [c for c in pj.get('candidates', []) if c.get('same_entity_confidence') == 'high']
+    if highs:
+        return max(base_substance, 4), 'depth: ' + ', '.join(c['url'] for c in highs[:3])
+    return base_substance, None
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -813,14 +844,17 @@ def main():
         base_substance = substance_score(content)
         boosted = apply_host_substance_override(nu, base_substance)
         boosted = apply_github_repo_boost(nu, boosted)
+        boosted, _depth_note = apply_depth_probe_boost(nu, boosted, content)
         it['substance'] = boosted
         if it['substance'] > base_substance:
             it['host_boost'] = True
+        if _depth_note:
+            it['depth_note'] = _depth_note
         domain, conf = classify_domain(nu, content)
         it['domain'] = domain
         it['domain_confidence'] = conf
         it['verdict'] = verdict_from(it['substance'], domain)
-        it['reason'] = f'substance={it["substance"]}{"*" if it.get("host_boost") else ""} domain={domain}({conf})'
+        it['reason'] = f'substance={it["substance"]}{"*" if it.get("host_boost") else ""} domain={domain}({conf})' + (f' [{it["depth_note"]}]' if it.get('depth_note') else '')
         it['tier'] = 2
         print(f'         → {it["verdict"]:10} substance={it["substance"]} '
               f'domain={domain}({conf:.2f})', file=sys.stderr)
