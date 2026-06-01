@@ -241,14 +241,16 @@ Rejected candidates: <url> (medium, no backlink). External refs (не свёрн
 ## Status
 v2 spec approved (Дима: «верю тебе»). Council confidence: high (Opus 8 · Gemini 8 · GPT 7, stage-2 degraded 2/3 но конвергентен). Все unanimous must-fixes вшиты; 3 форка решены; async — escape hatch.
 
-### Implementation progress (2026-06-01)
-- ✅ **Steps 1-2 DONE + validated + committed** (`c65e2e1`): `bin/lib_url.py` (normalize + registrable-domain + github_repo) + `bin/kb-probe-deeper.py` (рендер SPA-landing → discovery same-entity целей: linked github via API homepage-backlink, content-verified llms.txt + docs; confidence high/medium/low + evidence; SSRF/redirect/byte/timeout caps). E2E на openviking.ai: `volcengine/OpenViking` HIGH, `docs.openviking.ai` HIGH, sibling `MineContext` MEDIUM (fail-safe не свернёт), ложные SPA-200 отброшены. Hermetic тесты: `tests/test_depth.sh` (PASS).
-- ⬜ **Step 3** — `kb-depth-fold.py` (fetch high-confidence целей → composite md + manifest folded_sources/depth) + gateway preflight-glue (зеркало `--render`: probe→fold→stdin) + `--depth` флаг.
-- ⬜ **Step 4** — extract injection-isolation (fenced untrusted).
-- ⬜ **Step 5** — triage Tier-2 probe-хук (D6a, cross-spec).
-- ⬜ **Step 6-7** — `/source-add` `--depth`/ask-on-ambiguous · dedup folded_sources в reindex.
-
-Остаток сидит НА закоммиченном ядре — discovery (самая нетривиальная часть) доказана на реальном кейсе.
+### Implementation progress (2026-06-01) — все council must-fixes РЕАЛИЗОВАНЫ
+Коммиты: `c65e2e1` (probe+lib_url) · `15aba32` (fold+gateway) · `c3a22f0` (D6a+D4).
+- ✅ **D1/D3 discovery** — `bin/kb-probe-deeper.py` + `bin/lib_url.py`: рендер SPA-landing → same-entity discovery (linked github via API homepage-backlink, content-verified llms.txt+docs), confidence high/med/low + evidence, SSRF/redirect/byte/timeout caps. E2E openviking: `volcengine/OpenViking` HIGH, docs HIGH, sibling `MineContext` MEDIUM (fail-safe), SPA-200 ложняки отброшены.
+- ✅ **D2 deterministic orchestration** — `bin/kb-depth-fold.py` (probe→fetch high-conf→composite+manifest) + gateway preflight-glue (зеркало `--render`, probe→fold→stdin→`claude -p` verbatim). Любой сбой → обычный захват.
+- ✅ **D4 composite identity + manifest + dedup** — `folded_sources`/`depth` manifest в source.md; gateway dedup матчит url в любом url-поле (canonical+aliases+folded_sources).
+- ✅ **D5 --depth** — `auto|off|force` в gateway; капы (≤1 хоп, ≤4, byte-cap).
+- ✅ **D6a triage false-skip** — `triage-urls.py apply_depth_probe_boost`: probe на skip-boundary (substance≤2, thin) → high-conf → escalate skip→capture. `MNEMON_TRIAGE_DEPTH_PROBE=0` отключает.
+- ✅ **D6b injection-isolation** — fetched-контент помечен untrusted в extract-prompt.
+- ✅ Тесты: `tests/test_depth.sh` (lib_url, thin/SPA, D6a-gate, D4-dedup) PASS; gateway regression **69/0**.
+- ⬜ **Остаток (не блокирует прямой захват):** `/source-add` `--depth`/ask-on-ambiguous в mnemon-plugin repo · live-E2E gateway-capture (в dev пропущен, чтобы не плодить дубль openviking) · same-entity для GitLab/HF/arXiv (deferred, v1=GitHub) · exact commit_sha вместо ref в manifest (v2).
 
 ---
 
