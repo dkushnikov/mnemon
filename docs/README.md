@@ -99,6 +99,15 @@ Mnemon ships 7 extraction templates in `templates/core/`:
 
 All templates follow the Fabric-inspired format: IDENTITY → STEPS → OUTPUT INSTRUCTIONS → INPUT.
 
+## Known gotchas (capture)
+
+Learned while running Mnemon in production (2026-06 → 2026-09); the model must never be the copy path for content the gateway already holds verbatim.
+
+- **WebFetch is unreliable for faithful capture.** A soft prompt returns a summary; a hard «reproduce verbatim» prompt can hit a copyright refusal. The `url` origin uses WebFetch internally and inherits both. For verbatim web or Telegram capture, fetch deterministically (Telegram: `https://t.me/<channel>/<id>?embed=1` HTML; a plain HTTP fetch or `defuddle` for pages) and pass the result as a text origin.
+- **Verify a capture by reading the files, never by the exit code or `RESULT:status`.** `wc -c Sources/<folder>/source.md` and open it: a stub body such as `[Full transcript as provided…]` can ship with `status=extracted`. A batch once reported 6/7 passed while the key docx had failed and a YouTube source was gutted — both invisible at the status layer.
+- **Repair a gutted `source.md` from the archive, not by re-running.** The gateway writes the full raw to `archive_dir` before `claude -p` runs; rebuild `source.md` as the frontmatter head plus the archived body. Re-running the gateway on the same input truncates again.
+- **Large text and transcripts.** The spec [2026-09-08 extractor fence](specs/2026-09-08-extractor-fence.md) closes the truncation defect: for text-like origins the gateway writes `source.md` itself and the model writes only `extract.md`; oversized content is handed to the extractor as a file to read, not inlined in the prompt.
+
 ## Project Structure
 
 ```
