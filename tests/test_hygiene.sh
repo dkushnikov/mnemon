@@ -67,4 +67,37 @@ for f in "$MNEMON_ROOT"/bin/*.py "$MNEMON_ROOT"/bin/importers/*.py "$MNEMON_ROOT
 done
 [[ $py_bad -eq 0 ]] && pass "all $py_ok python sources compile under -W error"
 
+# --- 5. python 3.9 compatibility: `X | None` in an annotation is evaluated at
+#        import time on 3.9 unless the module postpones annotations
+echo "--- python 3.9 annotations ---"
+py39=$(python3 - "$MNEMON_ROOT" <<'PY'
+import ast, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+files = sorted(list((root / "bin").glob("*.py")) + list((root / "bin" / "importers").glob("*.py")))
+bad = []
+for f in files:
+    tree = ast.parse(f.read_text(encoding="utf-8"), str(f))
+    postponed = any(isinstance(n, ast.ImportFrom) and n.module == "__future__"
+                    and any(a.name == "annotations" for a in n.names) for n in tree.body)
+    if postponed:
+        continue
+    annotations = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            annotations += [a.annotation for a in node.args.args + node.args.kwonlyargs + node.args.posonlyargs if a.annotation]
+            if node.args.vararg and node.args.vararg.annotation: annotations.append(node.args.vararg.annotation)
+            if node.args.kwarg and node.args.kwarg.annotation: annotations.append(node.args.kwarg.annotation)
+            if node.returns: annotations.append(node.returns)
+        elif isinstance(node, ast.AnnAssign):
+            annotations.append(node.annotation)
+    for ann in annotations:
+        if any(isinstance(n, ast.BinOp) and isinstance(n.op, ast.BitOr) for n in ast.walk(ann)):
+            bad.append(f"{f.relative_to(root)}:{ann.lineno}")
+            break
+print("\n".join(bad))
+PY
+)
+assert_eq "$py39" "" "PEP 604 unions in annotations only in modules with 'from __future__ import annotations'"
+[[ -n "$py39" ]] && printf '%s\n' "$py39"
+
 summary

@@ -27,6 +27,8 @@ INPUT: markdown file with ``url`` checklist items (extracts URLs) OR
        plain text file with one URL per line.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
