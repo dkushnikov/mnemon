@@ -44,6 +44,7 @@ case "${STUB_CURL:-html}" in
   html)  [[ -n "$out" ]] && printf '<html><head><title> Stub &amp; Page\n  Title </title></head><body><h1>Hello</h1><p>World <b>bold</b> from curl.</p></body></html>' > "$out" ;;
   empty) [[ -n "$out" ]] && printf '<html><head><title>Empty</title></head><body></body></html>' > "$out" ;;
   pdf)   [[ -n "$out" ]] && printf '%%PDF-1.7\n\000\000binary\n%%%%EOF\n' > "$out" ;;
+  audio) [[ -n "$out" ]] && printf 'RIFFstubaudio' > "$out" ;;
   *)     exit 22 ;;
 esac
 [[ -n "${STUB_CURL_HOOK:-}" ]] && eval "$STUB_CURL_HOOK"
@@ -80,6 +81,8 @@ STUB
 cat > "$STUBS/media-extract.py" <<'STUB'
 #!/usr/bin/env bash
 # media-extract.py stub: youtube <url> --out-dir D … | audio --out-dir D (--url U | --file F) …
+# STUB_YT=whisper makes the youtube run report a downloaded audio (the whisper fallback);
+# every call is appended to $STUB_DIR/media-calls (the command and its --url/--file)
 cmd="$1"; shift
 out=""; url=""; file=""; prev=""
 for a in "$@"; do
@@ -87,10 +90,16 @@ for a in "$@"; do
   prev="$a"
 done
 [[ -n "$out" ]] || { echo "stub media-extract: --out-dir required" >&2; exit 1; }
+[[ -n "${STUB_DIR:-}" ]] && printf '%s url=%s file=%s\n' "$cmd" "$url" "$file" >> "$STUB_DIR/media-calls"
 mkdir -p "$out"
 printf 'transcript line one\ntranscript line two\n' > "$out/transcript.txt"
 if [[ "$cmd" == "youtube" ]]; then
-  printf '{"schema":"mnemon-media/1","method":"captions:en:manual","audio_path":null,"title":"Stub Video","duration":"0:10:00","upload_date":"20260101","video_id":"abc123xyz00"}\n' > "$out/media.json"
+  if [[ "${STUB_YT:-captions}" == "whisper" ]]; then
+    printf 'RIFFstubytaudio' > "$out/audio.wav"
+    printf '{"schema":"mnemon-media/1","method":"whisper:tiny","audio_path":"%s","title":"Stub Video","duration":"0:10:00","upload_date":"20260101","video_id":"abc123xyz00"}\n' "$out/audio.wav" > "$out/media.json"
+  else
+    printf '{"schema":"mnemon-media/1","method":"captions:en:manual","audio_path":null,"title":"Stub Video","duration":"0:10:00","upload_date":"20260101","video_id":"abc123xyz00"}\n' > "$out/media.json"
+  fi
 else
   if [[ -n "$file" ]]; then audio="$file"; else audio="$out/audio.wav"; printf 'RIFFstubaudio' > "$audio"; fi
   printf '{"schema":"mnemon-media/1","method":"whisper:tiny","audio_path":"%s","title":"Stub Audio","duration":"0:01:00","upload_date":null,"video_id":null}\n' "$audio" > "$out/media.json"

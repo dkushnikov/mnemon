@@ -230,7 +230,7 @@ cap_ext_of() {   # <path> [default=bin]
   local base ext
   base="$(basename "$1")"
   ext="${base##*.}"
-  if [[ "$ext" == "$base" || -z "$ext" || "$base" == .* && "$base" != *.*.* ]]; then ext="${2:-bin}"; fi
+  if [[ "$ext" == "$base" || -z "$ext" || "$base" == .* && "$base" != *.*.* ]]; then ext="${2-bin}"; fi
   printf '%s' "$ext" | tr 'A-Z' 'a-z'
 }
 
@@ -856,48 +856,91 @@ cap_acquire_file() {   # other local files: pandoc when it converts the type
 
 cap_media_tool() { printf '%s' "${MEDIA_EXTRACT_CMD:-$_LIB_CAPTURE_DIR/media-extract.py}"; }
 
+# Extension of a URL's last path segment (query and fragment stripped), lowercased; the default
+# when it has none that looks like one.
+cap_url_ext() {   # <url> [default=bin]
+  local p="$1" ext=""
+  p="${p%%\#*}"; p="${p%%\?*}"; p="${p#*://}"
+  case "$p" in */*) p="${p#*/}" ;; *) p="" ;; esac   # the path part only, never the host
+  p="${p%/}"
+  [[ -n "$p" ]] && ext="$(cap_ext_of "$p" "")"
+  if [[ -z "$ext" || ! "$ext" =~ ^[a-z0-9]{1,5}$ ]]; then ext="${2-bin}"; fi
+  printf '%s' "$ext"
+}
+
+# Transcribe the PUBLISHED raw audio into the attempt dir — the conversion step of the audio origin
+# and of the youtube whisper raw (§12 A7): media-extract.py audio --file <raw> --out-dir <attempt>.
+# A failure is `convert` (the raw stays published; a retry transcribes the same bytes again).
+cap_transcribe_raw() {
+  local -a args
+  args=(audio --file "$RAW_PATH" --out-dir "$ATTEMPT_DIR" --whisper-model "$WHISPER_MODEL")
+  [[ -n "${TITLE:-}" ]] && args+=(--title "$TITLE")
+  if ! "$(cap_media_tool)" "${args[@]}" 2>>"$ATTEMPT_DIR/stderr.txt" || [[ ! -s "$ATTEMPT_DIR/transcript.txt" ]]; then
+    FAIL_CLASS=convert; FAIL_MSG="transcription of the published audio $RAW_PATH failed (raw retained)"; return 1
+  fi
+  cap_text_from_file "$ATTEMPT_DIR/transcript.txt" || return 1
+  cap_media_meta
+  CAPTURE_METHOD="$(jq -r '.method // "whisper"' "$ATTEMPT_DIR/media.json" 2>/dev/null || echo whisper)"
+  FIDELITY=transcribed; CONTENT_FORMAT=transcript
+  return 0
+}
+
+# youtube: the captions path acquires no audio — the transcript is the raw (raw_kind transcript).
+# The whisper fallback downloads the audio and transcribes it in ONE helper run, and the audio is
+# published as the raw (raw_kind file) only afterwards — a documented phase-1 limitation (§12 A7):
+# a crash between the download and the transcription loses only an unrecorded download, which is
+# refetched; a replay after the raw was published re-transcribes the retained audio.
 cap_acquire_youtube() {
   local -a args
+  local audio
   args=(youtube "$URL" --out-dir "$ATTEMPT_DIR" --whisper-model "$WHISPER_MODEL")
   $NO_WHISPER && args+=(--no-whisper)
   if ! "$(cap_media_tool)" "${args[@]}" 2>>"$ATTEMPT_DIR/stderr.txt" || [[ ! -s "$ATTEMPT_DIR/transcript.txt" ]]; then
     FAIL_CLASS=fetch; FAIL_MSG="media-extract.py failed for $URL"; return 1
   fi
-  cap_raw_prepare txt
-  RAW_KIND=transcript
-  cap_raw_record_intent
-  cap_copy_raw "$ATTEMPT_DIR/transcript.txt" "$RAW_STAGED" || return 1
-  cap_raw_commit || return 1
-  cap_text_from_file "$RAW_PATH" || return 1
+  audio="$(jq -r '.audio_path // ""' "$ATTEMPT_DIR/media.json" 2>/dev/null || true)"
+  if [[ -n "$audio" && -f "$audio" ]]; then
+    cap_raw_prepare "$(cap_ext_of "$audio" audio)"
+    RAW_KIND=file
+    cap_raw_record_intent
+    cap_copy_raw "$audio" "$RAW_STAGED" || return 1
+    cap_raw_commit || return 1
+    cap_text_from_file "$ATTEMPT_DIR/transcript.txt" || return 1
+  else
+    cap_raw_prepare txt
+    RAW_KIND=transcript
+    cap_raw_record_intent
+    cap_copy_raw "$ATTEMPT_DIR/transcript.txt" "$RAW_STAGED" || return 1
+    cap_raw_commit || return 1
+    cap_text_from_file "$RAW_PATH" || return 1
+  fi
   cap_media_meta
   CAPTURE_METHOD="$(jq -r '.method // "captions"' "$ATTEMPT_DIR/media.json" 2>/dev/null || echo captions)"
   FIDELITY=transcribed; CONTENT_FORMAT=transcript
   return 0
 }
 
+# audio (§12 A7): the raw is the audio and it is published BEFORE the transcription. By URL the
+# gateway downloads the file itself (curl, as for the archive); by --file it publishes a copy of
+# the given file; then media-extract.py transcribes the published raw. A crash after the download
+# therefore replays as a transcription of the recorded raw, never a second download.
 cap_acquire_audio() {
-  local -a args
-  local audio ext
-  args=(audio --out-dir "$ATTEMPT_DIR" --whisper-model "$WHISPER_MODEL")
-  [[ -n "$URL" ]] && args+=(--url "$URL")
-  [[ -n "$FILE_PATH" ]] && args+=(--file "$FILE_PATH")
-  [[ -n "$TITLE" ]] && args+=(--title "$TITLE")
-  if ! "$(cap_media_tool)" "${args[@]}" 2>>"$ATTEMPT_DIR/stderr.txt" || [[ ! -s "$ATTEMPT_DIR/transcript.txt" ]]; then
-    FAIL_CLASS=fetch; FAIL_MSG="media-extract.py failed for ${URL:-$FILE_PATH}"; return 1
+  if [[ -n "$FILE_PATH" ]]; then
+    [[ -f "$FILE_PATH" ]] || { FAIL_CLASS=input-missing; FAIL_MSG="audio file not found: $FILE_PATH"; return 1; }
+    cap_raw_prepare "$(cap_ext_of "$FILE_PATH" audio)"
+    RAW_KIND=file
+    cap_raw_record_intent
+    cap_copy_raw "$FILE_PATH" "$RAW_STAGED" || return 1
+  else
+    cap_raw_prepare "$(cap_url_ext "$URL" audio)"
+    RAW_KIND=file
+    cap_raw_record_intent
+    if ! curl -fsSL -A "Mozilla/5.0" --max-time 600 -o "$RAW_STAGED" "$URL" 2>/dev/null || [[ ! -s "$RAW_STAGED" ]]; then
+      rm -f "$RAW_STAGED"; FAIL_CLASS=fetch; FAIL_MSG="could not download the audio at $URL"; return 1
+    fi
   fi
-  audio="$(jq -r '.audio_path // ""' "$ATTEMPT_DIR/media.json" 2>/dev/null || true)"
-  [[ -n "$audio" && -f "$audio" ]] || { FAIL_CLASS=fetch; FAIL_MSG="media.json names no audio_path to archive"; return 1; }
-  ext="$(cap_ext_of "$audio" audio)"
-  cap_raw_prepare "$ext"
-  RAW_KIND=file
-  cap_raw_record_intent
-  cap_copy_raw "$audio" "$RAW_STAGED" || return 1
   cap_raw_commit || return 1
-  cap_text_from_file "$ATTEMPT_DIR/transcript.txt" || return 1
-  cap_media_meta
-  CAPTURE_METHOD="$(jq -r '.method // "whisper"' "$ATTEMPT_DIR/media.json" 2>/dev/null || echo whisper)"
-  FIDELITY=transcribed; CONTENT_FORMAT=transcript
-  return 0
+  cap_transcribe_raw
 }
 
 # Allowlisted metadata from media.json (title → video_title for youtube; duration, upload_date).
@@ -951,17 +994,18 @@ cap_reconvert() {
     pdf) cap_convert_pdf || return 1 ;;
     file|book) cap_convert_file || return 1 ;;
     youtube)
-      cap_text_from_file "$RAW_PATH" || return 1
-      CAPTURE_METHOD="transcript"; FIDELITY=transcribed; CONTENT_FORMAT=transcript ;;
+      # captions: the retained raw is the transcript; whisper: the retained raw is the audio and
+      # the conversion is a new transcription of the same bytes (the video metadata merged at
+      # acquisition time is not re-read — a phase-1 limitation)
+      if [[ "$RAW_KIND" == "file" ]]; then
+        cap_transcribe_raw || return 1
+      else
+        cap_text_from_file "$RAW_PATH" || return 1
+        CAPTURE_METHOD="transcript"; FIDELITY=transcribed; CONTENT_FORMAT=transcript
+      fi ;;
     audio)
-      # The retained raw is the audio: the conversion is a new transcription of the same bytes.
-      if ! "$(cap_media_tool)" audio --file "$RAW_PATH" --out-dir "$ATTEMPT_DIR" --whisper-model "$WHISPER_MODEL" 2>>"$ATTEMPT_DIR/stderr.txt" || [[ ! -s "$ATTEMPT_DIR/transcript.txt" ]]; then
-        FAIL_CLASS=convert; FAIL_MSG="transcription of the retained audio $RAW_PATH failed"; return 1
-      fi
-      cap_text_from_file "$ATTEMPT_DIR/transcript.txt" || return 1
-      cap_media_meta
-      CAPTURE_METHOD="$(jq -r '.method // "whisper"' "$ATTEMPT_DIR/media.json" 2>/dev/null || echo whisper)"
-      FIDELITY=transcribed; CONTENT_FORMAT=transcript ;;
+      # the retained raw is the audio: the conversion is a new transcription of the same bytes
+      cap_transcribe_raw || return 1 ;;
     *) FAIL_CLASS=unsupported; FAIL_MSG="nothing to reconvert for origin $ORIGIN"; return 1 ;;
   esac
   TEXT_SHA256="$(cap_sha256 "$ATTEMPT_DIR/capture.md")"

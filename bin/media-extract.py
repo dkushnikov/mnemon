@@ -19,6 +19,15 @@ Two output contracts (docs/specs/2026-10-15-capture-contracts.md §6):
         deleted by this script (the gateway archives `audio_path` and merges the metadata).
         Stdout stays empty in this mode.
 
+Division of labour with the gateway (spec §12 A7): for the `audio` origin the gateway acquires
+the audio itself (curl by URL, a copy of the given file) and publishes it as the raw BEFORE
+calling `audio --file <published raw> --out-dir …` for the transcription only — `audio --url`
+stays for callers outside the gateway. For `youtube` the captions path acquires no audio; the
+whisper fallback downloads and transcribes in this one run and reports the audio in
+`audio_path`, which the gateway publishes as the raw afterwards — a documented phase-1
+limitation: a crash between the download and the transcription loses only that unrecorded
+download, which is refetched.
+
 Stdlib only, python 3.9; external tools: yt-dlp, whisper, ffprobe, youtube_transcript_api.
 """
 

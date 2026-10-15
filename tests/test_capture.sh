@@ -655,17 +655,67 @@ cp "$TEST_TMPDIR/sub.dir/notes" "$TEST_TMPDIR/sub.dir/notes.md"
 run_gw --file "$TEST_TMPDIR/sub.dir/notes.md" --capture-id ext-2
 assert_eq "$rc" "0" "the same bytes as .md under the dotted directory → extracted"
 assert_file_exists "$ARCHIVE/$(result revision).md" "...raw retained as <revision>.md"
+# audio by URL (§12 A7): the gateway downloads the file (one curl call), publishes it as the raw,
+# then media-extract.py transcribes the PUBLISHED raw
+stub_reset
 c1="$(curl_calls)"
-run_gw --origin audio --url "https://example.com/ep.mp3" --capture-id audio-1
+STUB_CURL=audio run_gw --origin audio --url "https://example.com/ep.mp3?dl=1" --capture-id audio-1 --keep-run
 assert_eq "$rc" "0" "audio by URL exits 0"
-assert_file_exists "$ARCHIVE/$(result revision).wav" "...archives media.json's audio_path"
-assert_eq "$(curl_calls)" "$c1" "...not a second download"
-assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" '  method: "whisper:tiny"' "...method from media.json"
+reva="$(result revision)"
+assert_eq "$(curl_calls)" "$((c1 + 1))" "...the gateway downloaded the audio itself (one curl call)"
+assert_file_exists "$ARCHIVE/$reva.mp3" "...published as <revision>.mp3 (the extension from the URL path)"
+assert_eq "$(cat "$ARCHIVE/$reva.mp3")" "RIFFstubaudio" "...with the downloaded bytes"
+assert_eq "$(cat "$STUB_DIR/media-calls")" "audio url= file=$ARCHIVE/$reva.mp3" "...and media-extract.py transcribed the published raw (audio --file <raw>), never a URL"
+assert_contains "$(cat "$VAULT/Sources/$reva/source.md")" '  method: "whisper:tiny"' "...method from media.json"
+assert_contains "$(cat "$VAULT/Sources/$reva/source.md")" '  raw_kind: file' "...raw_kind file"
+assert_contains "$(cat "$VAULT/Sources/$reva/source.md")" 'transcript line one' "...the transcript is the body"
+# a crash after the download: the retry transcribes the recorded raw without refetching
+stub_reset
+export MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-raw-published
+STUB_CURL=audio run_gw --origin audio --url "https://example.com/ep2.mp3" --capture-id audio-crash
+unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT
+assert_eq "$(rget audio-crash '.raw_published') $(rget audio-crash '.raw_kind')" "true file" "crash after the audio download: the raw is recorded and published"
+[[ -f "$STUB_DIR/media-calls" ]] && fail "no transcription before the crash" "ran" || pass "...and nothing was transcribed yet"
+c1="$(curl_calls)"
+run_gw --capture-id audio-crash
+assert_eq "$rc" "0" "the retry exits 0"
+assert_eq "$(curl_calls)" "$c1" "...without refetching (curl not called)"
+assert_eq "$(cat "$STUB_DIR/media-calls")" "audio url= file=$ARCHIVE/$(rget audio-crash '.revision').mp3" "...transcribing the recorded raw"
+assert_contains "$(cat "$VAULT/Sources/$(rget audio-crash '.revision')/source.md")" '  method: "whisper:tiny"' "...method whisper"
+# audio by --file: a copy of the given file is published first, the published copy is transcribed
+stub_reset
+printf 'RIFFlocalaudio' > "$TEST_TMPDIR/talk.M4A"
+run_gw --origin audio --file "$TEST_TMPDIR/talk.M4A" --capture-id audio-file
+assert_eq "$rc" "0" "audio by --file exits 0"
+revf2="$(result revision)"
+assert_file_exists "$ARCHIVE/$revf2.m4a" "...published as <revision>.m4a (lowercased extension)"
+assert_eq "$(cat "$STUB_DIR/media-calls")" "audio url= file=$ARCHIVE/$revf2.m4a" "...media-extract.py transcribed the published copy, not the original"
+# youtube: captions → the transcript is the raw; the whisper fallback publishes the downloaded audio as the raw
+stub_reset
 run_gw --url "https://youtube.com/watch?v=abc123xyz00" --capture-id yt-1
 assert_eq "$rc" "0" "youtube exits 0"
 assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" '  method: "captions:en:manual"' "youtube records the method from media.json"
+assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" '  raw_kind: transcript' "...captions: the transcript is the raw"
+assert_file_exists "$ARCHIVE/$(result revision).txt" "...published as <revision>.txt"
 assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" 'video_title: "Stub Video"' "...allowlisted metadata merged"
 assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" 'transcript line one' "...transcript is the body"
+stub_reset
+STUB_YT=whisper run_gw --url "https://youtube.com/watch?v=whisper00000" --capture-id yt-w
+assert_eq "$rc" "0" "youtube with the whisper fallback exits 0"
+revw="$(result revision)"
+assert_contains "$(cat "$VAULT/Sources/$revw/source.md")" '  raw_kind: file' "...the downloaded audio is the raw (raw_kind file, A7)"
+assert_file_exists "$ARCHIVE/$revw.wav" "...published as <revision>.wav"
+assert_eq "$(cat "$ARCHIVE/$revw.wav")" "RIFFstubytaudio" "...with the audio bytes media.json's audio_path named"
+assert_contains "$(cat "$VAULT/Sources/$revw/source.md")" '  method: "whisper:tiny"' "...method whisper"
+# a whisper youtube capture replayed from its retained audio re-transcribes it, never refetches
+stub_reset
+export MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-raw-published
+STUB_YT=whisper run_gw --url "https://youtube.com/watch?v=whisper00001" --capture-id yt-w2
+unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT
+stub_reset
+run_gw --capture-id yt-w2
+assert_eq "$rc" "0" "a youtube whisper capture crashed after its raw publication replays"
+assert_eq "$(cat "$STUB_DIR/media-calls")" "audio url= file=$ARCHIVE/$(rget yt-w2 '.revision').wav" "...by transcribing the retained audio (no youtube run)"
 
 # ---------------------------------------------------------------------------------------------
 echo "--- 15. flat parsers on the new format ---"
