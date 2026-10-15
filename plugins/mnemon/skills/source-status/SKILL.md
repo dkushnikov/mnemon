@@ -24,7 +24,11 @@ Run the dispatcher's status command via Bash — this is the only path form to u
 "${MNEMON_HOME:-$HOME/.local/share/mnemon/engine}/bin/mnemon" [--instance <name>] status
 ```
 
-The engine prints the dashboard (vault path, totals, recent additions). Display it to the user.
+The engine prints the dashboard (vault path, totals, recent additions). Display it to the user. The status output names only the vault; the instance name for the `Instance:` line below comes from `config get instance` (same `--instance` flag, before the command):
+
+```bash
+"${MNEMON_HOME:-$HOME/.local/share/mnemon/engine}/bin/mnemon" [--instance <name>] config get instance
+```
 
 If additional detail is needed (the engine shows the basics), augment with per-origin and per-domain counts. Resolve the vault root through the engine — do not read config files yourself:
 
