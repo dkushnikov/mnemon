@@ -251,17 +251,17 @@ def validate(data: dict, template_text: str):
     out["rating"] = data["rating"]
     if "pages" in data:
         out["pages"] = data["pages"]
-    body = data["body"]
+    body = data["body"].replace("\r\n", "\n")   # normalized first: a CRLF body is checked as the text that is published
     if "\x00" in body:
         problems.append("body: must not contain NUL")
-    if body.lstrip("\r\n").startswith("---"):
+    if body.lstrip("\n").startswith("---"):
         problems.append("body: must not start with ---")
     if not body.strip():
         problems.append("body: must not be empty")
     missing = [h for h in body_headings(template_text) if not re.search(r"^" + re.escape(h) + r"[ \t]*$", body, re.M)]
     for h in missing:
         problems.append(f"body: must contain the heading {h}")
-    out["body"] = body.replace("\r\n", "\n").rstrip() + "\n"
+    out["body"] = body.rstrip() + "\n"
     if problems:
         raise Rejected(problems)
     return out, notes

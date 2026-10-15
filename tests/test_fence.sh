@@ -11,7 +11,7 @@ echo "=== Extractor Fence Tests ==="
 # ---------------------------------------------------------------------------------------------
 echo "--- 4. validation and serialization ---"
 stub_reset
-STUB_MODE=bad-then-ok STUB_FIXTURE_BAD="$FIX/extract-missing-heading.json" run_gw --url "https://example.com/v1" --capture-id v-1
+STUB_MODE=bad-then-ok STUB_FIXTURE_BAD="$FIX/extract-missing-heading.json" run_gw --url "https://example.com/v1" --capture-id v-1 --keep-run
 assert_eq "$rc" "0" "a first answer without ### Key Ideas → one re-run → the second publishes"
 assert_eq "$(stub_calls)" "2" "...the stub was called twice"
 assert_contains "$(cat "$STUB_DIR/call-2.stdin")" "=== VALIDATION ===" "...the re-run prompt carries the VALIDATION section"
@@ -21,6 +21,17 @@ assert_not_contains "$(cat "$STUB_DIR/call-2.stdin")" "missing the Key Ideas hea
 assert_not_contains "$(cat "$STUB_DIR/call-1.stdin")" "=== VALIDATION ===" "...the first prompt had none"
 assert_eq "$(rget v-1 '.attempts')" "1" "...one attempt (the re-run is inside it)"
 assert_file_exists "$VAULT/Sources/$(result revision)/extract.md" "...extract.md published"
+# both answers are retained under their own names: the rejected first one as result.json
+assert_not_contains "$(jq -r '.structured_output.body' "$VSTATE/runs/v-1/attempt-1/result.json")" "### Key Ideas" "result.json holds the rejected first answer (the one the diagnostic was written against)"
+assert_contains "$(jq -r '.structured_output.body' "$VSTATE/runs/v-1/attempt-1/result-retry.json")" "### Key Ideas" "result-retry.json holds the second answer"
+assert_file_exists "$VSTATE/runs/v-1/attempt-1/stderr-retry.txt" "...with its own stderr-retry.txt"
+# a CRLF body is checked as the text that is published: its headings are found, no re-run
+jq '.body |= gsub("\n"; "\r\n")' "$FIX/extract-good.json" > "$TEST_TMPDIR/crlf.json"
+stub_reset
+STUB_FIXTURE="$TEST_TMPDIR/crlf.json" run_gw --url "https://example.com/v1-crlf" --capture-id v-crlf
+assert_eq "$rc" "0" "a CRLF body with every heading → accepted"
+assert_eq "$(stub_calls)" "1" "...without a re-run"
+assert_eq "$(grep -c $'\r' "$VAULT/Sources/$(result revision)/extract.md" || true)" "0" "...and published with LF line endings"
 
 stub_reset
 STUB_FIXTURE="$FIX/extract-missing-heading.json" run_gw --url "https://example.com/v2" --capture-id v-2

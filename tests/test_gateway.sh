@@ -85,9 +85,14 @@ assert_contains "$out" "Origin: ref:vault" "auto-detect ref:vault from --ref-pat
 # --- Test 9: ref:vault defaults source_type to document ---
 assert_contains "$out" "Source type: document" "ref:vault → source_type=document"
 
-# --- Test 10: ref:vault with missing file fails ---
+# --- Test 10: ref:vault / --file with a missing file: exit 1 with a RESULT block (never a bare exit) ---
 run_gw --ref-path "/nonexistent/file.md"
-[[ "$rc" -ne 0 ]] && pass "ref:vault missing file returns error" || fail "ref:vault missing file" "should have failed"
+assert_eq "$rc" "1" "ref:vault missing file → exit 1"
+assert_eq "$(result status) $(result error_class) $(result retryable)" "failed input-missing false" "...with RESULT lines a feeder reads as failed/input-missing (permanent)"
+run_gw --file "/nonexistent/paper.pdf" --capture-id gone-1
+assert_eq "$rc" "1" "a missing --file → exit 1"
+assert_eq "$(result status) $(result error_class) $(result capture_id)" "failed input-missing gone-1" "...RESULT failed/input-missing under the requested id"
+[[ -f "$(receipt gone-1)" ]] && fail "no receipt for a missing --file" "exists" || pass "...no receipt (refused before the lock)"
 
 # --- Test 11–13: ref:mcp is refused in phase 1 (D11) ---
 run_gw --ref-source notion --ref-id "page-123" --dry-run

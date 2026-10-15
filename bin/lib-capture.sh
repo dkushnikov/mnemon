@@ -1330,10 +1330,18 @@ cap_extract() {
     if [[ $round -eq 1 ]]; then prompt="$ATTEMPT_DIR/prompt.md"; result="$ATTEMPT_DIR/result.json"; stderr="$ATTEMPT_DIR/stderr.txt"
     else prompt="$ATTEMPT_DIR/prompt-retry.md"; result="$ATTEMPT_DIR/result-retry.json"; stderr="$ATTEMPT_DIR/stderr-retry.txt"; fi
     cap_write_prompt "$ATTEMPT_DIR/capture.md" "$ATTEMPT_DIR/template.md" "$ATTEMPT_DIR/reader-context.md" "$prompt" "$validation"
+    if [[ $round -eq 2 ]]; then
+      # extract-run.py always writes result.json / stderr.txt: keep the rejected first answer
+      # (the one the VALIDATION diagnostic was written against) aside, the re-run's go to *-retry.*
+      mv "$ATTEMPT_DIR/result.json" "$ATTEMPT_DIR/.result-1.json" 2>/dev/null || true
+      mv "$ATTEMPT_DIR/stderr.txt" "$ATTEMPT_DIR/.stderr-1.txt" 2>/dev/null || true
+    fi
     cls="$(python3 "$_LIB_CAPTURE_DIR/extract-run.py" "${run_args[@]}" --prompt "$prompt" || true)"
     if [[ $round -eq 2 ]]; then
       mv "$ATTEMPT_DIR/result.json" "$ATTEMPT_DIR/result-retry.json" 2>/dev/null || true
       mv "$ATTEMPT_DIR/stderr.txt" "$ATTEMPT_DIR/stderr-retry.txt" 2>/dev/null || true
+      mv "$ATTEMPT_DIR/.result-1.json" "$ATTEMPT_DIR/result.json" 2>/dev/null || true
+      mv "$ATTEMPT_DIR/.stderr-1.txt" "$ATTEMPT_DIR/stderr.txt" 2>/dev/null || true
       result="$ATTEMPT_DIR/result-retry.json"; stderr="$ATTEMPT_DIR/stderr-retry.txt"
     fi
     if [[ -f "$ATTEMPT_DIR/argv.json" ]]; then

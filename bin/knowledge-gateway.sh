@@ -250,13 +250,20 @@ cap_contract_checks() {
     cap_die2 "--resume and --capture-id are exclusive (a replay is --capture-id alone)"
   fi
   if [[ "$ORIGIN" == "ref:vault" && ! -f "$REF_PATH" ]]; then
-    echo "ERROR: ref:vault file not found: $REF_PATH" >&2
-    exit 1
+    cap_input_missing_exit "ref:vault file not found: $REF_PATH"
   fi
   if [[ -n "$FILE_PATH" && "$ORIGIN" != "batch" && ! -f "$FILE_PATH" ]]; then
-    echo "ERROR: file not found: $FILE_PATH" >&2
-    exit 1
+    cap_input_missing_exit "file not found: $FILE_PATH"
   fi
+}
+
+# A missing --file / --ref-path at invocation: no lock, no receipt — but every exit 1 carries
+# RESULT lines (§3.6), so a feeder records failed/input-missing (permanent), never malformed-result.
+cap_input_missing_exit() {
+  echo "ERROR: $1" >&2
+  REVISION=""
+  cap_result failed none input-missing false false
+  exit 1
 }
 
 # ---------------------------------------------------------------------------------------------
