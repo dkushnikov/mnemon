@@ -9,11 +9,15 @@ TEST_TMPDIR=$(mktemp -d -t mnemon-test-XXXX)
 VAULT="$TEST_TMPDIR/test-vault"
 # Isolate the generated config to the sandbox. setup.sh and mnemon-config.sh
 # both honor $MNEMON_CONFIG; without this the test clobbers (and then rm's) the
-# user's real ~/Mnemon/mnemon.yaml — which is gitignored, so git can't restore it.
+# user's real mnemon.yaml in the repo root — gitignored, so git can't restore it.
 export MNEMON_CONFIG="$TEST_TMPDIR/mnemon.yaml"
 
 # --- Test 1: Setup creates vault structure ---
-bash "$MNEMON_ROOT/setup.sh" "$VAULT" --non-interactive --skip-qmd
+# --skip-plugin keeps the test from registering this checkout as a marketplace
+# in the developer's real Claude Code plugin registry.
+setup_out=$(bash "$MNEMON_ROOT/setup.sh" "$VAULT" --non-interactive --skip-qmd --skip-plugin 2>&1)
+echo "$setup_out"
+assert_contains "$setup_out" "superseded by: mnemon init" "deprecation banner printed"
 
 assert_dir_exists "$VAULT/Sources" "Sources/ created"
 assert_dir_exists "$VAULT/Synthesis" "Synthesis/ created"
@@ -31,7 +35,7 @@ assert_contains "$config_vault" "$VAULT" "config has correct vault_path"
 
 # --- Test 3: Idempotent — running again doesn't overwrite ---
 echo "# User customized this" >> "$VAULT/CLAUDE.md"
-bash "$MNEMON_ROOT/setup.sh" "$VAULT" --non-interactive --skip-qmd
+bash "$MNEMON_ROOT/setup.sh" "$VAULT" --non-interactive --skip-qmd --skip-plugin
 last_line=$(tail -1 "$VAULT/CLAUDE.md")
 assert_eq "$last_line" "# User customized this" "existing CLAUDE.md not overwritten"
 

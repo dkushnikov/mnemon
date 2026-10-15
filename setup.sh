@@ -9,6 +9,9 @@ Usage: setup.sh <vault-path> [options]
 
 Create a Mnemon knowledge vault and configure the system.
 
+DEPRECATED: superseded by `mnemon init <name> --vault <path>` — see docs/install.md.
+Still works for a plain single-vault install.
+
 Arguments:
   vault-path          Where to create/use the knowledge vault
 
@@ -16,6 +19,7 @@ Options:
   --reader-context <path>  Use existing reader-context.md (e.g. from Obsidian Seed)
   --non-interactive        Skip interactive prompts, use defaults
   --skip-qmd               Don't configure QMD search collection
+  --skip-plugin            Don't install the Claude Code plugin
   -h, --help               Show this help
 
 Example:
@@ -30,6 +34,7 @@ EOF
 VAULT_PATH=""
 NON_INTERACTIVE=false
 SKIP_QMD=false
+SKIP_PLUGIN=false
 READER_CONTEXT_SRC=""
 
 while [[ $# -gt 0 ]]; do
@@ -37,6 +42,7 @@ while [[ $# -gt 0 ]]; do
     --reader-context)  [[ $# -lt 2 ]] && { echo "ERROR: --reader-context requires a path" >&2; exit 1; }; READER_CONTEXT_SRC="$2"; shift 2; continue ;;
     --non-interactive) NON_INTERACTIVE=true; shift ;;
     --skip-qmd)        SKIP_QMD=true; shift ;;
+    --skip-plugin)     SKIP_PLUGIN=true; shift ;;
     -h|--help)         usage ;;
     -*)                echo "Unknown option: $1" >&2; usage ;;
     *)                 VAULT_PATH="$1"; shift ;;
@@ -55,6 +61,12 @@ resolved_parent="$(cd "$(dirname "$VAULT_PATH")" 2>/dev/null && pwd)" || true
 if [[ -n "$resolved_parent" ]]; then
   VAULT_PATH="$resolved_parent/$(basename "$VAULT_PATH")"
 fi
+
+cat <<'BANNER' >&2
+⚠  setup.sh is superseded by: mnemon init <name> --vault <path> — see docs/install.md
+   It still works for a plain single-vault install; new installs should use the dispatcher.
+
+BANNER
 
 echo "=== Mnemon Setup ==="
 echo "Vault: $VAULT_PATH"
@@ -107,7 +119,7 @@ copy_if_missing "$SCRIPT_DIR/mnemon-seed.md" "$VAULT_PATH/mnemon-seed.md" "mnemo
 
 echo "3. Generating config..."
 # Honor $MNEMON_CONFIG so tests (and other automation) can isolate config
-# from the user's real ~/Mnemon/mnemon.yaml. Defaults to $SCRIPT_DIR/mnemon.yaml
+# from the user's real mnemon.yaml in the repo root. Defaults to $SCRIPT_DIR/mnemon.yaml
 # for normal interactive use. mnemon-config.sh already honors the same env var
 # on the loader side — this keeps both ends symmetric.
 CONFIG_PATH="${MNEMON_CONFIG:-$SCRIPT_DIR/mnemon.yaml}"
@@ -250,20 +262,25 @@ fi
 
 echo ""
 echo "6. Installing Claude Code plugin..."
-PLUGIN_REPO="https://github.com/dkushnikov/mnemon-plugin"
-PLUGIN_ID="mnemon@mnemon-plugin"
-if command -v claude >/dev/null 2>&1; then
-  claude plugin marketplace add "$PLUGIN_REPO" 2>/dev/null || true
+# The plugin ships in this repo (plugins/mnemon) with its marketplace manifest at
+# .claude-plugin/marketplace.json, so the marketplace source is this directory —
+# ideally the installed engine ($MNEMON_HOME), not a development checkout.
+MARKETPLACE_DIR="$SCRIPT_DIR"
+PLUGIN_ID="mnemon@mnemon"
+if $SKIP_PLUGIN; then
+  echo "   ○ Skipped (--skip-plugin)"
+elif command -v claude >/dev/null 2>&1; then
+  claude plugin marketplace add "$MARKETPLACE_DIR" 2>/dev/null || true
   if claude plugin install "$PLUGIN_ID" 2>/dev/null; then
     echo "   ✓ Plugin installed (/source-add, /source-search, /source-status)"
   else
     echo "   ○ Plugin already installed or install failed"
-    echo "     Manual: claude plugin marketplace add $PLUGIN_REPO"
+    echo "     Manual: claude plugin marketplace add $MARKETPLACE_DIR"
     echo "             claude plugin install $PLUGIN_ID"
   fi
 else
   echo "   ○ Claude Code not found — install plugin later:"
-  echo "     claude plugin marketplace add $PLUGIN_REPO"
+  echo "     claude plugin marketplace add $MARKETPLACE_DIR"
   echo "     claude plugin install $PLUGIN_ID"
 fi
 
