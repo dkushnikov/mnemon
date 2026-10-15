@@ -46,5 +46,11 @@ auto_detect_origin: true
 # charter_path: {{vault_path}}/_meta/charter.md
 
 # Writer host — when set, only this host (hostname -s) may write the vault;
-# `mnemon doctor` fails on any other host. Optional.
+# `mnemon doctor` fails on any other host and `mnemon add` refuses (exit 2). Optional.
 # writer_host: my-laptop
+
+# Extractor fence (optional). The extractor runs `claude -p --restricted --tools ""` in a
+# per-attempt work directory with the content inline; these bound it.
+# extract_timeout: 900              # seconds before the extractor's process group is terminated
+# extract_inline_max_bytes: 400000  # larger capture-text is retained, not extracted (unsupported-size)
+# extract_max_usd: 0.50             # passed as --max-budget-usd when set

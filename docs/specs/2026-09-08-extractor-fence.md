@@ -70,3 +70,4 @@ Until now the exposure was bounded by a human invoking `/source-add` on a page t
 ## Status
 
 - 2026-09-08 — spec written (from the personal-bot capture-queue design review: an automated feeder makes the existing exposure reachable without a human choosing the page). Not started.
+- 2026-10-15 — superseded in part by `docs/specs/2026-10-15-capture-contracts.md`: items 1–2 of the target contract (per-origin tool surface, `Write` confined by permission rules) are withdrawn — probes on Claude Code 2.1.296 showed path-scoped `Write` allow rules are not honoured under `--restricted` (its §4.6); the extractor now runs with no tools at all and returns structured output (its D4, §4.2). Items 3–5 (deterministic `source.md`, `--ref-id` in frontmatter, verification by files) are generalized to every origin there (its D3, D7, §3.1, §3.6) and implemented on `feat/p1-gateway`.
