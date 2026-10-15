@@ -35,7 +35,8 @@ Mnemon is the tool; the plugin is a thin door into it.
 ```bash
 # Run all tests — the suite never touches your Claude Code plugin registry:
 # tests/test-helper.sh exports MNEMON_SKIP_PLUGIN=1 and setup.sh skips its plugin
-# step under it (the one test of that step runs it against a stub `claude` in a temp HOME)
+# step under it; the two tests of that step (tests/test_setup.sh) run it in a temp
+# HOME — one with no `claude` on PATH, one against a logging stub `claude`
 for t in tests/test_*.sh; do bash "$t" || break; done
 
 # Dry-run a capture through the dispatcher against an explicit instance file

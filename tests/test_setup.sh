@@ -51,11 +51,12 @@ assert_executable "$MNEMON_ROOT/setup.sh" "setup.sh is executable"
 
 # --- Test 5: the plugin step gives the skills an engine path ---
 # The skills call "${MNEMON_HOME:-$HOME/.local/share/mnemon/engine}/bin/mnemon";
-# a legacy clone must make that path resolve. This is the ONE test that runs the
-# plugin step, so it lifts the test-helper guard (MNEMON_SKIP_PLUGIN) and the
-# environment guards (CI, CLAUDE_PLUGIN_ROOT) explicitly — inside a sandbox: a
-# temp HOME, no inherited MNEMON_HOME, and a PATH without `claude`, so nothing
-# can touch the developer's real plugin registry or installed engine.
+# a legacy clone must make that path resolve. Tests 5 and 6 are the only ones
+# that run the plugin step, so they lift the test-helper guard (MNEMON_SKIP_PLUGIN)
+# and the environment guards (CI, CLAUDE_PLUGIN_ROOT) explicitly — inside a
+# sandbox: a temp HOME, no inherited MNEMON_HOME, and a PATH without `claude`
+# (test 6: with a logging stub `claude`), so nothing can touch the developer's
+# real plugin registry or installed engine.
 FAKE_HOME="$TEST_TMPDIR/home"
 mkdir -p "$FAKE_HOME"
 UNGUARD="env -u MNEMON_SKIP_PLUGIN -u CI -u CLAUDE_PLUGIN_ROOT -u MNEMON_HOME"
