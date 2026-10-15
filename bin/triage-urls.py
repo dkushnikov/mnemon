@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """triage-urls.py — content-aware URL triage (thin spike, v0.1)
 
-Per spec ~/Mnemon/docs/specs/2026-05-31-content-aware-url-triage.md (v2).
+Per spec docs/specs/2026-05-31-content-aware-url-triage.md (v2).
 
 SPIKE SCOPE:
   - Tier 1 (URL pattern + Knowledge dedup + hard-skip rules)
@@ -18,7 +18,10 @@ NOT IN SPIKE (deferred to full MVP):
   - Bookmark via gateway (verdict is just "bookmark" string in output)
 
 Usage:
-    triage-urls.py <input> [--vault PATH] [--output PATH] [--limit N]
+    triage-urls.py <input> --vault PATH [--output PATH] [--limit N]
+                   [--personal-context PATH]
+
+    `mnemon triage <input>` passes --vault from the resolved instance config.
 
 INPUT: markdown file with ``url`` checklist items (extracts URLs) OR
        plain text file with one URL per line.
@@ -315,7 +318,7 @@ HIGH_SIGNAL_HOSTS = {
     'refactoring.fm': 4,
     'zamesin.ru': 4,
     'newsletter.pragmaticengineer.com': 4,
-    # v0.5 additions from Dima's spike feedback (2026-05-31)
+    # v0.5 additions from spike feedback (2026-05-31)
     'codespeak.dev': 4,
     'aicouncil.com': 4,
     'fastcompany.com': 4,
@@ -587,8 +590,8 @@ def parse_input(path: Path) -> list[dict]:
 # Output document
 # ──────────────────────────────────────────────────────────────────────
 
-def staleness_days(personal_context_path: Path) -> int | None:
-    if not personal_context_path.exists():
+def staleness_days(personal_context_path: Path | None) -> int | None:
+    if personal_context_path is None or not personal_context_path.exists():
         return None
     mtime = datetime.fromtimestamp(personal_context_path.stat().st_mtime)
     return (datetime.now() - mtime).days
@@ -769,17 +772,19 @@ def write_output(items: list[dict], clusters: list[dict],
 def main():
     parser = argparse.ArgumentParser(description='Content-aware URL triage (spike)')
     parser.add_argument('input', type=Path, help='Input file: markdown triage doc OR URL list')
-    parser.add_argument('--vault', type=Path,
-                        default=Path('/Users/dkushnikov/Obsidian/Knowledge'),
-                        help='Knowledge vault path for dedup')
+    parser.add_argument('--vault', type=Path, default=None,
+                        help='Knowledge vault path for dedup (required; `mnemon triage` passes the configured vault)')
     parser.add_argument('--output', type=Path, default=None,
                         help='Output doc path (default: vault/_claude/tabs-triage-verdicts.md)')
     parser.add_argument('--limit', type=int, default=None,
                         help='Limit to first N URLs (for testing)')
-    parser.add_argument('--personal-context',
-                        default=Path.home() / 'Obsidian' / 'Shared' / 'Context' / 'Personal Context.md',
-                        type=Path)
+    parser.add_argument('--personal-context', type=Path, default=None,
+                        help='Reader/personal context note; its age drives the staleness warning (optional)')
     args = parser.parse_args()
+
+    if args.vault is None:
+        print('ERROR: --vault <path> required (or run via: mnemon triage <input>)', file=sys.stderr)
+        return 2
 
     if not args.input.exists():
         print(f'ERROR: input not found: {args.input}', file=sys.stderr)

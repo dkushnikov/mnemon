@@ -7,11 +7,16 @@ Reports three gaps:
   C — orphan archives: files in the archive dir no source references
 
 Read-only. Usage: archive-audit.py [--config PATH] [--cutoff YYYY-MM-DD]
+Without --config the engine's resolved config is used (MNEMON_INSTANCE /
+MNEMON_CONFIG, see bin/mnemon-config.sh); `mnemon audit` passes it explicitly.
 """
 import os
 import re
 import sys
 import argparse
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import lib_config  # noqa: E402
 
 REF_ORIGINS = {"ref:vault", "ref:mcp"}
 
@@ -48,9 +53,17 @@ def parse_frontmatter(path):
 
 def main():
     ap = argparse.ArgumentParser(description="Mnemon archive consistency audit")
-    ap.add_argument("--config", default=os.path.expanduser("~/Mnemon/mnemon.yaml"))
+    ap.add_argument("--config", default=None,
+                    help="instance config file (default: the engine's resolved config)")
     ap.add_argument("--cutoff", default="2026-04-23", help="archival feature ship date")
     args = ap.parse_args()
+
+    if not args.config:
+        try:
+            args.config = lib_config.load_config()["MNEMON_CONFIG_FILE"]
+        except lib_config.ConfigError as e:
+            print(f"{e}", file=sys.stderr)
+            sys.exit(2)
 
     vault = yaml_val(args.config, "vault_path")
     archive_dir = yaml_val(args.config, "archive_dir")
