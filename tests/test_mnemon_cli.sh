@@ -84,7 +84,6 @@ assert_eq "$(tail -1 "$VAULT_A/CLAUDE.md")" "# user customized" "--force never o
 
 # second instance with options; the default stays
 VAULT_B="$TEST_TMPDIR/vault-b"
-mkdir -p "$TEST_TMPDIR/archive-b"
 run "$MNEMON" init beta --vault "$VAULT_B" --collection kb-beta --archive "$TEST_TMPDIR/archive-b" \
   --writer-host "$THIS_HOST" --charter "$VAULT_B/_meta/charter.md" --non-interactive
 assert_eq "$rc" "0" "init beta exits 0"
@@ -92,6 +91,8 @@ assert_eq "$(cat "$CFG_DIR/default")" "alpha" "second init leaves the default un
 cfgb=$(cat "$CFG_DIR/instances/beta.yaml")
 assert_contains "$cfgb" "qmd_collection: kb-beta" "--collection written"
 assert_contains "$cfgb" "archive_dir: $TEST_TMPDIR/archive-b" "--archive written (absolute)"
+assert_dir_exists "$TEST_TMPDIR/archive-b" "init --archive creates the archive dir"
+assert_contains "$out" "created archive dir $TEST_TMPDIR/archive-b" "init reports the created archive dir"
 assert_contains "$cfgb" "writer_host: $THIS_HOST" "--writer-host written"
 assert_contains "$cfgb" "charter_path: $VAULT_B/_meta/charter.md" "--charter written"
 assert_contains "$out" "mnemon --instance beta doctor" "init hints the --instance form for a non-default instance"
@@ -102,6 +103,18 @@ run "$MNEMON" init gamma --vault "$TEST_TMPDIR/vault-g" --reader-context "$TEST_
 assert_eq "$rc" "0" "init gamma --default exits 0"
 assert_eq "$(cat "$TEST_TMPDIR/vault-g/reader-context.md")" "# my reader context" "--reader-context copied into the vault"
 assert_eq "$(cat "$CFG_DIR/default")" "gamma" "--default switches the default instance"
+
+# a default naming a missing instance is stale: config list marks it, init takes it over
+printf 'ghost\n' > "$CFG_DIR/default"
+run "$MNEMON" config list
+assert_contains "$out" "! ghost" "config list marks a stale default"
+assert_contains "$out" "stale default" "...and says why"
+run "$MNEMON" init epsilon --vault "$TEST_TMPDIR/vault-e" --non-interactive
+assert_eq "$rc" "0" "init with a stale default exits 0"
+assert_eq "$(cat "$CFG_DIR/default")" "epsilon" "init takes over a stale default"
+assert_contains "$out" "it named 'ghost'" "init notices the stale default"
+run "$MNEMON" config path
+assert_eq "$out" "$CFG_DIR/instances/epsilon.yaml" "commands resolve again after the takeover"
 printf 'alpha\n' > "$CFG_DIR/default"
 
 # ~user/... is a literal relative path (only ~ and ~/ expand)
@@ -119,6 +132,11 @@ run "$MNEMON" init nova --non-interactive
 assert_eq "$rc" "2" "init without --vault is a usage error"
 run "$MNEMON" init nova --vault "$TEST_TMPDIR/vault-x" --reader-context "$TEST_TMPDIR/missing.md" --non-interactive
 assert_eq "$rc" "1" "init fails on a missing --reader-context file"
+printf 'not a dir\n' > "$TEST_TMPDIR/a-file"
+run "$MNEMON" init nova --vault "$TEST_TMPDIR/vault-x" --archive "$TEST_TMPDIR/a-file/archive" --non-interactive
+assert_eq "$rc" "1" "init fails when the --archive dir cannot be created"
+assert_contains "$out" "cannot create archive dir" "...and says so"
+assert_eq "$(ls "$CFG_DIR/instances" | grep -c '^nova' || true)" "0" "a refused init leaves no instance file"
 
 # --- config ---
 echo "--- config ---"
@@ -222,13 +240,19 @@ assert_eq "$rc" "2" "gateway: an inconsistent environment pair → exit 2"
 # --- doctor ---
 echo "--- doctor ---"
 run "$MNEMON" doctor
-assert_contains "$out" "ok config — $CFG_DIR/instances/alpha.yaml (instance alpha)" "doctor: ok config"
+assert_contains "$out" "ok config — $CFG_DIR/instances/alpha.yaml (instance alpha; selected by default)" "doctor: ok config names the file, instance and selector"
 assert_contains "$out" "ok vault — $VAULT_A" "doctor: ok vault"
 assert_contains "$out" "ok reader-context — $VAULT_A/reader-context.md" "doctor: ok reader-context"
 assert_contains "$out" "warn charter — missing $VAULT_A/_meta/charter.md" "doctor: warn charter when missing"
 assert_contains "$out" "ok archive — archive_dir not set (skipped)" "doctor: archive skipped when unset"
-assert_contains "$out" "ok state — $XDG_STATE_HOME/mnemon/alpha" "doctor: ok state"
-assert_dir_exists "$XDG_STATE_HOME/mnemon/alpha" "doctor creates the state dir"
+assert_contains "$out" "ok state — $XDG_STATE_HOME/mnemon/alpha (absent, parent writable)" "doctor: ok state when the dir is absent but creatable"
+[[ -e "$XDG_STATE_HOME/mnemon/alpha" ]] && fail "doctor is observational" "state dir was created" || pass "doctor does not create the state dir"
+[[ -e "$XDG_STATE_HOME" ]] && fail "doctor is observational" "XDG_STATE_HOME was created" || pass "doctor does not create XDG_STATE_HOME"
+mkdir -p "$XDG_STATE_HOME/mnemon/alpha"
+run "$MNEMON" doctor
+assert_contains "$out" "ok state — $XDG_STATE_HOME/mnemon/alpha" "doctor: ok state when the dir exists"
+assert_not_contains "$out" "(absent" "...without the absent note"
+rm -rf "$XDG_STATE_HOME"
 assert_contains "$out" "warn engine — MNEMON_HOME not set" "doctor: warn engine without MNEMON_HOME"
 assert_contains "$out" "ok writer — writer_host not set" "doctor: ok writer when unset"
 assert_contains "$out" "ok pending-writes — none" "doctor: ok pending-writes"
@@ -255,7 +279,7 @@ assert_not_contains "$out" "ok config —" "doctor --json emits no text lines"
 run "$MNEMON" --instance beta doctor
 assert_contains "$out" "ok archive — $TEST_TMPDIR/archive-b (writable)" "doctor: ok archive when set and writable"
 assert_contains "$out" "ok writer — this host ($THIS_HOST) is the writer" "doctor: ok writer when the host matches"
-assert_contains "$out" "ok config — $CFG_DIR/instances/beta.yaml (instance beta)" "doctor: --instance (global) selects beta"
+assert_contains "$out" "ok config — $CFG_DIR/instances/beta.yaml (instance beta; selected by --instance)" "doctor: --instance (global) selects beta and is named as the selector"
 mkdir -p "$VAULT_B/_meta" && printf '# charter\n' > "$VAULT_B/_meta/charter.md"
 run "$MNEMON" doctor --instance beta
 assert_contains "$out" "ok charter — $VAULT_B/_meta/charter.md" "doctor: ok charter when present (--instance after doctor)"
@@ -284,7 +308,11 @@ assert_not_contains "$out" " vault — " "doctor: config-dependent checks skippe
 rm -rf "$TEST_TMPDIR/vault-g/Sources"
 run "$MNEMON" --instance gamma doctor
 assert_eq "$rc" "1" "doctor fails on a broken vault"
-assert_contains "$out" "fail vault — $TEST_TMPDIR/vault-g (missing: Sources/)" "doctor: fail vault names what is missing"
+assert_contains "$out" "fail vault — $TEST_TMPDIR/vault-g (missing: Sources/) — run: mnemon init gamma --vault $TEST_TMPDIR/vault-g --force" "doctor: fail vault names what is missing and how to fix it"
+printf 'vault_path: %s/no-such-vault\n' "$TEST_TMPDIR" > "$TEST_TMPDIR/adhoc.yaml"
+run "$MNEMON" --config "$TEST_TMPDIR/adhoc.yaml" doctor
+assert_contains "$out" "fail vault — $TEST_TMPDIR/no-such-vault (missing: vault directory) — fix vault_path in $TEST_TMPDIR/adhoc.yaml" "doctor: by-path config gets a fix-the-file hint, not 'init adhoc'"
+assert_not_contains "$out" "init adhoc" "doctor never suggests the reserved name"
 
 run "$MNEMON" doctor --bogus
 assert_eq "$rc" "2" "doctor rejects unknown options"

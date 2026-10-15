@@ -138,6 +138,13 @@ _git_common_dir() {
   (cd "$d" 2>/dev/null && pwd -P)
 }
 
+# Closest existing ancestor of a path (the path itself if it exists).
+_nearest_existing_parent() {
+  local p="$1"
+  while [[ -n "$p" && "$p" != "/" && ! -e "$p" ]]; do p="$(dirname "$p")"; done
+  if [[ -e "$p" ]]; then printf '%s' "$p"; fi
+}
+
 # Copy src → dst unless dst exists (never overwrite vault files).
 _copy_if_missing() {
   local src="$1" dst="$2" label="$3"
@@ -250,7 +257,18 @@ cmd_init() {
       -e "s|{{vault_path}}|$(_sed_esc "$vault")|g" \
       "$template" > "$tmp"
   if [[ -n "$collection" ]];  then _yaml_set "$tmp" qmd_collection "$collection"; fi
-  if [[ -n "$archive" ]];     then _yaml_set "$tmp" archive_dir "$(_abs_path "$archive")"; fi
+  if [[ -n "$archive" ]]; then
+    archive="$(_abs_path "$archive")"
+    if [[ -d "$archive" ]]; then
+      echo "  ○ archive dir exists: $archive"
+    elif mkdir -p "$archive" 2>/dev/null; then
+      echo "  ✓ created archive dir $archive"
+    else
+      rm -f "$tmp"
+      die "init: cannot create archive dir $archive (choose a writable --archive path)"
+    fi
+    _yaml_set "$tmp" archive_dir "$archive"
+  fi
   if [[ -n "$charter" ]];     then _yaml_set "$tmp" charter_path "$(_abs_path "$charter")"; fi
   if [[ -n "$writer_host" ]]; then _yaml_set "$tmp" writer_host "$writer_host"; fi
   mv "$tmp" "$inst_file"
@@ -258,11 +276,18 @@ cmd_init() {
 
   # 3. Default instance
   echo "3. Default instance"
-  local def_file="$cfg_dir/default" prev=""
+  local def_file="$cfg_dir/default" prev="" stale=""
   prev="$(_mnemon_default_instance "$def_file" 2>/dev/null || true)"
+  if [[ -n "$prev" && "$prev" != "$name" && ! -f "$inst_dir/$prev.yaml" ]]; then
+    stale="$prev"; prev=""
+  fi
   if $set_default || [[ -z "$prev" ]]; then
     printf '%s\n' "$name" > "$def_file"
-    echo "  ✓ default instance → $name ($def_file)"
+    if [[ -n "$stale" ]]; then
+      echo "  ✓ default instance → $name ($def_file; it named '$stale', which has no config at $inst_dir/$stale.yaml)"
+    else
+      echo "  ✓ default instance → $name ($def_file)"
+    fi
     prev="$name"
   else
     echo "  ○ default instance unchanged: $prev (use --default to switch)"
@@ -310,9 +335,9 @@ cmd_doctor() {
     have_config=true
     warn="$(tr '\n' ' ' <"$errf" | sed 's/[[:space:]]*$//')"
     if [[ -n "$warn" ]]; then
-      _check warn config "$MNEMON_CONFIG_FILE (instance $MNEMON_INSTANCE); $warn"
+      _check warn config "$MNEMON_CONFIG_FILE (instance $MNEMON_INSTANCE; selected by $MNEMON_CONFIG_SOURCE); $warn"
     else
-      _check ok config "$MNEMON_CONFIG_FILE (instance $MNEMON_INSTANCE)"
+      _check ok config "$MNEMON_CONFIG_FILE (instance $MNEMON_INSTANCE; selected by $MNEMON_CONFIG_SOURCE)"
     fi
   else
     _check fail config "$(tr '\n' ' ' <"$errf" | sed 's/[[:space:]]*$//')"
@@ -330,6 +355,8 @@ cmd_doctor() {
     fi
     if [[ -z "$missing" ]]; then
       _check ok vault "$VAULT_PATH"
+    elif [[ "$MNEMON_INSTANCE" == "$MNEMON_ADHOC_INSTANCE" ]]; then
+      _check fail vault "$VAULT_PATH (missing: $missing) — fix vault_path in $MNEMON_CONFIG_FILE"
     else
       _check fail vault "$VAULT_PATH (missing: $missing) — run: mnemon init $MNEMON_INSTANCE --vault $VAULT_PATH --force"
     fi
@@ -359,13 +386,22 @@ cmd_doctor() {
       _check ok archive "$ARCHIVE_DIR (writable)"
     fi
 
-    # state
+    # state — observational: report whether the dir exists or could be created,
+    # never create it (doctor writes nothing)
     if [[ -d "$MNEMON_STATE_DIR" ]]; then
-      _check ok state "$MNEMON_STATE_DIR"
-    elif mkdir -p "$MNEMON_STATE_DIR" 2>/dev/null; then
-      _check ok state "$MNEMON_STATE_DIR (created)"
+      if [[ -w "$MNEMON_STATE_DIR" ]]; then
+        _check ok state "$MNEMON_STATE_DIR"
+      else
+        _check fail state "$MNEMON_STATE_DIR is not writable"
+      fi
     else
-      _check fail state "cannot create $MNEMON_STATE_DIR"
+      local parent
+      parent="$(_nearest_existing_parent "$MNEMON_STATE_DIR")"
+      if [[ -n "$parent" && -w "$parent" ]]; then
+        _check ok state "$MNEMON_STATE_DIR (absent, parent writable)"
+      else
+        _check fail state "cannot create $MNEMON_STATE_DIR (nearest existing parent ${parent:-/} is not writable)"
+      fi
     fi
   fi
 
@@ -486,6 +522,9 @@ cmd_config_list() {
       printf '%s %-16s %s\n' "$marker" "$name" "$vault"
       count=$((count + 1))
     done
+  fi
+  if [[ -n "$def" && ! -f "$inst_dir/$def.yaml" ]]; then
+    printf '! %-16s (stale default: %s names it, but %s does not exist — the next `mnemon init` takes the default over)\n' "$def" "$dir/default" "$inst_dir/$def.yaml"
   fi
   if [[ $count -eq 0 ]]; then
     printf 'no instances in %s\n  create one with: mnemon init <name> --vault <path>\n' "$inst_dir" >&2
