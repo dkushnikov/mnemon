@@ -43,6 +43,12 @@ Commands:
                              into the vault; --reader-context-path points at one in place;
                              with neither, an existing _meta/reader-context.md or
                              reader-context.md in the vault is used, else the template
+  ingest <inbox-dir> [--dry-run] [--only <envelope_id>] [--limit N] [--max-attempts N]
+         [--retry <envelope_id>] [--json]
+                             Consume mnemon-envelope/1 files from an inbox directory under
+                             the vault lock; one result record per envelope (docs/inbox.md)
+  fence-probe                Probe the extractor fence of the installed Claude Code and
+                             record a pass for its version (needed before extraction)
   doctor [--instance <name>] [--json]
                              Health checks: ok|warn|fail <check> — <detail>
   config get <key> | path | list | dump
@@ -53,7 +59,7 @@ Commands:
                              the engine to <ref> under the same lock
   version                    Engine version, branch, commit and root
   help                       This text
-  ingest | scan | monitor    Reserved (program phase 4)
+  scan | monitor             Reserved (program phase 4)
 
 Global options (one of them; both on one command line → exit 2):
   --instance <name>          Select an instance   (exports MNEMON_INSTANCE, drops an inherited MNEMON_CONFIG)
@@ -395,6 +401,224 @@ _check() {
   fi
 }
 
+# Vault state dir (D6): ${XDG_STATE_HOME:-~/.local/state}/mnemon/vaults/<sha256(physical
+# vault path)[:16]>. The loader's export wins when present (MNEMON_VAULT_STATE_DIR);
+# otherwise the same rule, computed here exactly as bin/mnemon-ingest.py computes it.
+_vault_state_dir() {
+  if [[ -n "${MNEMON_VAULT_STATE_DIR:-}" ]]; then printf '%s' "${MNEMON_VAULT_STATE_DIR%/}"; return 0; fi
+  python3 - "$VAULT_PATH" "$(mnemon_state_home)" <<'PY'
+import hashlib, os, sys
+vault = os.path.realpath(sys.argv[1].rstrip("/") or "/").rstrip("/") or "/"
+print(os.path.join(sys.argv[2], "mnemon", "vaults", hashlib.sha256(vault.encode("utf-8")).hexdigest()[:16]))
+PY
+}
+
+# fence — the installed Claude Code: version, --restricted, and a recorded probe
+# pass for exactly that version (D13; written by `mnemon fence-probe`). Observational.
+_doctor_fence() {
+  local ver_line ver help_out has_restricted=false probes rec
+  if ! command -v claude >/dev/null 2>&1; then
+    _check warn fence "claude not on PATH (see deps) — extraction and mnemon fence-probe need it"
+    return 0
+  fi
+  ver_line="$(claude --version 2>/dev/null </dev/null || true)"
+  ver_line="${ver_line%%$'\n'*}"
+  ver="${ver_line%% *}"
+  if ! [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+    _check warn fence "claude --version printed no version token${ver_line:+ ($ver_line)}"
+    return 0
+  fi
+  help_out="$(claude --help 2>&1 </dev/null || true)"
+  case "$help_out" in *--restricted*) has_restricted=true ;; esac
+  if ! $has_restricted; then
+    _check fail fence "claude $ver lacks --restricted (>= 2.1.296 required)"
+    return 0
+  fi
+  probes="$(mnemon_state_home)/mnemon/fence-probes.json"
+  rec="none"
+  if [[ -f "$probes" ]]; then
+    rec="$(python3 - "$probes" "$ver" "$ver_line" <<'PY' 2>/dev/null || echo unreadable
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        doc = json.load(fh)
+except Exception:
+    print("unreadable")
+    sys.exit(0)
+for key in (sys.argv[2], sys.argv[3]):
+    rec = doc.get(key) if isinstance(doc, dict) else None
+    if isinstance(rec, dict):
+        print(("pass " if rec.get("pass") is True else "fail ") + str(rec.get("date") or "unknown date"))
+        sys.exit(0)
+print("none")
+PY
+)"
+  fi
+  case "$rec" in
+    pass*)      _check ok fence "claude $ver, --restricted available, probed ${rec#pass }" ;;
+    fail*)      _check warn fence "claude $ver failed its fence probe on ${rec#fail }; run: mnemon fence-probe" ;;
+    unreadable) _check warn fence "claude $ver, --restricted available, but $probes is unreadable; run: mnemon fence-probe" ;;
+    *)          _check warn fence "claude $ver has no probe record; run: mnemon fence-probe" ;;
+  esac
+}
+
+# vault-state — the per-vault state dir exists and is writable (or its parent is), mode 0700.
+_doctor_vault_state() {
+  local dir mode parent
+  dir="$(_vault_state_dir)"
+  if [[ -d "$dir" ]]; then
+    if [[ ! -w "$dir" ]]; then
+      _check warn vault-state "$dir is not writable"
+      return 0
+    fi
+    mode="$(python3 -c 'import os, stat, sys; print("%04o" % stat.S_IMODE(os.stat(sys.argv[1]).st_mode))' "$dir" 2>/dev/null || echo '?')"
+    if [[ "$mode" == 0700 ]]; then
+      _check ok vault-state "$dir"
+    else
+      _check warn vault-state "$dir mode $mode, expected 0700"
+    fi
+  else
+    parent="$(_nearest_existing_parent "$dir")"
+    if [[ -n "$parent" && -w "$parent" ]]; then
+      _check ok vault-state "$dir (absent, parent writable)"
+    else
+      _check warn vault-state "cannot create $dir (nearest existing parent ${parent:-/} is not writable)"
+    fi
+  fi
+}
+
+# vault-lock — a non-blocking flock probe of <vault state>/lock, released at once;
+# a missing lock file is never created.
+_doctor_vault_lock() {
+  local lockf res
+  lockf="$(_vault_state_dir)/lock"
+  if [[ ! -e "$lockf" ]]; then
+    _check ok vault-lock "free (no $lockf yet)"
+    return 0
+  fi
+  res="$(python3 - "$lockf" <<'PY' 2>/dev/null || echo error
+import fcntl, os, sys
+fd = os.open(sys.argv[1], os.O_RDWR)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    print("held")
+    sys.exit(0)
+fcntl.flock(fd, fcntl.LOCK_UN)
+print("free")
+PY
+)"
+  case "$res" in
+    free) _check ok vault-lock "free ($lockf)" ;;
+    held) _check warn vault-lock "held ($lockf) — a capture or an ingest pass is running" ;;
+    *)    _check warn vault-lock "could not probe $lockf" ;;
+  esac
+}
+
+# captures — receipts in <vault state>/captures/: failed / extract-failed (finish with
+# --resume), and published receipts whose revision folder or source.md is gone.
+_doctor_captures() {
+  local cdir out status detail tab
+  cdir="$(_vault_state_dir)/captures"
+  if [[ ! -d "$cdir" ]]; then
+    _check ok captures "none (no $cdir yet)"
+    return 0
+  fi
+  out="$(python3 - "$cdir" "$VAULT_PATH" <<'PY' 2>/dev/null || printf 'warn\tcould not scan %s' "$cdir"
+import glob, json, os, sys
+cdir, vault = sys.argv[1], sys.argv[2]
+total = failed = missing = unreadable = 0
+first_failed = None
+for path in sorted(glob.glob(os.path.join(cdir, "*.json"))):
+    total += 1
+    try:
+        with open(path, encoding="utf-8") as fh:
+            rec = json.load(fh)
+    except Exception:
+        unreadable += 1
+        continue
+    if not isinstance(rec, dict) or rec.get("schema") != "mnemon-capture-receipt/1":
+        unreadable += 1
+        continue
+    state = rec.get("state")
+    if state in ("failed", "extract-failed"):
+        failed += 1
+        if first_failed is None:
+            first_failed = rec.get("capture_id") or os.path.basename(path)[:-5]
+    elif state in ("source-published", "extracted"):
+        rev = rec.get("revision")
+        if not isinstance(rev, str) or not rev or not os.path.isfile(os.path.join(vault, "Sources", rev, "source.md")):
+            missing += 1
+parts = []
+if failed:
+    parts.append("%d failed/extract-failed receipt(s) — finish with: mnemon add --resume %s" % (failed, first_failed))
+if missing:
+    parts.append("%d receipt(s) point at missing files" % missing)
+if unreadable:
+    parts.append("%d unreadable receipt(s)" % unreadable)
+if parts:
+    print("warn\t" + "; ".join(parts))
+else:
+    print("ok\t%d receipt(s), none failed" % total)
+PY
+)"
+  tab=$'\t'
+  status="${out%%$tab*}"
+  detail="${out#*$tab}"
+  _check "$status" captures "$detail"
+}
+
+# ingest — per known inbox: results still failed, exhausted, incomplete or deferred.
+_doctor_ingest() {
+  local idir out status detail tab
+  idir="$(_vault_state_dir)/ingest"
+  if [[ ! -d "$idir" ]]; then
+    _check ok ingest "none (no $idir yet)"
+    return 0
+  fi
+  out="$(python3 - "$idir" <<'PY' 2>/dev/null || printf 'warn\tcould not scan %s' "$idir"
+import glob, json, os, sys
+idir = sys.argv[1]
+parts = []
+total = 0
+for sub in sorted(os.listdir(idir)):
+    rdir = os.path.join(idir, sub, "results")
+    if not os.path.isdir(rdir):
+        continue
+    counts = {"failed": 0, "exhausted": 0, "incomplete": 0, "deferred": 0}
+    for path in glob.glob(os.path.join(rdir, "*.json")):
+        total += 1
+        try:
+            with open(path, encoding="utf-8") as fh:
+                rec = json.load(fh)
+        except Exception:
+            continue
+        state = rec.get("state") if isinstance(rec, dict) else None
+        if state in counts:
+            counts[state] += 1
+    label = sub
+    try:
+        with open(os.path.join(idir, sub, "inbox.json"), encoding="utf-8") as fh:
+            meta = json.load(fh)
+        if isinstance(meta, dict) and meta.get("inbox"):
+            label = meta["inbox"]
+    except Exception:
+        pass
+    pending = [(k, v) for k, v in counts.items() if v]
+    if pending:
+        parts.append(label + ": " + ", ".join("%s %d" % kv for kv in pending))
+if parts:
+    print("warn\t" + "; ".join(parts))
+else:
+    print("ok\t%d result(s), nothing pending" % total)
+PY
+)"
+  tab=$'\t'
+  status="${out%%$tab*}"
+  detail="${out#*$tab}"
+  _check "$status" ingest "$detail"
+}
+
 cmd_doctor() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -576,6 +800,9 @@ cmd_doctor() {
     2) _check warn engine-lock "stale lock $lockf (older than $((MNEMON_ENGINE_LOCK_MAX_AGE / 60)) min, ignored) — remove it if no release is running" ;;
   esac
 
+  # fence — the extractor fence gate (D13): version, --restricted, probe record
+  _doctor_fence
+
   if $have_config; then
     # writer
     if [[ -z "$WRITER_HOST" ]]; then
@@ -600,6 +827,12 @@ cmd_doctor() {
     else
       _check ok pending-writes "none"
     fi
+
+    # the capture ledger of the physical vault (D6): state dir, lock, receipts, inbox results
+    _doctor_vault_state
+    _doctor_vault_lock
+    _doctor_captures
+    _doctor_ingest
   fi
 
   local rc=0
@@ -1001,7 +1234,25 @@ esac
 
 case "$cmd" in
   add)      _reject_post_command_selectors "$@"; _resolve_or_die
+            # The capture runs under the vault lock (D10): bin/vault-lock.py takes
+            # fcntl.flock on <vault state>/lock and execs the gateway with the
+            # descriptor inherited. --dry-run writes nothing and takes no lock.
+            if ! _has_flag --dry-run "$@"; then
+              if [[ -f "$BIN_DIR/vault-lock.py" ]]; then
+                exec python3 "$BIN_DIR/vault-lock.py" --vault "$VAULT_PATH" -- "$BIN_DIR/knowledge-gateway.sh" source-add "$@"
+              fi
+              printf 'mnemon add: bin/vault-lock.py not present in this engine — running the gateway without the vault lock\n' >&2
+            fi
             exec "$BIN_DIR/knowledge-gateway.sh" source-add "$@" ;;
+  ingest)   _reject_post_command_selectors "$@"
+            # usage (no inbox dir, --help) needs no instance; the pass does
+            case "${1:-}" in ""|-h|--help) exec python3 "$BIN_DIR/mnemon-ingest.py" "$@" ;; esac
+            _resolve_or_die
+            exec python3 "$BIN_DIR/mnemon-ingest.py" "$@" ;;
+  fence-probe)
+            if [[ -f "$BIN_DIR/fence-probe.sh" ]]; then exec "$BIN_DIR/fence-probe.sh" "$@"; fi
+            printf 'mnemon fence-probe: bin/fence-probe.sh not present in this engine\n' >&2
+            exit 2 ;;
   status)   _reject_post_command_selectors "$@"; _resolve_or_die
             exec "$BIN_DIR/knowledge-gateway.sh" status "$@" ;;
   search)   if ! _has_flag --vault "$@"; then _resolve_or_die; fi
@@ -1014,7 +1265,7 @@ case "$cmd" in
   config)   cmd_config "$@" ;;
   release)  cmd_release "$@" ;;
   version)  cmd_version ;;
-  ingest|scan|monitor)
+  scan|monitor)
     printf 'mnemon %s: not implemented yet (program phase 4)\n' "$cmd" >&2
     exit 2 ;;
   help|-h|--help) usage; exit 0 ;;
