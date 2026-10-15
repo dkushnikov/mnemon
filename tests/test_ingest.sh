@@ -548,6 +548,14 @@ ingest exh3 --max-attempts 2
 set_field exh3 test-producer:text-plain next_attempt_at "\"$PAST\""
 ingest exh3 --max-attempts 2
 assert_eq "$(res exh3 test-producer:text-plain 'd["state"] + " " + str(d["attempts"]) + "/" + str(d["attempts_allowed"])')" "exhausted 2/2" "the last allowed attempt failing → exhausted"
+# A5: a crash-recovery claim may exceed the allowance by one; `attempts >= attempts_allowed` catches it
+materialize exh4 text-plain
+MNEMON_TEST_CRASH_AT=after-claim ingest exh4 --max-attempts 1
+assert_eq "$(res exh4 test-producer:text-plain 'd["state"] + " " + str(d["attempts"]) + "/" + str(d["attempts_allowed"])')" "started 1/1" "fixture: the one allowed attempt claimed, then a crash"
+scenarios exh4 '{"test-producer:text-plain": "exit4-transient"}'
+ingest exh4 --max-attempts 1
+assert_eq "$(res exh4 test-producer:text-plain 'd["state"] + " " + str(d["attempts"]) + "/" + str(d["attempts_allowed"])')" "exhausted 2/1" "the recovery claim exceeds the allowance by one; its retryable failure exhausts (attempts >= allowed)"
+unset STUB_SCENARIOS
 # a permanent fetch failure (retryable=false from the gateway) can be reopened; contract cannot
 materialize retryp --clone text-plain=test-producer:m-fetch-perm --clone context-undeclared=test-producer:m-contract
 scenarios retryp '{"test-producer:m-fetch-perm": {"exit": 1, "stdout": ["RESULT:capture_id=<envelope_id>", "RESULT:revision=", "RESULT:path=", "RESULT:status=failed", "RESULT:title=", "RESULT:source_sha256=", "RESULT:extract=none", "RESULT:error_class=fetch", "RESULT:retryable=false"]}, "test-producer:m-contract": "exit2-contract"}'
