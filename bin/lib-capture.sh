@@ -1145,6 +1145,8 @@ cap_result() {
   printf 'RESULT:extract=%s\n' "$extract"
   printf 'RESULT:error_class=%s\n' "$eclass"
   printf 'RESULT:retryable=%s\n' "$retry"
+  # only after an extraction that ran the reindex hook (§12 A8); a replay from the files prints none
+  [[ "$status" == extracted && -n "${REINDEX_STATUS:-}" ]] && printf 'RESULT:reindex=%s\n' "$REINDEX_STATUS"
   [[ "$replayed" == true ]] && printf 'RESULT:replayed=true\n'
   return 0
 }
@@ -1363,10 +1365,23 @@ cap_extract() {
   return 1
 }
 
-# Reindex hook (D15): synchronous, under the lock, never fatal.
+# Reindex hook (D15): synchronous, under the lock, never fatal — the capture succeeded either way;
+# a failure is a warning on stderr and RESULT:reindex=failed (otherwise ok), exit code unchanged
+# (§12 A8). REINDEX_STATUS is read by cap_result.
 cap_reindex() {
-  [[ -x "$_LIB_CAPTURE_DIR/knowledge-reindex.py" ]] || return 0
-  python3 "$_LIB_CAPTURE_DIR/knowledge-reindex.py" "$VAULT_PATH" >/dev/null 2>&1 || true
+  local err
+  REINDEX_STATUS=ok
+  if [[ ! -f "$_LIB_CAPTURE_DIR/knowledge-reindex.py" ]]; then
+    REINDEX_STATUS=failed
+    echo "WARNING: index.md was not rebuilt (bin/knowledge-reindex.py is missing); run: mnemon reindex" >&2
+    return 0
+  fi
+  if ! err="$(python3 "$_LIB_CAPTURE_DIR/knowledge-reindex.py" "$VAULT_PATH" 2>&1 >/dev/null)"; then
+    REINDEX_STATUS=failed
+    err="$(printf '%s' "$err" | tail -1 | tr -d '\000-\037')"
+    echo "WARNING: index.md was not rebuilt (knowledge-reindex.py failed${err:+: $err}); the capture is published — run: mnemon reindex" >&2
+  fi
+  return 0
 }
 
 # The exit of a success path that changed the vault. The qmd refresh keeps its own index outside

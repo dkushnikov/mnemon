@@ -150,7 +150,10 @@ R = "RESULT:"
 
 def lines(**kv):
     order = ["capture_id", "revision", "path", "status", "title", "source_sha256", "extract", "error_class", "retryable"]
-    return [R + k + "=" + str(kv.get(k, "")) for k in order]
+    out = [R + k + "=" + str(kv.get(k, "")) for k in order]
+    if "reindex" in kv:   # only after an extraction that ran the reindex hook (§12 A8)
+        out.append(R + "reindex=" + kv["reindex"])
+    return out
 
 
 REV1, REV2 = "2026-10-15_aaaaaaaa", "2026-10-15_bbbbbbbb"
@@ -159,13 +162,15 @@ outcomes = {
                "result it must produce. `attempt_consumed` false = the attempt is refunded and the stored state is `deferred`",
                "with a deadline_at. <envelope_id> in stdout is substituted per envelope. `default_scenario_by_case` drives",
                "the stub for the contract fixtures; tests may override per case. A duplicate reports revision, path and the",
-               "source hash of the existing folder, and the ingest records that revision (the predecessor rule needs it)."],
+               "source hash of the existing folder, and the ingest records that revision (the predecessor rule needs it).",
+               "An extraction ends with RESULT:reindex=ok|failed (the reindex hook's outcome, never the capture's); a duplicate",
+               "and a replay from the files print no reindex line."],
     "scenarios": {
         "extracted": {"exit": 0, "stdout": lines(capture_id="<envelope_id>", revision=REV1, path=f"Sources/{REV1}/", status="extracted",
-                                                 title="Plain T", source_sha256=sha(TEXT_B), extract="ok"),
+                                                 title="Plain T", source_sha256=sha(TEXT_B), extract="ok", reindex="ok"),
                       "state": "captured", "duplicate": False, "revision": REV1, "attempt_consumed": True},
         "extracted-recapture": {"exit": 0, "stdout": lines(capture_id="<envelope_id>", revision=REV2, path=f"Sources/{REV2}/", status="extracted",
-                                                           title="Plain T", source_sha256=sha(TEXT2_B), extract="ok"),
+                                                           title="Plain T", source_sha256=sha(TEXT2_B), extract="ok", reindex="ok"),
                                 "state": "captured", "duplicate": False, "revision": REV2, "attempt_consumed": True},
         "duplicate": {"exit": 0, "stdout": lines(capture_id="<envelope_id>", revision="2026-10-12_aaaaaaaa", path="Sources/2026-10-12_aaaaaaaa/",
                                                  status="skipped-duplicate", title="Plain T", source_sha256=sha(TEXT_B), extract="ok"),

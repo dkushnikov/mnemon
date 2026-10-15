@@ -292,6 +292,24 @@ assert_contains "$(cat "$ex")" '### Key Ideas' "extract.md: body"
 assert_eq "$(rget rec-0 '.extract_sha256')" "$(shasum -a 256 "$ex" | cut -c1-64)" "receipt extract_sha256 == sha256(extract.md)"
 assert_contains "$(cat "$VAULT/index.md")" "[[Sources/$rev0/extract|Plain T]]" "index.md rebuilt before the gateway exits"
 assert_eq "$(rget rec-0 '.argv[2]')" "--restricted" "receipt argv shows the fence"
+# §12 A8: RESULT:reindex reports the hook's outcome; a failed rebuild never fails the capture
+stub_reset
+run_gw --url "https://example.com/reindex-ok" --capture-id ri-0
+assert_eq "$(result reindex)" "ok" "RESULT:reindex=ok after an extraction"
+assert_eq "$(printf '%s\n' "$out" | grep -c '^RESULT:reindex=')" "1" "...once"
+chmod 555 "$VAULT"
+run_gw --url "https://example.com/reindex-fail" --capture-id ri-1
+chmod 755 "$VAULT"
+assert_eq "$rc" "0" "a reindex failure (index.md unwritable) leaves the exit code at 0"
+assert_eq "$(result status)" "extracted" "...status extracted"
+assert_eq "$(result reindex)" "failed" "...RESULT:reindex=failed"
+assert_contains "$err" "WARNING: index.md was not rebuilt" "...with a warning on stderr"
+assert_contains "$err" "mnemon reindex" "...naming the command that rebuilds it"
+assert_eq "$(rget ri-1 '.state')" "extracted" "...the receipt is extracted"
+run_gw --capture-id ri-1
+assert_eq "$(printf '%s\n' "$out" | grep -c '^RESULT:reindex=')" "0" "a replay from the files prints no reindex line"
+run_gw --url "https://example.com/reindex-ok" --capture-id ri-dup
+assert_eq "$(printf '%s\n' "$out" | grep -c '^RESULT:reindex=')" "0" "a duplicate prints no reindex line"
 # the qmd refresh runs after a successful extraction (every success path exits inside cap_main,
 # so a post-hook after it never ran), in the background, without the vault lock descriptor
 sed 's/^instance: captest/instance: captest-qmd/; s/^search_provider: grep/search_provider: qmd/' "$CONFIG" > "$TEST_TMPDIR/qmd.yaml"

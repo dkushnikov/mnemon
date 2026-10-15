@@ -4,7 +4,9 @@
   "result it must produce. `attempt_consumed` false = the attempt is refunded and the stored state is `deferred`",
   "with a deadline_at. <envelope_id> in stdout is substituted per envelope. `default_scenario_by_case` drives",
   "the stub for the contract fixtures; tests may override per case. A duplicate reports revision, path and the",
-  "source hash of the existing folder, and the ingest records that revision (the predecessor rule needs it)."
+  "source hash of the existing folder, and the ingest records that revision (the predecessor rule needs it).",
+  "An extraction ends with RESULT:reindex=ok|failed (the reindex hook's outcome, never the capture's); a duplicate",
+  "and a replay from the files print no reindex line."
  ],
  "scenarios": {
   "extracted": {
@@ -18,7 +20,8 @@
     "RESULT:source_sha256=35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
     "RESULT:extract=ok",
     "RESULT:error_class=",
-    "RESULT:retryable="
+    "RESULT:retryable=",
+    "RESULT:reindex=ok"
    ],
    "state": "captured",
    "duplicate": false,
@@ -36,7 +39,8 @@
     "RESULT:source_sha256=252e502db2c449b2f59472fde3e9c35bae976c1902b8a1394f783c95fed49dcb",
     "RESULT:extract=ok",
     "RESULT:error_class=",
-    "RESULT:retryable="
+    "RESULT:retryable=",
+    "RESULT:reindex=ok"
    ],
    "state": "captured",
    "duplicate": false,
