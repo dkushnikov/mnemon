@@ -33,13 +33,17 @@ Mnemon is the tool; the plugin is a thin door into it.
 ## Development
 
 ```bash
-# Run all tests
+# Run all tests — the suite never touches your Claude Code plugin registry:
+# tests/test-helper.sh exports MNEMON_SKIP_PLUGIN=1 and setup.sh skips its plugin
+# step under it (the one test of that step runs it against a stub `claude` in a temp HOME)
 for t in tests/test_*.sh; do bash "$t" || break; done
 
 # Dry-run a capture through the dispatcher against an explicit instance file
 ./bin/mnemon --config /path/to/instance.yaml add --url https://example.com --dry-run
 
-# Legacy installer on a test vault (deprecated, kept working; --skip-plugin keeps your plugin registry untouched)
+# Legacy installer on a test vault (deprecated, kept working). --skip-plugin or
+# MNEMON_SKIP_PLUGIN=1 keeps your plugin registry untouched; setup.sh also skips
+# the plugin step when CI or CLAUDE_PLUGIN_ROOT is set
 ./setup.sh /tmp/test-vault --non-interactive --skip-qmd --skip-plugin
 ```
 
@@ -51,7 +55,7 @@ for t in tests/test_*.sh; do bash "$t" || break; done
 2. Open a PR, review, merge into `main`.
 3. `mnemon release` (from the dev tree) takes the engine maintenance lock — other engine commands exit 75 meanwhile — drains running engine processes, fast-forwards `main` → `release` so the engine worktree at `$MNEMON_HOME` follows, smokes the updated worktree (engine health only) and pushes `origin/release` only when the smoke is green; `mnemon release --rollback <ref>` is the way back.
 
-Never commit to `release` directly; never force-push either branch. Conventional commit prefixes (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`) — `git log --oneline` is the audit trail.
+Never commit to `release` directly; never force-push `main`. `release` moves only through `mnemon release` (a fast-forward of `main`) and `mnemon release --rollback <ref>`, which prints — never runs — the `git push --force-with-lease origin release` that publishes a rollback. Conventional commit prefixes (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`) — `git log --oneline` is the audit trail.
 
 ### Dev vs installed
 
