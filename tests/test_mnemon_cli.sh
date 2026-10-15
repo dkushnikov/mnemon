@@ -526,6 +526,13 @@ assert_contains "$out" "warn fence — claude 2.1.300 failed its fence probe on 
 printf '{"2.1.299": {"pass": true, "date": "2026-10-15", "probes": {}}}\n' > "$PROBES"
 run env PATH="$FSTUB:$PATH" "$MNEMON" doctor
 assert_contains "$out" "warn fence — claude 2.1.300 has no probe record; run: mnemon fence-probe" "doctor: a record for another version does not count"
+printf '{"2.1.300": {"pass": true, "date": "2026-10-15", "model": "sonnet", "probes": {"no-tools": true, "ambient-project": true, "ambient-user": "skipped", "mcp": true, "session": true}, "skipped": {"ambient-user": "a second login would be needed"}}}\n' > "$PROBES"
+run env PATH="$FSTUB:$PATH" "$MNEMON" doctor
+assert_contains "$out" "ok fence — claude 2.1.300, --restricted available, probed 2026-10-15 — probed: no-tools, ambient-project, mcp, session; ambient-user: documented" "doctor: fence prints the probed list and the documented (skipped) probe from the record (A9)"
+# the probe script itself (never run here): every claude call is under the real HOME, probe 3 is recorded as skipped
+assert_eq "$(grep -cE '(^|[[:space:]])(HOME|XDG_CONFIG_HOME|XDG_STATE_HOME)=' "$MNEMON_ROOT/bin/fence-probe.sh" || true)" "0" "fence-probe.sh never overrides HOME or XDG_* for claude (A9: the scratch dir is the cwd only)"
+assert_contains "$(grep -E '^record ambient-user' "$MNEMON_ROOT/bin/fence-probe.sh")" "skipped" "fence-probe.sh records ambient-user as skipped (A9)"
+assert_eq "$(grep -c 'SCRATCH_HOME' "$MNEMON_ROOT/bin/fence-probe.sh" || true)" "0" "fence-probe.sh plants nothing in a scratch HOME"
 make_claude "2.1.200 (Claude Code)" "Options: --tools <list>"
 run env PATH="$FSTUB:$PATH" "$MNEMON" doctor
 assert_eq "$rc" "1" "doctor fails when claude lacks --restricted"

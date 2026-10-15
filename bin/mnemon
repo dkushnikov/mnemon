@@ -416,7 +416,7 @@ PY
 # fence — the installed Claude Code: version, --restricted, and a recorded probe
 # pass for exactly that version (D13; written by `mnemon fence-probe`). Observational.
 _doctor_fence() {
-  local ver_line ver help_out has_restricted=false probes rec
+  local ver_line ver help_out has_restricted=false probes rec rest stamp summary tab
   if ! command -v claude >/dev/null 2>&1; then
     _check warn fence "claude not on PATH (see deps) — extraction and mnemon fence-probe need it"
     return 0
@@ -448,15 +448,28 @@ except Exception:
 for key in (sys.argv[2], sys.argv[3]):
     rec = doc.get(key) if isinstance(doc, dict) else None
     if isinstance(rec, dict):
-        print(("pass " if rec.get("pass") is True else "fail ") + str(rec.get("date") or "unknown date"))
+        # the probed list (§12 A9): true = probed, "skipped" = documented, false = failed
+        probes = rec.get("probes") if isinstance(rec.get("probes"), dict) else {}
+        probed = [k for k, v in probes.items() if v is True]
+        documented = [k for k, v in probes.items() if v == "skipped"]
+        failed = [k for k, v in probes.items() if v is False]
+        parts = []
+        if probed:
+            parts.append("probed: " + ", ".join(probed))
+        parts += [k + ": documented" for k in documented] + [k + ": failed" for k in failed]
+        print(("pass " if rec.get("pass") is True else "fail ") + str(rec.get("date") or "unknown date") + "\t" + "; ".join(parts))
         sys.exit(0)
 print("none")
 PY
 )"
   fi
+  tab=$'\t'
+  rest="${rec#pass }"; rest="${rest#fail }"
+  stamp="${rest%%$tab*}"; summary=""
+  [[ "$rest" == *"$tab"* ]] && summary="${rest#*$tab}"
   case "$rec" in
-    pass*)      _check ok fence "claude $ver, --restricted available, probed ${rec#pass }" ;;
-    fail*)      _check warn fence "claude $ver failed its fence probe on ${rec#fail }; run: mnemon fence-probe" ;;
+    pass*)      _check ok fence "claude $ver, --restricted available, probed $stamp${summary:+ — $summary}" ;;
+    fail*)      _check warn fence "claude $ver failed its fence probe on $stamp${summary:+ ($summary)}; run: mnemon fence-probe" ;;
     unreadable) _check warn fence "claude $ver, --restricted available, but $probes is unreadable; run: mnemon fence-probe" ;;
     *)          _check warn fence "claude $ver has no probe record; run: mnemon fence-probe" ;;
   esac
