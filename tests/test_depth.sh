@@ -60,16 +60,37 @@ assert m.apply_depth_probe_boost('https://x.test/', 2, 'short') == (2, None)
 assert m.apply_depth_probe_boost('https://x.test/', 4, None) == (4, None)
 PY
 
-echo "== D4: gateway dedup regex matches folded_sources + canonical, not unrelated =="
-tmp="$(mktemp -d)"; mkdir -p "$tmp/Sources/x"
-printf 'url: "https://openviking.ai"\nfolded_sources:\n  - url: https://github.com/volcengine/OpenViking\n' > "$tmp/Sources/x/source.md"
-d4=0
-for U in "https://github.com/volcengine/OpenViking" "https://openviking.ai"; do
-  ure="$(printf '%s' "$U" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
-  grep -rqE --include="source.md" "url: \"?${ure}\"?[[:space:]]*\$" "$tmp/Sources" || d4=1
-done
-ureN="$(printf '%s' 'https://github.com/other/repo' | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
-grep -rqE --include="source.md" "url: \"?${ureN}\"?[[:space:]]*\$" "$tmp/Sources" && d4=1
-[[ $d4 -eq 0 ]] && ok "D4 dedup regex (folded+canonical match, unrelated no-match)" || bad "D4 dedup regex"
+echo "== D4: gateway dedup matches url aliases (canonical_url, final_url, posted_url, folded_sources) =="
+# The real gateway against the capture stubs (tests/fixtures/capture/setup.sh): a folder whose
+# frontmatter carries url A, canonical_url B, final_url C, posted_url D and a folded_sources
+# entry E is the same resource for every one of them (capture contracts §3.1 legacy rule);
+# the match is frontmatter-bounded — a URL that appears only in the body is not an alias.
+(
+  MNEMON_ROOT="$(cd "$BIN/.." && pwd -P)"
+  source "$MNEMON_ROOT/tests/test-helper.sh"
+  source "$MNEMON_ROOT/tests/fixtures/capture/setup.sh"
+  d="$VAULT/Sources/2026-10-01_d4d4d4d4"; mkdir -p "$d"
+  printf -- '---\ntype: source\nsource_type: article\norigin: url\nurl: "https://openviking.ai"\ncanonical_url: "https://www.openviking.ai/"\nfinal_url: https://openviking.ai/home\nposted_url: '"'"'https://x.example/post/1'"'"'\nfolded_sources:\n  - url: https://github.com/volcengine/OpenViking\n    confidence: high\n  - url: "https://docs.openviking.ai/intro"\ncaptured: 2026-10-01\n---\nlanding text\nurl: https://body.example/only\n' > "$d/source.md"
+  printf -- '---\ntype: extract\ntitle: "OpenViking"\nstatus: extracted\n---\n### Summary\n' > "$d/extract.md"
+  n0="$(nfolders)"
+  for pair in url=https://openviking.ai canonical_url=https://www.openviking.ai/ final_url=https://openviking.ai/home posted_url=https://x.example/post/1 folded=https://github.com/volcengine/OpenViking folded-quoted=https://docs.openviking.ai/intro; do
+    run_gw --url "${pair#*=}" --capture-id "d4-${pair%%=*}"
+    assert_eq "$rc $(result status) $(result revision)" "0 skipped-duplicate 2026-10-01_d4d4d4d4" "add --url ${pair#*=} (${pair%%=*}) → skipped-duplicate of the folder"
+    assert_eq "$(rget "d4-${pair%%=*}" '.legacy_match')" "true" "...recorded as a legacy match"
+  done
+  assert_eq "$(nfolders)" "$n0" "no new folder for any alias"
+  assert_eq "$(curl_calls)" "0" "...and nothing was fetched"
+  run_gw --url "https://github.com/other/repo" --capture-id d4-other
+  assert_eq "$rc $(result status)" "0 extracted" "an unrelated URL is captured, not a duplicate"
+  run_gw --url "https://body.example/only" --capture-id d4-body
+  assert_eq "$rc $(result status)" "0 extracted" "a URL that appears only in the body is not an alias (frontmatter-bounded)"
+  # a new-format folder with a merged depth manifest carries the keys too: its folded target is a duplicate
+  STUB_DEPTH=fold run_gw --url "https://example.com/thin" --capture-id d4-thin
+  revt="$(result revision)"
+  run_gw --url "https://example.com/deeper" --capture-id d4-deeper
+  assert_eq "$rc $(result status) $(result revision)" "0 skipped-duplicate $revt" "a target folded into a new-format composite is a duplicate of it (folded_sources of the merged manifest)"
+  cleanup_capture_test
+  summary
+) || fail=1
 
 [[ $fail -eq 0 ]] && echo "PASS test_depth.sh" || { echo "FAIL test_depth.sh"; exit 1; }

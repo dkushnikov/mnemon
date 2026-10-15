@@ -209,6 +209,44 @@ elif cmd == "nested":
                 print(v); break
             if inside and line and line[0] != " ":
                 break
+elif cmd == "url-alias":
+    # <file> <url>: exit 0 when the frontmatter of source.md carries <url> under one of the alias
+    # keys of the legacy rule (§3.1) — top-level `url:`, `canonical_url:`, `final_url:`,
+    # `posted_url:`, or a `- url:` entry of the top-level `folded_sources:` block. Read only
+    # between the opening `---` and the closing `---`/`...` line, never from the body (§12 A6);
+    # scalars decoded like _mnemon_yaml_literal (double quotes: `\"` and `\\`; single quotes
+    # verbatim; bare: a trailing ` # comment` and whitespace dropped).
+    import re
+    def literal(v):
+        v = v.strip()
+        if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
+            return v[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+        if v.startswith("'"):
+            return v[1:].split("'", 1)[0]
+        if v.startswith("#"):
+            return ""
+        return re.sub(r"\s#.*$", "", v).rstrip()
+    want = a[1].strip()
+    keys = ("url", "canonical_url", "final_url", "posted_url")
+    folded = False
+    hit = False
+    with open(a[0], "r", encoding="utf-8", errors="replace") as fh:
+        lines = fh.read().split("\n")
+    if lines and lines[0] == "---":
+        for line in lines[1:]:
+            if line == "---" or line == "...":
+                break
+            if line and line[0] not in " \t":
+                folded = line.startswith("folded_sources:")
+                key, sep, value = line.partition(":")
+                if sep and key in keys and literal(value) == want:
+                    hit = True; break
+                continue
+            if folded:
+                m = re.match(r"^\s*-\s*url:(.*)$", line)
+                if m and literal(m.group(1)) == want:
+                    hit = True; break
+    sys.exit(0 if hit else 1)
 PY
 
 cap_py() { python3 -c "$CAP_PY" "$@"; }
@@ -404,7 +442,7 @@ cap_generate_capture_id() {   # <resource_id>
 # ---------------------------------------------------------------------------------------------
 # Lines "<date> <suffix> <folder> <legacy>" for every published folder of the resource.
 cap_find_revisions() {   # <resource_id> <resource_sha256> <url-for-legacy>
-  local rid="$1" rsha="$2" url="$3" d name sha suffix url_re
+  local rid="$1" rsha="$2" url="$3" d name sha suffix url_re seen=" "
   shopt -s nullglob
   for d in "$VAULT_PATH/Sources"/*_"$rid" "$VAULT_PATH/Sources"/*_"$rid"-[0-9]*; do
     [[ -d "$d" && -f "$d/source.md" ]] || continue
@@ -412,24 +450,29 @@ cap_find_revisions() {   # <resource_id> <resource_sha256> <url-for-legacy>
     [[ -n "$sha" && "$sha" == "$rsha" ]] || continue
     name="$(basename "$d")"
     case "$name" in *_"$rid"-*) suffix="${name##*-}" ;; *) suffix=1 ;; esac
+    seen="$seen$name "
     printf '%s %s %s false\n' "${name:0:10}" "$suffix" "$name"
   done
   shopt -u nullglob
-  # Legacy folders (no resource_sha256): the old rule of §3.1 — equality of the top-level `url:`
-  # field for url-kind resources. (The pre-contract gateway's grep also matched posted_url /
-  # final_url / canonical_url and folded_sources entries; those aliases are canonicalization,
-  # phase 2 by §10, and the grep below is only the candidate filter — the frontmatter field decides.)
+  # The legacy rule of §3.1 for url-kind resources (the pre-contract gateway's dedup, restored):
+  # a folder whose FRONTMATTER carries the URL under `url:`, `canonical_url:`, `final_url:`,
+  # `posted_url:` or as a `- url:` entry of `folded_sources` is the same resource — a folded
+  # target or a redirect alias is never re-captured as a new revision. It applies to legacy
+  # folders (no resource_sha256) and to new-format folders whose merged depth manifest carries
+  # those keys; a hit not already matched by identity above is a legacy match (`legacy_match:
+  # true`: skipped-duplicate, verified by its own hash, never resumed or modified). The grep is
+  # only the candidate filter — it finds the line anywhere in the file; the python check decides,
+  # bounded to the frontmatter, never the body (§12 A6).
   if [[ "$RESOURCE_KIND" == "url" && -n "$url" && -d "$VAULT_PATH/Sources" ]]; then
     url_re=$(printf '%s' "$url" | sed 's/[][\\.^$*+?(){}|]/\\&/g')
     while IFS= read -r d; do
       [[ -n "$d" ]] || continue
       d="$(dirname "$d")"
-      [[ -n "$(_mnemon_yaml_literal resource_sha256 "$d/source.md")" ]] && continue
-      # grep found the line anywhere in the file; the match counts only as a frontmatter field (§12 A6)
-      [[ "$(_mnemon_yaml_literal url "$d/source.md")" == "$url" ]] || continue
       name="$(basename "$d")"
+      case "$seen" in *" $name "*) continue ;; esac
+      cap_py url-alias "$d/source.md" "$url" || continue
       printf '%s 0 %s true\n' "${name:0:10}" "$name"
-    done < <(grep -rlE --include="source.md" "url: \"?${url_re}\"?[[:space:]]*$" "$VAULT_PATH/Sources" 2>/dev/null || true)
+    done < <(grep -rlE --include="source.md" "url: [\"']?${url_re}[\"']?[[:space:]]*$" "$VAULT_PATH/Sources" 2>/dev/null || true)
   fi
 }
 
