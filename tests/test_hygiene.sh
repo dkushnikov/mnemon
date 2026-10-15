@@ -52,4 +52,19 @@ for skill in "$MNEMON_ROOT"/plugins/mnemon/skills/*/SKILL.md; do
   assert_eq "$(sed -n '2p' "$skill")" "name: $name" "$name frontmatter name matches its directory"
 done
 
+# --- 4. python sources compile cleanly: a SyntaxWarning (e.g. an invalid escape
+#        sequence in a docstring) is an error here, as `python3 -W error` would make it
+echo "--- python compile (-W error) ---"
+py_ok=0 py_bad=0
+for f in "$MNEMON_ROOT"/bin/*.py "$MNEMON_ROOT"/bin/importers/*.py "$MNEMON_ROOT"/tests/*.py; do
+  [[ -f "$f" ]] || continue
+  if err=$(python3 -W error -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1])' "$f" 2>&1); then
+    py_ok=$((py_ok + 1))
+  else
+    py_bad=$((py_bad + 1))
+    fail "compiles under -W error: ${f#$MNEMON_ROOT/}" "$(printf '%s' "$err" | tail -1)"
+  fi
+done
+[[ $py_bad -eq 0 ]] && pass "all $py_ok python sources compile under -W error"
+
 summary

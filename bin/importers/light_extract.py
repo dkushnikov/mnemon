@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""
+r"""
 Light Extract — generate a readable index card for each dump item.
 
 Sends the FULL body of each markdown file to Claude (Sonnet by default) and
