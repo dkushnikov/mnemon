@@ -295,6 +295,52 @@ class ParseFrontmatterTests(unittest.TestCase):
         res = search.assemble_result(p, "extract", None, Path(self.tmpdir))
         self.assertEqual(res["domains"], ["career"])
 
+    # --- the serialization subset of the capture contracts (spec §4.4): exactly two escapes ---
+    def test_dq_decoder_decodes_only_the_two_escapes(self):
+        self.assertEqual(search._decode_dq('a \\"quoted\\" \\\\ title'), 'a "quoted" \\ title')
+        self.assertEqual(search._decode_dq('C:\\temp\\x'), 'C:\\temp\\x')      # unknown sequences kept
+        self.assertEqual(search._decode_dq('back\\\\\\"'), 'back\\"')           # one pass, no re-scan
+        self.assertEqual(search._decode_dq('~'), '~')
+        self.assertEqual(search._decode_dq('~/Guide'), '~/Guide')
+
+    def test_round_trip_titles(self):
+        for title in ('~', '~/Guide', 'a "quoted" \\ title', 'close ]] me | pipe'):
+            written = '"' + title.replace('\\', '\\\\').replace('"', '\\"') + '"'
+            p = self._write(f"---\ntitle: {written}\nrating: 7\n---\n\nbody\n")
+            meta = search.parse_frontmatter(p)
+            self.assertEqual(meta["title"], title)
+            self.assertEqual(meta["rating"], 7)
+
+    def test_new_format_source_and_extract(self):
+        # source.md: flat top-level keys + a nested capture: block that must not break the reader
+        src = self._write(
+            '---\ntype: source\nsource_type: article\norigin: url\nurl: "https://example.com/post"\n'
+            'title: "Plain T"\ncapture_id: "c-1"\nresource_sha256: "3f2a"\nrevision: "2026-10-15_c2e16f9b"\n'
+            'context: "personal"\ncapture:\n  method: "curl+defuddle"\n  fidelity: converted\n  raw_store: archive\n'
+            '  text_sha256: "abcd"\n  text_bytes: 9120\n---\nbody text\n'
+        )
+        meta = search.parse_frontmatter(src)
+        self.assertEqual(meta["title"], "Plain T")
+        self.assertEqual(meta["url"], "https://example.com/post")
+        self.assertEqual(meta["revision"], "2026-10-15_c2e16f9b")
+        self.assertEqual(meta["capture"]["method"], "curl+defuddle")
+        self.assertEqual(meta["capture"]["text_bytes"], 9120)
+        # extract.md as the publisher writes it: unquoted flow-list elements, nested blocks
+        ex = self._write(
+            '---\ntype: extract\nstatus: extracted\ncontext: "personal"\ntitle: "T"\nauthor: ""\n'
+            'created: 2026-10-15\nlanguage: en\ntags: [a, b/c]\npeople: [Ada Lovelace]\ndomains: [career, learning]\n'
+            'rating: 5\ncapture_id: "c-1"\nrevision: "2026-10-15_c2e16f9b"\ncapture_context:\n  vault: knowledge\n'
+            '  session: ""\nextractor:\n  schema: extract/1\n  model: sonnet\n  attempts: 1\n---\n### Summary\n'
+        )
+        meta = search.parse_frontmatter(ex)
+        self.assertEqual(meta["tags"], ["a", "b/c"])
+        self.assertEqual(meta["people"], ["Ada Lovelace"])
+        self.assertEqual(meta["domains"], ["career", "learning"])
+        self.assertEqual(meta["rating"], 5)
+        self.assertEqual(meta["author"], "")
+        self.assertEqual(meta["extractor"]["schema"], "extract/1")
+        self.assertEqual(meta["created"], "2026-10-15")
+
 
 # ---------------------------------------------------------------------------
 # ScanFileTests
