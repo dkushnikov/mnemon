@@ -692,6 +692,7 @@ cap_fresh() {
 cap_resolve_resume() {
   local target="$1" cid
   if cap_receipt_exists "$target"; then
+    cap_receipt_case_check "$target"
     CAPTURE_ID="$target"; CAPTURE_ID_GIVEN=true
     if [[ "$(cap_receipt_get "$target" '.state')" == "extracted" && -f "$VAULT_PATH/Sources/$(cap_receipt_get "$target" '.resolved_to_revision // .revision')/extract.md" ]]; then
       cap_die2 "--resume: capture $target is complete (nothing to finish)"
@@ -881,6 +882,7 @@ cap_main() {
   fi
 
   if $CAPTURE_ID_GIVEN && cap_receipt_exists "$CAPTURE_ID"; then
+    cap_receipt_case_check "$CAPTURE_ID"
     cap_replay
   fi
   if [[ -z "$ORIGIN" ]]; then

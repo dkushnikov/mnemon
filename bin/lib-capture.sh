@@ -520,6 +520,18 @@ cap_receipt_path() { printf '%s/%s.json' "$CAPTURES_DIR" "$1"; }
 cap_receipt_exists() { [[ -f "$(cap_receipt_path "$1")" ]]; }
 cap_receipt_get() { jq -r "$2" "$(cap_receipt_path "$1")"; }   # <id> <jq expr> (null → "null")
 
+# A ledger on a case-insensitive filesystem (APFS by default) folds captures/Foo.json and
+# captures/foo.json into one file: a request whose id differs only by case from a stored one
+# would read the other operation's receipt and fail its binding check with a misleading
+# "capture-id reuse with a different request". Called once a receipt file for <id> was found:
+# the stored capture_id must be the requested one, else exit 2 naming both.
+cap_receipt_case_check() {   # <id>
+  local stored
+  stored="$(cap_receipt_get "$1" '.capture_id // ""')"
+  [[ -z "$stored" || "$stored" == "$1" ]] && return 0
+  cap_die2 "capture-id '$1' collides with '$stored' on a case-insensitive ledger: $(cap_receipt_path "$1") holds the receipt of '$stored' (ids that differ only by case share one receipt file here — use a distinct id)"
+}
+
 # Create the receipt of CAPTURE_ID in state `started` from the globals of the current request.
 cap_receipt_create() {   # <state> [resolved_to_revision] [resolved_to_capture_id] [legacy_match]
   local state="$1" rrev="${2:-}" rcid="${3:-}" legacy="${4:-false}" now

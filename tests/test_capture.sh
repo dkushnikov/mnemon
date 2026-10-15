@@ -339,6 +339,28 @@ assert_eq "$(result replayed)" "true" "...replayed"
 run_gw --capture-id fid-1 --url "https://example.com/other" --origin url
 assert_eq "$rc" "2" "a different bound field → exit 2"
 assert_contains "$err" "capture-id reuse with a different request" "...with the contract message"
+# capture ids that differ only by case share one receipt file on a case-insensitive ledger (APFS):
+# the second request is refused with a message that says so, never "reuse with a different request"
+run_gw --url "https://example.com/case-a" --capture-id Case-1
+assert_eq "$rc" "0" "fixture: a capture under id Case-1"
+touch "$VSTATE/captures/.case-probe-a"
+if [[ -e "$VSTATE/captures/.CASE-PROBE-A" ]]; then ledger_ci=true; else ledger_ci=false; fi
+rm -f "$VSTATE/captures/.case-probe-a"
+run_gw --url "https://example.com/case-b" --capture-id case-1
+if $ledger_ci; then
+  assert_eq "$rc" "2" "an id differing only by case from a stored one → exit 2 on a case-insensitive ledger"
+  assert_contains "$err" "capture-id 'case-1' collides with 'Case-1' on a case-insensitive ledger" "...naming both ids and the cause"
+  assert_not_contains "$err" "reuse with a different request" "...not the binding-check message"
+  assert_eq "$(rget Case-1 '.capture_id') $(rget Case-1 '.state')" "Case-1 extracted" "...the stored receipt is untouched"
+  run_gw --resume case-1
+  assert_eq "$rc" "2" "...--resume of the colliding id is refused the same way"
+  assert_contains "$err" "collides with 'Case-1'" "...with the collision message"
+  run_gw --capture-id Case-1
+  assert_eq "$rc $(result replayed)" "0 true" "...the stored id itself still replays"
+else
+  assert_eq "$rc" "0" "a case-sensitive ledger keeps Case-1 and case-1 apart"
+  assert_eq "$(rget case-1 '.capture_id')" "case-1" "...each with its own receipt"
+fi
 
 # --file origin: retained inputs win over the locator (§12 A4) — with the raw published, a moved or
 # changed original is irrelevant; the locator is consulted only when nothing is retained
