@@ -415,8 +415,10 @@ cap_find_revisions() {   # <resource_id> <resource_sha256> <url-for-legacy>
     printf '%s %s %s false\n' "${name:0:10}" "$suffix" "$name"
   done
   shopt -u nullglob
-  # Legacy folders (no resource_sha256): the old rule, `url:` equality for url-kind resources —
-  # the same regex the pre-contract gateway used (canonical url, depth aliases, folded_sources).
+  # Legacy folders (no resource_sha256): the old rule of §3.1 — equality of the top-level `url:`
+  # field for url-kind resources. (The pre-contract gateway's grep also matched posted_url /
+  # final_url / canonical_url and folded_sources entries; those aliases are canonicalization,
+  # phase 2 by §10, and the grep below is only the candidate filter — the frontmatter field decides.)
   if [[ "$RESOURCE_KIND" == "url" && -n "$url" && -d "$VAULT_PATH/Sources" ]]; then
     url_re=$(printf '%s' "$url" | sed 's/[][\\.^$*+?(){}|]/\\&/g')
     while IFS= read -r d; do
