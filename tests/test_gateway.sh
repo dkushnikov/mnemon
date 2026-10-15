@@ -234,6 +234,19 @@ assert_contains "$output" "Origin path:" "audio file shows origin_path"
 output=$($GW source-add --url "https://youtube.com/watch?v=test123" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
 assert_contains "$output" "archive_dir:" "youtube archive shows archive_dir"
 
+# --- Test 32: render-url.sh keeps headless Chrome off the login keychain and the
+# user's profile. From a sandboxed shell the keychain is unreachable
+# (errSecNoDefaultKeychain, -25307) and macOS shows a "Keychain Not Found" dialog
+# whose "Reset To Defaults" would replace the user's login keychain; a throw-away
+# --user-data-dir keeps the run out of the running Chrome's profile. Static check:
+# the suite never launches Chrome.
+RENDER="$MNEMON_ROOT/bin/render-url.sh"
+chrome_call=$(sed -n '/^"\$CHROME" --headless/,/--dump-dom/p' "$RENDER")
+assert_contains "$chrome_call" "--use-mock-keychain" "render-url.sh launches Chrome with --use-mock-keychain"
+assert_contains "$chrome_call" '--user-data-dir="$PROFILE"' "render-url.sh launches Chrome with a throw-away --user-data-dir"
+assert_contains "$(grep -F 'mktemp -d' "$RENDER")" 'PROFILE=$(mktemp -d -t render-url-profile.' "the profile dir is a fresh mktemp -d"
+assert_contains "$(grep -F 'trap ' "$RENDER")" 'rm -rf "$TMP" "$PROFILE"' "the EXIT trap removes the profile dir with the dump"
+
 # Cleanup
 rm -rf "$TEST_TMPDIR"
 

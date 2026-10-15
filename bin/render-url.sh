@@ -57,9 +57,15 @@ EOF
 fi
 
 TMP=$(mktemp -t render-url.XXXXXX)
-trap 'rm -f "$TMP"' EXIT
+# A throw-away profile keeps headless Chrome off the user's running profile, and --use-mock-keychain (the flag
+# Playwright/Puppeteer set by default) keeps it off the login keychain: from a sandboxed shell the keychain is
+# unreachable (errSecNoDefaultKeychain, -25307) and macOS pops a "Keychain Not Found" dialog at the user whose
+# "Reset To Defaults" button would replace their login keychain (seen 2026-10-15 during test runs).
+PROFILE=$(mktemp -d -t render-url-profile.XXXXXX)
+trap 'rm -rf "$TMP" "$PROFILE"' EXIT
 
 "$CHROME" --headless --disable-gpu \
+  --use-mock-keychain --user-data-dir="$PROFILE" \
   --virtual-time-budget="$TIMEOUT" \
   --dump-dom "$URL" 2>/dev/null > "$TMP"
 
