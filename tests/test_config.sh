@@ -5,13 +5,18 @@ MNEMON_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$MNEMON_ROOT/bin/mnemon-config.sh"
 
 echo "=== Config Loader Tests ==="
+echo "toolchain: $(bash --version | head -1) · $(python3 --version 2>&1)"
 
 # Isolation: every resolution below happens under a temp XDG tree and a temp
 # cwd; the user's real ~/.config/mnemon, state dir and vault are never touched.
+# Inherited capture-layer variables are cleared first (capture layer §7.16).
 TEST_TMPDIR="$(cd "$(mktemp -d -t mnemon-config-XXXX)" && pwd -P)"
 export XDG_CONFIG_HOME="$TEST_TMPDIR/xdg"
 export XDG_STATE_HOME="$TEST_TMPDIR/state"
 unset MNEMON_CONFIG MNEMON_INSTANCE MNEMON_CONFIG_DIR
+unset FIRECRAWL_API_KEY JINA_API_KEY HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
+unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT MNEMON_POLICY_ALLOW_LOOPBACK MNEMON_FETCH_URL_REWRITE MNEMON_EXTERNAL_FETCH_CMD
+unset MNEMON_CAPTURE_FETCH_CMD MNEMON_CAPTURE_SITE_CMD MNEMON_DEPTH_FOLD_CMD
 CFG_DIR="$XDG_CONFIG_HOME/mnemon"
 mkdir -p "$CFG_DIR/instances" "$TEST_TMPDIR/cwd" "$TEST_TMPDIR/emptyroot"
 
@@ -99,6 +104,66 @@ assert_eq "$vsd_a" "$XDG_STATE_HOME/mnemon/vaults/$vault5b_hash" "the ledger dir
 assert_eq "$MNEMON_VAULT_STATE_DIR" "$vsd_a" "a symlinked path with a trailing slash resolves to the same ledger dir (ad-hoc config)"
 [[ "$MNEMON_STATE_DIR" != "$isd_a" ]] && pass "instance-only state stays per config" || fail "instance-only state stays per config" "both configs got $isd_a"
 assert_eq "$(mnemon_vault_state_dir "$TEST_TMPDIR/nope/missing-vault/")" "$XDG_STATE_HOME/mnemon/vaults/$(printf '%s' "$TEST_TMPDIR/nope/missing-vault" | shasum -a 256 | cut -c1-16)" "a vault that does not exist yet hashes its absolute path without the trailing slash"
+
+# --- Test 5d: the capture-layer keys (capture layer §5) — exported in upper case with their
+#     defaults, the fetch_timeout split, numeric validation (exit 2), and one table in three
+#     places: bin/mnemon-config.sh (MNEMON_CONFIG_KEYS), bin/lib_config.py (CONFIG_KEYS) and
+#     the dispatcher (`mnemon config keys` / `config get`) ---
+echo "--- capture-layer keys (§5) ---"
+load_config "$TMPCONFIG5"
+assert_eq "$EXTERNAL_FETCH" "off" "external_fetch defaults to off"
+assert_eq "$EXTERNAL_FETCHERS" "firecrawl,jina" "external_fetchers defaults to firecrawl,jina"
+assert_contains "$FETCH_USER_AGENT" "Mozilla/5.0" "fetch_user_agent defaults to a desktop browser string"
+assert_eq "$FETCH_TIMEOUT $FETCH_CONNECT_TIMEOUT $FETCH_READ_TIMEOUT" "60 15 45" "fetch_timeout 60 splits into connect 15 / read 45"
+assert_eq "$FETCH_MAX_BYTES $RENDER_TIMEOUT $RENDER_MAX_BYTES" "20000000 90 20000000" "fetch_max_bytes / render_timeout / render_max_bytes defaults"
+assert_eq "$ACQUIRE_TIMEOUT $TRANSCRIBE_TIMEOUT $SITE_MAX_PAGES $SITE_TIMEOUT $THIN_WORDS $EXTRACT_MAX_PARTS" "300 3600 40 900 60 8" "acquire/transcribe/site/thin/parts defaults"
+printf 'vault_path: %s/vault5\nexternal_fetch: auto\nexternal_fetchers: jina\nfetch_timeout: 20\nsite_max_pages: 7\nthin_words: 10\nextract_max_parts: 3\nfetch_user_agent: "agent one"\n' "$TEST_TMPDIR" > "$TEST_TMPDIR/keys.yaml"
+load_config "$TEST_TMPDIR/keys.yaml"
+assert_eq "$EXTERNAL_FETCH $EXTERNAL_FETCHERS $SITE_MAX_PAGES $THIN_WORDS $EXTRACT_MAX_PARTS" "auto jina 7 10 3" "configured values honoured"
+assert_eq "$FETCH_TIMEOUT $FETCH_CONNECT_TIMEOUT $FETCH_READ_TIMEOUT" "20 5 15" "fetch_timeout 20 splits into connect 5 (T/4 < 15) / read 15"
+assert_eq "$FETCH_USER_AGENT" "agent one" "a quoted fetch_user_agent with a space is kept"
+for bad in "fetch_timeout: abc" "site_max_pages: 1.5" "extract_max_parts: -2" "fetch_max_bytes: inf" "external_fetch: maybe" "render_timeout: nan" "extract_inline_max_bytes: 12.0" "extract_max_usd: -0.5"; do
+  printf 'vault_path: %s/vault5\n%s\n' "$TEST_TMPDIR" "$bad" > "$TEST_TMPDIR/bad.yaml"
+  rc=0; msg="$( (load_config "$TEST_TMPDIR/bad.yaml") 2>&1 )" || rc=$?
+  assert_eq "$rc" "2" "'$bad' is refused at config load (exit 2)"
+  assert_contains "$msg" "${bad%%:*}" "...naming the key"
+done
+printf 'vault_path: %s/vault5\nfetch_timeout: 0.5\nextract_max_usd: 1.25\n' "$TEST_TMPDIR" > "$TEST_TMPDIR/frac.yaml"
+load_config "$TEST_TMPDIR/frac.yaml"
+assert_eq "$FETCH_TIMEOUT $EXTRACT_MAX_USD" "0.5 1.25" "fractional values are accepted where a number (not an integer) is expected"
+# three-way agreement: the bash table, the python table, the dispatcher
+table_sh="$(mnemon_config_keys)"
+table_py="$(python3 - "$MNEMON_ROOT/bin" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import lib_config
+for key, var, typ, default in lib_config.CONFIG_KEYS:
+    print(key, typ, default or "-")
+PY
+)"
+assert_eq "$table_py" "$table_sh" "bin/lib_config.py CONFIG_KEYS == bin/mnemon-config.sh MNEMON_CONFIG_KEYS (key, type, default)"
+assert_eq "$("$MNEMON_ROOT/bin/mnemon" config keys)" "$table_sh" "mnemon config keys prints the same table"
+printf 'instance: keys5\nvault_path: %s/vault5\n' "$TEST_TMPDIR" > "$CFG_DIR/instances/keys5.yaml"
+load_config "$TMPCONFIG5"
+agree=0; disagree=""
+while read -r key typ def; do
+  [[ -n "$key" ]] || continue
+  var="$(mnemon_config_var_of "$key")"
+  want="$def"; [[ "$want" == "-" ]] && want=""
+  got="$("$MNEMON_ROOT/bin/mnemon" --instance keys5 config get "$key")"
+  if [[ "${!var}" == "$want" && "$got" == "$want" ]]; then agree=$((agree + 1)); else disagree="$disagree $key(load='${!var}' get='$got' want='$want')"; fi
+done <<< "$table_sh"
+assert_eq "$disagree" "" "every table key: load_config's export and 'mnemon config get' both answer the table's default ($agree keys)"
+assert_contains "$("$MNEMON_ROOT/bin/mnemon" --instance keys5 config dump)" "SITE_MAX_PAGES=40" "config dump lists the capture-layer exports"
+python3 - "$MNEMON_ROOT/bin" "$CFG_DIR/instances/keys5.yaml" <<'PY' && pass "lib_config.load_config exposes every table variable" || fail "lib_config.load_config exposes every table variable" "missing or wrong"
+import sys
+sys.path.insert(0, sys.argv[1])
+import lib_config
+cfg = lib_config.load_config(sys.argv[2])
+for key, var, typ, default in lib_config.CONFIG_KEYS:
+    assert cfg.get(var) == default, (var, cfg.get(var), default)
+assert cfg["FETCH_CONNECT_TIMEOUT"] == "15" and cfg["FETCH_READ_TIMEOUT"] == "45"
+PY
 
 # --- Test 5c: _mnemon_yaml_literal — the artifact decoder (spec §4.4): exactly
 #     \" and \\ decoded, no tilde expansion, frontmatter only; _parse_yaml_value

@@ -34,8 +34,11 @@
 #   VAULT_PATH, READER_CONTEXT_PATH, CHARTER_PATH, SEARCH_PROVIDER, QMD_COLLECTION,
 #   DEFAULT_MODEL, DEFAULT_LANGUAGE, WHISPER_MODEL, AUTO_DETECT_ORIGIN, ARCHIVE_DIR,
 #   WRITER_HOST, EXTRACT_TIMEOUT, EXTRACT_INLINE_MAX_BYTES, EXTRACT_MAX_USD and
-#   MNEMON_VAULT_STATE_DIR. MNEMON_SELECTED_BY (set by the dispatcher/gateway when
-#   a flag chose the instance) only labels MNEMON_CONFIG_SOURCE.
+#   MNEMON_VAULT_STATE_DIR, plus the capture-layer keys of MNEMON_CONFIG_KEYS below
+#   (docs/specs/2026-10-15-capture-layer.md §5) in upper case with their defaults
+#   applied, and the fetch_timeout split FETCH_CONNECT_TIMEOUT / FETCH_READ_TIMEOUT.
+#   MNEMON_SELECTED_BY (set by the dispatcher/gateway when a flag chose the
+#   instance) only labels MNEMON_CONFIG_SOURCE.
 #
 # Two state directories (docs/specs/2026-10-15-capture-contracts.md D6, §7):
 #   MNEMON_STATE_DIR        instance-only state — `state_dir:` or
@@ -60,6 +63,85 @@ MNEMON_ROOT="${MNEMON_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # MNEMON_INSTANCE=adhoc never selects an instance file, so an exported adhoc
 # can never break a child process that resolves config again.
 MNEMON_ADHOC_INSTANCE="adhoc"
+
+# --- Scalar keys with defaults (capture contracts §7, capture layer §5) --------
+# One table, `key|VAR|type|default` per line: the loader parses, validates and
+# exports every row; bin/lib_config.py carries the same table (CONFIG_KEYS) and
+# bin/mnemon prints it (`mnemon config keys`) — tests/test_config.sh asserts the
+# three agree. Types: str · enum:a,b · int (a non-negative integer; a fraction is
+# refused) · num (a non-negative decimal). A non-numeric, negative, non-finite or
+# fractional-where-integer value is refused at config load (exit 2); an empty
+# value takes the default (`extract_max_usd` has none: unset means no cap).
+MNEMON_CONFIG_KEYS='extract_timeout|EXTRACT_TIMEOUT|num|900
+extract_inline_max_bytes|EXTRACT_INLINE_MAX_BYTES|int|400000
+extract_max_usd|EXTRACT_MAX_USD|num|
+external_fetch|EXTERNAL_FETCH|enum:off,auto|off
+external_fetchers|EXTERNAL_FETCHERS|str|firecrawl,jina
+fetch_user_agent|FETCH_USER_AGENT|str|Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36
+fetch_timeout|FETCH_TIMEOUT|num|60
+fetch_max_bytes|FETCH_MAX_BYTES|int|20000000
+render_timeout|RENDER_TIMEOUT|num|90
+render_max_bytes|RENDER_MAX_BYTES|int|20000000
+acquire_timeout|ACQUIRE_TIMEOUT|num|300
+transcribe_timeout|TRANSCRIBE_TIMEOUT|num|3600
+site_max_pages|SITE_MAX_PAGES|int|40
+site_timeout|SITE_TIMEOUT|num|900
+thin_words|THIN_WORDS|int|60
+extract_max_parts|EXTRACT_MAX_PARTS|int|8'
+
+# The upper-case variable of a table key (empty when the key is not in the table).
+mnemon_config_var_of() {
+  local key var rest
+  while IFS='|' read -r key var rest; do
+    [[ "$key" == "$1" ]] && { printf '%s' "$var"; return 0; }
+  done <<< "$MNEMON_CONFIG_KEYS"
+  return 1
+}
+
+# `mnemon config keys`: one `key default` line per table row (an empty default prints as `-`).
+mnemon_config_keys() {
+  local key var type def
+  while IFS='|' read -r key var type def; do
+    [[ -n "$key" ]] || continue
+    printf '%s %s %s\n' "$key" "$type" "${def:--}"
+  done <<< "$MNEMON_CONFIG_KEYS"
+}
+
+# Validate one table value: 0 when it fits its type, else an error on stderr and 1.
+_mnemon_check_config_value() {   # <key> <value> <type> <file>
+  local key="$1" val="$2" type="$3" file="$4"
+  case "$type" in
+    int) [[ "$val" =~ ^[0-9]+$ ]] && return 0
+         echo "ERROR: $key must be a non-negative integer, got '$val' ($file)" >&2; return 1 ;;
+    num) [[ "$val" =~ ^[0-9]+(\.[0-9]+)?$ ]] && return 0
+         echo "ERROR: $key must be a non-negative number, got '$val' ($file)" >&2; return 1 ;;
+    enum:*)
+         local allowed="${type#enum:}" one
+         local IFS=,
+         for one in $allowed; do [[ "$val" == "$one" ]] && return 0; done
+         echo "ERROR: $key must be one of ${allowed//,/|}, got '$val' ($file)" >&2; return 1 ;;
+    *)   return 0 ;;
+  esac
+}
+
+# Parse, validate and assign every table key from the config file (defaults applied).
+# Returns 2 on the first refused value — load_config fails closed on it.
+_mnemon_load_table_keys() {   # <file>
+  local file="$1" key var type def val
+  while IFS='|' read -r key var type def; do
+    [[ -n "$key" ]] || continue
+    val="$(_parse_yaml_value "$key" "$file")"
+    if [[ -z "$val" ]]; then val="$def"; fi
+    if [[ -n "$val" ]]; then
+      _mnemon_check_config_value "$key" "$val" "$type" "$file" || return 2
+    fi
+    printf -v "$var" '%s' "$val"
+  done <<< "$MNEMON_CONFIG_KEYS"
+  # the fetch_timeout split (§3.2): connect = min(15, T/4), read = T - connect
+  FETCH_CONNECT_TIMEOUT="$(awk -v t="$FETCH_TIMEOUT" 'BEGIN { c = t / 4; if (c > 15) c = 15; printf "%g", c }')"
+  FETCH_READ_TIMEOUT="$(awk -v t="$FETCH_TIMEOUT" -v c="$FETCH_CONNECT_TIMEOUT" 'BEGIN { printf "%g", t - c }')"
+  return 0
+}
 
 # --- Engine maintenance lock (A3) -------------------------------------------
 # `mnemon release` holds ${XDG_STATE_HOME:-$HOME/.local/state}/mnemon/engine-release.lock
@@ -366,9 +448,8 @@ load_config() {
   MNEMON_STATE_DIR="$(_parse_yaml_value state_dir "$config_file")"
   CHARTER_PATH="$(_parse_yaml_value charter_path "$config_file")"
   WRITER_HOST="$(_parse_yaml_value writer_host "$config_file")"
-  EXTRACT_TIMEOUT="$(_parse_yaml_value extract_timeout "$config_file")"
-  EXTRACT_INLINE_MAX_BYTES="$(_parse_yaml_value extract_inline_max_bytes "$config_file")"
-  EXTRACT_MAX_USD="$(_parse_yaml_value extract_max_usd "$config_file")"
+  # the scalar keys of MNEMON_CONFIG_KEYS: parsed, validated (exit 2 on a refused value), defaulted
+  _mnemon_load_table_keys "$config_file" || return 2
 
   # Instance name: the name that selected the file wins; otherwise the yaml's
   # `instance:` key; otherwise adhoc.
@@ -409,9 +490,6 @@ load_config() {
   MNEMON_VAULT_STATE_DIR="$(mnemon_vault_state_dir "$VAULT_PATH")"
   CHARTER_PATH="${CHARTER_PATH:-$VAULT_PATH/_meta/charter.md}"
   WRITER_HOST="${WRITER_HOST:-}"
-  EXTRACT_TIMEOUT="${EXTRACT_TIMEOUT:-900}"
-  EXTRACT_INLINE_MAX_BYTES="${EXTRACT_INLINE_MAX_BYTES:-400000}"
-  EXTRACT_MAX_USD="${EXTRACT_MAX_USD:-}"
 
   # The pair a child re-resolves from — consistent by construction.
   MNEMON_CONFIG="$MNEMON_CONFIG_FILE"
@@ -421,4 +499,7 @@ load_config() {
   export VAULT_PATH READER_CONTEXT_PATH CHARTER_PATH SEARCH_PROVIDER
   export QMD_COLLECTION DEFAULT_MODEL DEFAULT_LANGUAGE WHISPER_MODEL AUTO_DETECT_ORIGIN ARCHIVE_DIR
   export WRITER_HOST EXTRACT_TIMEOUT EXTRACT_INLINE_MAX_BYTES EXTRACT_MAX_USD
+  export EXTERNAL_FETCH EXTERNAL_FETCHERS FETCH_USER_AGENT FETCH_TIMEOUT FETCH_CONNECT_TIMEOUT FETCH_READ_TIMEOUT
+  export FETCH_MAX_BYTES RENDER_TIMEOUT RENDER_MAX_BYTES ACQUIRE_TIMEOUT TRANSCRIBE_TIMEOUT
+  export SITE_MAX_PAGES SITE_TIMEOUT THIN_WORDS EXTRACT_MAX_PARTS
 }

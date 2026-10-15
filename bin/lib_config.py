@@ -46,6 +46,46 @@ EXPORTS = (
     "EXTRACT_TIMEOUT",
     "EXTRACT_INLINE_MAX_BYTES",
     "EXTRACT_MAX_USD",
+    "EXTERNAL_FETCH",
+    "EXTERNAL_FETCHERS",
+    "FETCH_USER_AGENT",
+    "FETCH_TIMEOUT",
+    "FETCH_CONNECT_TIMEOUT",
+    "FETCH_READ_TIMEOUT",
+    "FETCH_MAX_BYTES",
+    "RENDER_TIMEOUT",
+    "RENDER_MAX_BYTES",
+    "ACQUIRE_TIMEOUT",
+    "TRANSCRIBE_TIMEOUT",
+    "SITE_MAX_PAGES",
+    "SITE_TIMEOUT",
+    "THIN_WORDS",
+    "EXTRACT_MAX_PARTS",
+)
+
+# The scalar keys with defaults (capture contracts §7, capture layer §5): one row per
+# key as (key, VAR, type, default) — the same table as MNEMON_CONFIG_KEYS in
+# bin/mnemon-config.sh (the loader validates and exports it) and as `mnemon config
+# keys` prints it; tests/test_config.sh asserts the three agree. Types: str ·
+# enum:a,b · int · num; an empty default means unset.
+CONFIG_KEYS = (
+    ("extract_timeout", "EXTRACT_TIMEOUT", "num", "900"),
+    ("extract_inline_max_bytes", "EXTRACT_INLINE_MAX_BYTES", "int", "400000"),
+    ("extract_max_usd", "EXTRACT_MAX_USD", "num", ""),
+    ("external_fetch", "EXTERNAL_FETCH", "enum:off,auto", "off"),
+    ("external_fetchers", "EXTERNAL_FETCHERS", "str", "firecrawl,jina"),
+    ("fetch_user_agent", "FETCH_USER_AGENT", "str",
+     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"),
+    ("fetch_timeout", "FETCH_TIMEOUT", "num", "60"),
+    ("fetch_max_bytes", "FETCH_MAX_BYTES", "int", "20000000"),
+    ("render_timeout", "RENDER_TIMEOUT", "num", "90"),
+    ("render_max_bytes", "RENDER_MAX_BYTES", "int", "20000000"),
+    ("acquire_timeout", "ACQUIRE_TIMEOUT", "num", "300"),
+    ("transcribe_timeout", "TRANSCRIBE_TIMEOUT", "num", "3600"),
+    ("site_max_pages", "SITE_MAX_PAGES", "int", "40"),
+    ("site_timeout", "SITE_TIMEOUT", "num", "900"),
+    ("thin_words", "THIN_WORDS", "int", "60"),
+    ("extract_max_parts", "EXTRACT_MAX_PARTS", "int", "8"),
 )
 
 
