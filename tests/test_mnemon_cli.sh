@@ -614,6 +614,15 @@ assert_contains "$out" "ok ingest — 1 result(s), nothing pending" "doctor: ing
 result p:2 failed; result p:3 failed; result p:4 exhausted; result p:5 incomplete; result p:6 deferred; result p:7 quarantined
 run "$MNEMON" doctor
 assert_contains "$out" "warn ingest — /srv/inbox-a: failed 2, exhausted 1, incomplete 1, deferred 1" "doctor: ingest warns with per-inbox counts, naming the inbox from inbox.json"
+# permanent failures (failed, retryable false) are reported apart and never raise the status
+printf '{"schema":"mnemon-ingest-result/1","envelope_id":"p:8","state":"failed","retryable":false,"error_class":"contract"}\n' > "$IRES/p:8.json"
+run "$MNEMON" doctor
+assert_contains "$out" "warn ingest — /srv/inbox-a: failed 2, exhausted 1, incomplete 1, deferred 1, permanent 1 (not retried)" "doctor: a permanent failure is counted apart as 'permanent N (not retried)', not under failed"
+for p in p:2 p:3 p:4 p:5 p:6; do rm -f "$IRES/$p.json"; done
+run "$MNEMON" doctor
+assert_contains "$out" "ok ingest — 3 result(s), nothing pending; /srv/inbox-a: permanent 1 (not retried)" "doctor: an inbox whose only failures are permanent stays ok, with the permanent count in the detail"
+result p:2 failed; result p:3 failed; result p:4 exhausted; result p:5 incomplete; result p:6 deferred
+rm -f "$IRES/p:8.json"
 mkdir -p "$VSTATE_A/ingest/ef012345/results"
 printf '{"schema":"mnemon-ingest-result/1","envelope_id":"q:1","state":"deferred"}\n' > "$VSTATE_A/ingest/ef012345/results/q:1.json"
 run "$MNEMON" doctor

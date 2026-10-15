@@ -332,7 +332,7 @@ It sets `retries + 1` (raising `attempts_allowed`), state `failed` with `retryab
 
 ## 8. `mnemon doctor`
 
-`doctor` reports the ledger without writing anything: `vault-state` (the vault state dir exists and is writable, mode `0700`), `vault-lock` (a non-blocking probe: `free` / `held`), `captures` (receipts in `failed` / `extract-failed` with the `--resume` hint, receipts whose published files are missing), `ingest` (per inbox: `failed`, `exhausted`, `incomplete`, `deferred` counts), and `fence` (the installed Claude Code's version, `--restricted`, and a recorded probe pass — `mnemon fence-probe` writes it).
+`doctor` reports the ledger without writing anything: `vault-state` (the vault state dir exists and is writable, mode `0700`), `vault-lock` (a non-blocking probe: `free` / `held`), `captures` (receipts in `failed` / `extract-failed` with the `--resume` hint, receipts whose published files are missing), `ingest` (per inbox: `failed` — the retryable ones — `exhausted`, `incomplete` and `deferred` counts raise a `warn`; permanent failures are listed apart as `permanent N (not retried)` and never raise the status — they wait for a corrected `~2` envelope or a `--retry`, not for the next pass), and `fence` (the installed Claude Code's version, `--restricted`, and a recorded probe pass — `mnemon fence-probe` writes it).
 
 ## 9. Writing a producer — checklist
 

@@ -295,7 +295,7 @@ assert_contains "$out" "ok vault-lock — free ($LOCK)" "doctor: ok vault-lock (
 assert_contains "$out" "ok vault-state — $VSTATE" "doctor: ok vault-state (0700)"
 assert_contains "$out" "ok fence — claude 2.1.296, --restricted available, probed 2026-10-15" "doctor: ok fence for the stub's version"
 assert_contains "$out" "warn captures — 2 failed/extract-failed receipt(s) — finish with: mnemon add --resume test-producer:url-auto" "doctor: captures names the two failed url receipts"
-assert_contains "$out" "warn ingest — $INBOX: failed 4, deferred 1" "doctor: ingest counts the failed and deferred results of the inbox"
+assert_contains "$out" "warn ingest — $INBOX: failed 2, deferred 1, permanent 2 (not retried)" "doctor: ingest counts the retryable failed and deferred results of the inbox, the two permanent failures (contract, invalid-request) apart"
 
 # ==================================================================================================
 echo "--- (e) a second config on the same vault sees the same ledger ---"

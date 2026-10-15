@@ -585,7 +585,11 @@ PY
   _check "$status" captures "$detail"
 }
 
-# ingest — per known inbox: results still failed, exhausted, incomplete or deferred.
+# ingest — per known inbox: results still pending — a retryable failed, exhausted, incomplete
+# or deferred — raise a warning; permanent failures (failed, retryable false: a contract
+# refusal, an invalid request, an unsupported type…) are reported as `permanent N (not
+# retried)` in the detail and never raise the status — they wait for a corrected envelope or
+# a --retry, not for the next pass, so an inbox must not warn forever on them.
 _doctor_ingest() {
   local idir out status detail tab
   idir="$(_vault_state_dir)/ingest"
@@ -596,13 +600,15 @@ _doctor_ingest() {
   out="$(python3 - "$idir" <<'PY' 2>/dev/null || printf 'warn\tcould not scan %s' "$idir"
 import glob, json, os, sys
 idir = sys.argv[1]
-parts = []
+warn_parts = []
+ok_parts = []
 total = 0
 for sub in sorted(os.listdir(idir)):
     rdir = os.path.join(idir, sub, "results")
     if not os.path.isdir(rdir):
         continue
     counts = {"failed": 0, "exhausted": 0, "incomplete": 0, "deferred": 0}
+    permanent = 0
     for path in glob.glob(os.path.join(rdir, "*.json")):
         total += 1
         try:
@@ -611,7 +617,9 @@ for sub in sorted(os.listdir(idir)):
         except Exception:
             continue
         state = rec.get("state") if isinstance(rec, dict) else None
-        if state in counts:
+        if state == "failed" and rec.get("retryable") is False:
+            permanent += 1
+        elif state in counts:
             counts[state] += 1
     label = sub
     try:
@@ -621,13 +629,20 @@ for sub in sorted(os.listdir(idir)):
             label = meta["inbox"]
     except Exception:
         pass
-    pending = [(k, v) for k, v in counts.items() if v]
-    if pending:
-        parts.append(label + ": " + ", ".join("%s %d" % kv for kv in pending))
-if parts:
-    print("warn\t" + "; ".join(parts))
+    pending = ["%s %d" % kv for kv in counts.items() if kv[1]]
+    if permanent:
+        pending.append("permanent %d (not retried)" % permanent)
+    if not pending:
+        continue
+    detail = label + ": " + ", ".join(pending)
+    if any(counts.values()):
+        warn_parts.append(detail)
+    else:
+        ok_parts.append(detail)
+if warn_parts:
+    print("warn\t" + "; ".join(warn_parts + ok_parts))
 else:
-    print("ok\t%d result(s), nothing pending" % total)
+    print("ok\t%d result(s), nothing pending" % total + ("; " + "; ".join(ok_parts) if ok_parts else ""))
 PY
 )"
   tab=$'\t'

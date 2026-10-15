@@ -887,9 +887,10 @@ assert_eq "$rc" "0" "--dry-run is allowed on a non-writer host (it writes nothin
 echo "--- doctor ingest ---"
 run "$MNEMON" --instance t doctor
 assert_contains "$out" "warn ingest — " "doctor warns about pending ingest results"
-assert_contains "$out" "$(inbox_of all): failed 3" "...per inbox, by state (the inbox named through inbox.json)"
-assert_contains "$out" "$(inbox_of matrix): failed 8" "...every inbox with pending results is listed"
+assert_contains "$out" "$(inbox_of all): failed 1, permanent 2 (not retried)" "...per inbox, by state (the inbox named through inbox.json): the retryable failure under failed, the contract and invalid-request failures apart as permanent"
+assert_contains "$out" "$(inbox_of matrix): failed 3, permanent 5 (not retried)" "...every inbox with pending results is listed, permanent ones counted apart"
 assert_not_contains "$out" "$(inbox_of repl)" "...an inbox whose results are all terminal is not"
+assert_contains "$out" "$(inbox_of retryp): permanent 1 (not retried)" "...an inbox with only a permanent failure appears in the detail without raising the status"
 assert_contains "$out" "ok vault-state — $VSTATE" "doctor: the vault state dir is ok (0700)"
 
 cd /
