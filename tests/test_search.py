@@ -206,6 +206,16 @@ class ParseFrontmatterTests(unittest.TestCase):
         )
         self.assertEqual(search.parse_frontmatter(p)["domains"], ["career", "mc/ai", "learning"])
 
+    def test_block_list_unindented_items(self):
+        # Valid YAML: sequence items at the key's own column.
+        p = self._write(
+            "---\ntitle: Test\ndomains:\n- career\n- learning\nrating: 7\ntags:\n- one\n---\n\nbody\n"
+        )
+        meta = search.parse_frontmatter(p)
+        self.assertEqual(meta["domains"], ["career", "learning"])
+        self.assertEqual(meta["rating"], 7)
+        self.assertEqual(meta["tags"], ["one"])
+
     def test_block_list_followed_by_more_keys(self):
         p = self._write(
             "---\ntitle: Test\ntags:\n  - one\n  - two\nrating: 8\n---\n\nbody\n"
@@ -394,6 +404,14 @@ class DedupeByFolderTests(unittest.TestCase):
             {"path": "X/", "tier": "synthesis", "title": "syn"},
         ]
         self.assertEqual(search.dedupe_by_folder(results)[0]["tier"], "synthesis")
+
+    def test_synthesis_notes_in_one_folder_are_distinct(self):
+        results = [
+            {"path": "Synthesis/", "file": "a.md", "tier": "synthesis", "title": "a", "rating": 3},
+            {"path": "Synthesis/", "file": "b.md", "tier": "synthesis", "title": "b", "rating": 9},
+        ]
+        deduped = search.dedupe_by_folder(results)
+        self.assertEqual(sorted(r["file"] for r in deduped), ["a.md", "b.md"])
 
 
 # ---------------------------------------------------------------------------
@@ -584,13 +602,41 @@ class EndToEndTests(TempVaultMixin, unittest.TestCase):
         self.assertEqual(self._run("--query", "unique-raw-marker")["count"], 0)
         out_with = self._run("--query", "unique-raw-marker", "--include-source")
         self.assertEqual(out_with["count"], 1)
-        self.assertEqual(out_with["results"][0]["tier"], "source")
+        hit = out_with["results"][0]
+        self.assertEqual(hit["tier"], "source")
+        self.assertEqual(hit["file"], "source.md")
+        # metadata comes from the paired extract; the snippet from the raw file
+        self.assertEqual(hit["title"], "Paired extract")
+        self.assertEqual(hit["domains"], ["career"])
+        self.assertEqual(hit["rating"], 5)
+        self.assertIn("unique-raw-marker", hit["snippet"])
+
+    def test_source_hit_passes_the_domain_filter_of_its_extract(self):
+        out = self._run("--query", "unique-raw-marker", "--include-source", "--domain", "career")
+        self.assertEqual(out["count"], 1)
+        self.assertEqual(self._run("--query", "unique-raw-marker", "--include-source", "--domain", "home")["count"], 0)
+
+    def test_source_without_paired_extract_keeps_its_own_metadata(self):
+        write_source(self.vault / "Sources" / "2026-01-04_ddd", body="lonely-raw-marker here")
+        out = self._run("--query", "lonely-raw-marker", "--include-source")
+        self.assertEqual(out["count"], 1)
+        self.assertEqual(out["results"][0]["title"], "source")
+        self.assertEqual(out["results"][0]["domains"], [])
 
     def test_include_synthesis_flag(self):
         self.assertEqual(self._run("--query", "perspective")["count"], 0)
         out_with = self._run("--query", "perspective", "--include-synthesis")
         self.assertEqual(out_with["count"], 1)
         self.assertEqual(out_with["results"][0]["tier"], "synthesis")
+
+    def test_two_synthesis_notes_in_one_folder_both_returned(self):
+        (self.vault / "Synthesis" / "second-note.md").write_text(
+            "---\ntype: synthesis\ntitle: Second note\nrating: 9\n---\n\nAnother perspective on alpha.\n",
+            encoding="utf-8",
+        )
+        out = self._run("--query", "perspective", "--include-synthesis")
+        self.assertEqual(out["count"], 2)
+        self.assertEqual([r["title"] for r in out["results"]], ["Second note", "My own note"])
 
     def test_domain_filter_end_to_end(self):
         out = self._run("--query", "alpha", "--domain", "career")

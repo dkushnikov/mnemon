@@ -130,7 +130,12 @@ def parse_frontmatter_text(block: str) -> dict:
                 j += 1
                 continue
             if cont[0] not in " \t":
-                break
+                # YAML allows a block sequence at the key's own indentation:
+                # `domains:` followed by `- career` at column zero.
+                if not nested and (cont.startswith("- ") or cont.rstrip() == "-"):
+                    pass
+                else:
+                    break
             s = cont.strip()
             if s == "-":
                 items.append("")
@@ -268,6 +273,17 @@ def _extract_snippet(text: str, tokens: list[str], width: int = 200) -> str | No
 
 def assemble_result(path: Path, tier: str, snippet: str | None, vault: Path) -> dict:
     meta = parse_frontmatter(path)
+    if tier == "source":
+        # source.md carries capture metadata only (no title/domains/rating);
+        # the paired extract.md has the curated fields. Keep the raw file's
+        # snippet and tier, take metadata from the extract where it has any.
+        paired = path.with_name("extract.md")
+        if paired.is_file():
+            merged = dict(meta)
+            for key, value in parse_frontmatter(paired).items():
+                if value not in (None, "", []):
+                    merged[key] = value
+            meta = merged
     # folder path relative to vault (e.g. Sources/2026-04-04_5c78d63f/)
     try:
         rel = path.relative_to(vault)
@@ -318,11 +334,18 @@ def apply_domain_filter(results: list[dict], domain: str) -> list[dict]:
 
 
 def dedupe_by_folder(results: list[dict]) -> list[dict]:
-    """If both extract.md and source.md match the same folder, keep extract.md."""
+    """If both extract.md and source.md match the same folder, keep extract.md.
+
+    Sources/<folder>/ holds one source, so extract and source results share the
+    folder key. Synthesis notes are plain files — several in one folder are
+    distinct results — so they are keyed by folder + file name.
+    """
     by_folder: dict[str, dict] = {}
     tier_priority = {"extract": 0, "synthesis": 1, "source": 2}
     for r in results:
         key = r["path"]
+        if r["tier"] == "synthesis":
+            key = key + r.get("file", "")
         if key not in by_folder:
             by_folder[key] = r
             continue
