@@ -1,0 +1,187 @@
+{
+ "_notes": [
+  "argv = arguments after `mnemon add`; placeholders: <envelope_id>, <fidelity> (the envelope's fidelity),",
+  "<context> (the resolved context: request.context or the instance default `personal`),",
+  "<snapshot:REL> (absolute path of the payload snapshot under the ingest state dir),",
+  "<revision:NAME> (the `revision` recorded in NAME's result record).",
+  "Optional flags appear only when the request field is non-empty, in the order: --title --author --intent --source-type.",
+  "The order of the fixed part is normative; tests compare argv as lists."
+ ],
+ "cases": {
+  "text-plain": {
+   "argv": [
+    "--origin",
+    "text",
+    "--capture-id",
+    "<envelope_id>",
+    "--import-source",
+    "test-producer",
+    "--import-ref",
+    "<envelope_id>",
+    "--producer-fidelity",
+    "<fidelity>",
+    "--context",
+    "<context>",
+    "--title",
+    "Plain T",
+    "--author",
+    "A. Author",
+    "--intent",
+    "why"
+   ],
+   "context": "personal",
+   "stdin_sha256": "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+   "stdin_bytes": 14
+  },
+  "text-with-url": {
+   "argv": [
+    "--origin",
+    "text",
+    "--url",
+    "https://example.com/post",
+    "--capture-id",
+    "<envelope_id>",
+    "--import-source",
+    "test-producer",
+    "--import-ref",
+    "<envelope_id>",
+    "--producer-fidelity",
+    "<fidelity>",
+    "--context",
+    "<context>"
+   ],
+   "context": "personal",
+   "stdin_sha256": "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+   "stdin_bytes": 14
+  },
+  "url-auto": {
+   "argv": [
+    "--url",
+    "https://example.com/article",
+    "--capture-id",
+    "<envelope_id>",
+    "--import-source",
+    "test-producer",
+    "--import-ref",
+    "<envelope_id>",
+    "--producer-fidelity",
+    "<fidelity>",
+    "--context",
+    "<context>",
+    "--intent",
+    "read later"
+   ],
+   "context": "personal",
+   "stdin_sha256": null,
+   "stdin_bytes": 0
+  },
+  "url-explicit": {
+   "argv": [
+    "--origin",
+    "url",
+    "--url",
+    "https://example.com/explicit",
+    "--capture-id",
+    "<envelope_id>",
+    "--import-source",
+    "test-producer",
+    "--import-ref",
+    "<envelope_id>",
+    "--producer-fidelity",
+    "<fidelity>",
+    "--context",
+    "<context>",
+    "--source-type",
+    "article"
+   ],
+   "context": "personal",
+   "stdin_sha256": null,
+   "stdin_bytes": 0
+  },
+  "file-pdf": {
+   "argv": [
+    "--file",
+    "<snapshot:attachments/file-pdf/paper.pdf>",
+    "--capture-id",
+    "<envelope_id>",
+    "--import-source",
+    "test-producer",
+    "--import-ref",
+    "<envelope_id>",
+    "--producer-fidelity",
+    "<fidelity>",
+    "--context",
+    "<context>",
+    "--title",
+    "Paper"
+   ],
+   "context": "personal",
+   "stdin_sha256": null,
+   "stdin_bytes": 0
+  },
+  "file-origin-audio": {
+   "argv": [
+    "--origin",
+    "audio",
+    "--file",
+    "<snapshot:attachments/file-origin-audio/a.wav>",
+    "--url",
+    "https://example.com/ep.wav",
+    "--capture-id",
+    "<envelope_id>",
+    "--import-source",
+    "test-producer",
+    "--import-ref",
+    "<envelope_id>",
+    "--producer-fidelity",
+    "<fidelity>",
+    "--context",
+    "<context>"
+   ],
+   "context": "personal",
+   "stdin_sha256": null,
+   "stdin_bytes": 0
+  },
+  "context-undeclared": {
+   "argv": [
+    "--origin",
+    "text",
+    "--capture-id",
+    "<envelope_id>",
+    "--import-source",
+    "test-producer",
+    "--import-ref",
+    "<envelope_id>",
+    "--producer-fidelity",
+    "<fidelity>",
+    "--context",
+    "<context>"
+   ],
+   "context": "mc",
+   "stdin_sha256": "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+   "stdin_bytes": 14
+  },
+  "text-plain~2": {
+   "argv": [
+    "--origin",
+    "text",
+    "--capture-id",
+    "<envelope_id>",
+    "--import-source",
+    "test-producer",
+    "--import-ref",
+    "<envelope_id>",
+    "--producer-fidelity",
+    "<fidelity>",
+    "--context",
+    "<context>",
+    "--recapture",
+    "--supersedes",
+    "<revision:text-plain>"
+   ],
+   "context": "personal",
+   "stdin_sha256": "252e502db2c449b2f59472fde3e9c35bae976c1902b8a1394f783c95fed49dcb",
+   "stdin_bytes": 21
+  }
+ }
+}

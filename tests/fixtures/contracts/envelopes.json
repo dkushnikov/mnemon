@@ -1,0 +1,720 @@
+[
+ {
+  "name": "text-plain",
+  "file": "test-producer:text-plain.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:text-plain",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": null,
+    "url": null,
+    "title": "Plain T",
+    "author": "A. Author",
+    "intent": "why",
+    "context": "personal",
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "text",
+    "text": "hello\r\n\nworld\n",
+    "path": null,
+    "media_type": "text/plain",
+    "sha256": "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+    "bytes": 14
+   },
+   "fidelity": "exact",
+   "provenance": {
+    "fixture": "text-plain"
+   },
+   "complete": true
+  },
+  "payload_files": {},
+  "note": "text payload, no url → --origin text, stdin = text bytes"
+ },
+ {
+  "name": "text-with-url",
+  "file": "test-producer:text-with-url.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:text-with-url",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": null,
+    "url": "https://example.com/post",
+    "title": null,
+    "author": null,
+    "intent": null,
+    "context": "personal",
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "text",
+    "text": "hello\r\n\nworld\n",
+    "path": null,
+    "media_type": "text/plain",
+    "sha256": "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+    "bytes": 14
+   },
+   "fidelity": "exact",
+   "provenance": {
+    "fixture": "text-with-url"
+   },
+   "complete": true
+  },
+  "payload_files": {},
+  "note": "text + provenance url → --origin text --url; the gateway never fetches"
+ },
+ {
+  "name": "text-origin-url-invalid",
+  "file": "test-producer:text-origin-url-invalid.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:text-origin-url-invalid",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": "url",
+    "url": "https://example.com/x",
+    "title": null,
+    "author": null,
+    "intent": null,
+    "context": null,
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "text",
+    "text": "hello\r\n\nworld\n",
+    "path": null,
+    "media_type": "text/plain",
+    "sha256": "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+    "bytes": 14
+   },
+   "fidelity": "exact",
+   "provenance": {
+    "fixture": "text-origin-url-invalid"
+   },
+   "complete": true
+  },
+  "payload_files": {},
+  "note": "text payload with origin url → invalid-request, permanent"
+ },
+ {
+  "name": "url-auto",
+  "file": "test-producer:url-auto.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:url-auto",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": null,
+    "url": "https://example.com/article",
+    "title": null,
+    "author": null,
+    "intent": "read later",
+    "context": null,
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "none",
+    "text": null,
+    "path": null,
+    "media_type": null,
+    "sha256": null,
+    "bytes": 0
+   },
+   "fidelity": "url-only",
+   "provenance": {
+    "fixture": "url-auto"
+   },
+   "complete": true
+  },
+  "payload_files": {},
+  "note": "kind none + url, origin null → --url only; the gateway auto-detects"
+ },
+ {
+  "name": "url-explicit",
+  "file": "test-producer:url-explicit.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:url-explicit",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": "url",
+    "url": "https://example.com/explicit",
+    "title": null,
+    "author": null,
+    "intent": null,
+    "context": null,
+    "source_type": "article",
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "none",
+    "text": null,
+    "path": null,
+    "media_type": null,
+    "sha256": null,
+    "bytes": 0
+   },
+   "fidelity": "url-only",
+   "provenance": {
+    "fixture": "url-explicit"
+   },
+   "complete": true
+  },
+  "payload_files": {},
+  "note": "kind none + origin url → --origin url --url --source-type"
+ },
+ {
+  "name": "none-no-url",
+  "file": "test-producer:none-no-url.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:none-no-url",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": null,
+    "url": null,
+    "title": null,
+    "author": null,
+    "intent": null,
+    "context": null,
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "none",
+    "text": null,
+    "path": null,
+    "media_type": null,
+    "sha256": null,
+    "bytes": 0
+   },
+   "fidelity": "url-only",
+   "provenance": {
+    "fixture": "none-no-url"
+   },
+   "complete": true
+  },
+  "payload_files": {},
+  "note": "nothing to capture → needs_input"
+ },
+ {
+  "name": "file-pdf",
+  "file": "test-producer:file-pdf.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:file-pdf",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": null,
+    "url": null,
+    "title": "Paper",
+    "author": null,
+    "intent": null,
+    "context": null,
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "file",
+    "text": null,
+    "path": "attachments/file-pdf/paper.pdf",
+    "media_type": "application/pdf",
+    "sha256": "dcd498d39e609ba89482d59eaf55f3263bad1d6ba6f0b1739bf9a2806ffaa448",
+    "bytes": 83
+   },
+   "fidelity": "exact",
+   "provenance": {
+    "fixture": "file-pdf"
+   },
+   "complete": true
+  },
+  "payload_files": {
+   "attachments/file-pdf/paper.pdf": "255044462d312e370a25e2e3cfd30a312030206f626a203c3c202f54797065202f436174616c6f67203e3e20656e646f626a0a747261696c6572203c3c202f526f6f74203120302052203e3e0a2525454f460a"
+  },
+  "note": "file payload, origin null → --file <snapshot>; origin auto by the gateway"
+ },
+ {
+  "name": "file-origin-audio",
+  "file": "test-producer:file-origin-audio.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:file-origin-audio",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": "audio",
+    "url": "https://example.com/ep.wav",
+    "title": null,
+    "author": null,
+    "intent": null,
+    "context": null,
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "file",
+    "text": null,
+    "path": "attachments/file-origin-audio/a.wav",
+    "media_type": "audio/wav",
+    "sha256": "9878fd042e4124150308eba31b44fbc25366c7ee4c0f164e0d69e226e9079ad4",
+    "bytes": 40
+   },
+   "fidelity": "exact",
+   "provenance": {
+    "fixture": "file-origin-audio"
+   },
+   "complete": true
+  },
+  "payload_files": {
+   "attachments/file-origin-audio/a.wav": "524946462400000057415645666d7420000000000000000000000000000000000000000000000000"
+  },
+  "note": "file payload + origin audio → --origin audio --file <snapshot> --url (provenance)"
+ },
+ {
+  "name": "wrong-instance",
+  "file": "test-producer:wrong-instance.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:wrong-instance",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "other",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": null,
+    "url": null,
+    "title": null,
+    "author": null,
+    "intent": null,
+    "context": null,
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "text",
+    "text": "hello\r\n\nworld\n",
+    "path": null,
+    "media_type": "text/plain",
+    "sha256": "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+    "bytes": 14
+   },
+   "fidelity": "exact",
+   "provenance": {
+    "fixture": "wrong-instance"
+   },
+   "complete": true
+  },
+  "payload_files": {},
+  "note": "not ours → other-instance, untouched"
+ },
+ {
+  "name": "broken-schema",
+  "file": "test-producer:broken-schema.json",
+  "envelope": {
+   "schema": "nope/9",
+   "envelope_id": "test-producer:broken-schema",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": null,
+    "url": null,
+    "title": null,
+    "author": null,
+    "intent": null,
+    "context": null,
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "text",
+    "text": "hello\r\n\nworld\n",
+    "path": null,
+    "media_type": "text/plain",
+    "sha256": "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+    "bytes": 14
+   },
+   "fidelity": "exact",
+   "provenance": {
+    "fixture": "broken-schema"
+   },
+   "complete": true
+  },
+  "payload_files": {},
+  "note": "→ quarantined"
+ },
+ {
+  "name": "conflict-copy",
+  "file": "test-producer:conflict-copy.sync-conflict-20261015-120000-ABCDEFG.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:conflict-copy",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": null,
+    "url": null,
+    "title": null,
+    "author": null,
+    "intent": null,
+    "context": null,
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "text",
+    "text": "hello\r\n\nworld\n",
+    "path": null,
+    "media_type": "text/plain",
+    "sha256": "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+    "bytes": 14
+   },
+   "fidelity": "exact",
+   "provenance": {
+    "fixture": "conflict-copy"
+   },
+   "complete": true
+  },
+  "payload_files": {},
+  "note": "sync conflict copy → quarantined, never processed"
+ },
+ {
+  "name": "path-escape",
+  "file": "test-producer:path-escape.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:path-escape",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": null,
+    "url": null,
+    "title": null,
+    "author": null,
+    "intent": null,
+    "context": null,
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "file",
+    "text": null,
+    "path": "../../etc/passwd",
+    "media_type": "text/plain",
+    "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+    "bytes": 1
+   },
+   "fidelity": "exact",
+   "provenance": {
+    "fixture": "path-escape"
+   },
+   "complete": true
+  },
+  "payload_files": {},
+  "note": "→ quarantined (path)"
+ },
+ {
+  "name": "sha-mismatch",
+  "file": "test-producer:sha-mismatch.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:sha-mismatch",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": null,
+    "url": null,
+    "title": null,
+    "author": null,
+    "intent": null,
+    "context": null,
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "text",
+    "text": "hello\r\n\nworld\n",
+    "path": null,
+    "media_type": "text/plain",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "bytes": 14
+   },
+   "fidelity": "exact",
+   "provenance": {
+    "fixture": "sha-mismatch"
+   },
+   "complete": true
+  },
+  "payload_files": {},
+  "note": "→ quarantined / payload-mismatch"
+ },
+ {
+  "name": "bookmark",
+  "file": "test-producer:bookmark.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:bookmark",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": null,
+    "url": null,
+    "title": null,
+    "author": null,
+    "intent": null,
+    "context": null,
+    "source_type": null,
+    "tier": "bookmark"
+   },
+   "payload": {
+    "kind": "text",
+    "text": "hello\r\n\nworld\n",
+    "path": null,
+    "media_type": "text/plain",
+    "sha256": "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+    "bytes": 14
+   },
+   "fidelity": "exact",
+   "provenance": {
+    "fixture": "bookmark"
+   },
+   "complete": true
+  },
+  "payload_files": {},
+  "note": "→ unsupported (D12)"
+ },
+ {
+  "name": "incomplete",
+  "file": "test-producer:incomplete.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:incomplete",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": null,
+    "url": null,
+    "title": null,
+    "author": null,
+    "intent": null,
+    "context": null,
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "text",
+    "text": "hello\r\n\nworld\n",
+    "path": null,
+    "media_type": "text/plain",
+    "sha256": "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+    "bytes": 14
+   },
+   "fidelity": "exact",
+   "provenance": {
+    "fixture": "incomplete"
+   },
+   "complete": false
+  },
+  "payload_files": {},
+  "note": "complete:false → quarantined"
+ },
+ {
+  "name": "context-undeclared",
+  "file": "test-producer:context-undeclared.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:context-undeclared",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": null,
+   "request": {
+    "origin": null,
+    "url": null,
+    "title": null,
+    "author": null,
+    "intent": null,
+    "context": "mc",
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "text",
+    "text": "hello\r\n\nworld\n",
+    "path": null,
+    "media_type": "text/plain",
+    "sha256": "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+    "bytes": 14
+   },
+   "fidelity": "exact",
+   "provenance": {
+    "fixture": "context-undeclared"
+   },
+   "complete": true
+  },
+  "payload_files": {},
+  "note": "gateway exit 2 → failed/contract, permanent"
+ },
+ {
+  "name": "text-plain~2",
+  "file": "test-producer:text-plain~2.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:text-plain~2",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": "test-producer:text-plain",
+   "request": {
+    "origin": null,
+    "url": null,
+    "title": null,
+    "author": null,
+    "intent": null,
+    "context": "personal",
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "text",
+    "text": "hello\r\n\nworld\nedited\n",
+    "path": null,
+    "media_type": "text/plain",
+    "sha256": "252e502db2c449b2f59472fde3e9c35bae976c1902b8a1394f783c95fed49dcb",
+    "bytes": 21
+   },
+   "fidelity": "exact",
+   "provenance": {
+    "fixture": "text-plain~2"
+   },
+   "complete": true
+  },
+  "payload_files": {},
+  "note": "re-capture → --recapture --supersedes <revision:text-plain>"
+ }
+]

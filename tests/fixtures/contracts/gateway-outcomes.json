@@ -1,0 +1,177 @@
+{
+ "_notes": [
+  "Scenario → what a stub gateway returns (exit, stdout lines) and the ingest result it must produce.",
+  "`attempt_consumed` false means attempts stays unchanged and the item is `waiting`."
+ ],
+ "scenarios": {
+  "extracted": {
+   "exit": 0,
+   "stdout": [
+    "RESULT:capture_id=<envelope_id>",
+    "RESULT:revision=2026-10-15_aaaaaaaa",
+    "RESULT:path=Sources/2026-10-15_aaaaaaaa/",
+    "RESULT:status=extracted",
+    "RESULT:title=Plain T",
+    "RESULT:source_sha256=35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+    "RESULT:extract=ok",
+    "RESULT:error_class=",
+    "RESULT:retryable="
+   ],
+   "state": "captured",
+   "duplicate": false,
+   "revision": "2026-10-15_aaaaaaaa",
+   "attempt_consumed": true
+  },
+  "duplicate": {
+   "exit": 0,
+   "stdout": [
+    "RESULT:capture_id=<envelope_id>",
+    "RESULT:revision=2026-10-12_aaaaaaaa",
+    "RESULT:path=Sources/2026-10-12_aaaaaaaa/",
+    "RESULT:status=skipped-duplicate",
+    "RESULT:title=",
+    "RESULT:source_sha256=",
+    "RESULT:extract=ok",
+    "RESULT:error_class=",
+    "RESULT:retryable="
+   ],
+   "state": "captured",
+   "duplicate": true,
+   "attempt_consumed": true
+  },
+  "exit0-malformed": {
+   "exit": 0,
+   "stdout": [
+    "Added something"
+   ],
+   "state": "failed",
+   "error_class": "malformed-result",
+   "retryable": true,
+   "attempt_consumed": true
+  },
+  "exit4-transient": {
+   "exit": 4,
+   "stdout": [
+    "RESULT:capture_id=<envelope_id>",
+    "RESULT:revision=2026-10-15_aaaaaaaa",
+    "RESULT:path=Sources/2026-10-15_aaaaaaaa/",
+    "RESULT:status=captured",
+    "RESULT:title=",
+    "RESULT:source_sha256=35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+    "RESULT:extract=missing",
+    "RESULT:error_class=transient",
+    "RESULT:retryable=true"
+   ],
+   "state": "failed",
+   "error_class": "transient",
+   "retryable": true,
+   "next_attempt_at": "future",
+   "attempt_consumed": true
+  },
+  "exit4-permanent": {
+   "exit": 4,
+   "stdout": [
+    "RESULT:capture_id=<envelope_id>",
+    "RESULT:revision=2026-10-15_aaaaaaaa",
+    "RESULT:path=Sources/2026-10-15_aaaaaaaa/",
+    "RESULT:status=captured",
+    "RESULT:title=",
+    "RESULT:source_sha256=35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+    "RESULT:extract=invalid",
+    "RESULT:error_class=invalid-output",
+    "RESULT:retryable=false"
+   ],
+   "state": "failed",
+   "error_class": "invalid-output",
+   "retryable": false,
+   "attempt_consumed": true
+  },
+  "exit1-fetch": {
+   "exit": 1,
+   "stdout": [
+    "RESULT:capture_id=<envelope_id>",
+    "RESULT:status=failed",
+    "RESULT:error_class=fetch",
+    "RESULT:retryable=true"
+   ],
+   "state": "failed",
+   "error_class": "fetch",
+   "retryable": true,
+   "attempt_consumed": true
+  },
+  "exit1-unsupported": {
+   "exit": 1,
+   "stdout": [
+    "RESULT:capture_id=<envelope_id>",
+    "RESULT:status=failed",
+    "RESULT:error_class=unsupported",
+    "RESULT:retryable=false"
+   ],
+   "state": "failed",
+   "error_class": "unsupported",
+   "retryable": false,
+   "attempt_consumed": true
+  },
+  "exit2-contract": {
+   "exit": 2,
+   "stdout": [],
+   "stderr": "ERROR: context 'mc' is not declared in charter (declared: personal)",
+   "state": "failed",
+   "error_class": "contract",
+   "retryable": false,
+   "attempt_consumed": true
+  },
+  "exit3-environment": {
+   "exit": 3,
+   "stdout": [],
+   "state": "waiting",
+   "error_class": "environment",
+   "attempt_consumed": false
+  },
+  "exit75-locked": {
+   "exit": 75,
+   "stdout": [],
+   "state": "waiting",
+   "error_class": "locked",
+   "attempt_consumed": false
+  },
+  "timeout": {
+   "exit": null,
+   "sleep": 5,
+   "stdout": [],
+   "state": "failed",
+   "error_class": "timeout",
+   "retryable": true,
+   "attempt_consumed": true
+  },
+  "other-exit": {
+   "exit": 9,
+   "stdout": [],
+   "state": "failed",
+   "error_class": "unknown-exit",
+   "retryable": true,
+   "attempt_consumed": true
+  }
+ },
+ "default_scenario_by_case": {
+  "text-plain": "extracted",
+  "text-with-url": "extracted",
+  "url-auto": "extracted",
+  "url-explicit": "duplicate",
+  "file-pdf": "extracted",
+  "file-origin-audio": "exit4-transient",
+  "context-undeclared": "exit2-contract",
+  "text-plain~2": "extracted"
+ },
+ "expected_without_gateway": {
+  "text-origin-url-invalid": "failed/invalid-request",
+  "none-no-url": "needs_input",
+  "wrong-instance": "other-instance",
+  "broken-schema": "quarantined",
+  "conflict-copy": "quarantined",
+  "path-escape": "quarantined",
+  "sha-mismatch": "quarantined/payload-mismatch",
+  "bookmark": "unsupported",
+  "incomplete": "quarantined"
+ }
+}
