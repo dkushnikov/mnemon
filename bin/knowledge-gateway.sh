@@ -831,8 +831,9 @@ case "$ACTION" in
     rc=0
     cap_main || rc=$?
     # Post-success hook: keep the qmd index fresh — its own index outside the vault, so it may
-    # run in the background; the inherited lock descriptor is closed there first so the
-    # background job never keeps the vault lock (D15).
+    # run in the background; the inherited lock descriptor is closed and the MNEMON_VAULT_LOCK_*
+    # variables scrubbed there first, so the background job never keeps the vault lock (D15,
+    # §12 A1/A8).
     if [[ $rc -eq 0 && "$SEARCH_PROVIDER" == "qmd" ]] && ! $DRY_RUN && command -v qmd >/dev/null 2>&1; then
       (cap_release_inherited_fd; qmd update >/dev/null 2>&1 && qmd embed >/dev/null 2>&1) &
       disown 2>/dev/null || true

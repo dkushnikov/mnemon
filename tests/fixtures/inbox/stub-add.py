@@ -71,8 +71,7 @@ def main() -> int:
         probe = os.open(lock_path, os.O_RDWR)
         try:
             fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            fcntl.flock(probe, fcntl.LOCK_UN)
-            lock_held = False
+            lock_held = False  # the private probe descriptor is closed below, which releases it
         except OSError:
             lock_held = True
         finally:

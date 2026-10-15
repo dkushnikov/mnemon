@@ -26,11 +26,16 @@
 #   staged directory Sources/.<revision>.staging-<pid>/; Sources/<revision>/.extract.md.tmp is the
 #   publisher's staging name. _inputs/pending-writes/ is no longer written.
 #
-# ─── Lock check (D10, §3.5) ─────────────────────────────────────────────────────────────────────
-#   A process is under the vault lock iff MNEMON_VAULT_LOCK_FD is set and
-#   os.fstat(fd).st_ino == MNEMON_VAULT_LOCK_INODE (the inherited descriptor is open on this
-#   vault's lock file). `cap_under_lock` is that check (one python call); on a miss the gateway
-#   re-execs itself through bin/vault-lock.py (`cap_reexec_under_lock`) unless --dry-run.
+# ─── Lock check (D10, §3.5, §12 A1) ─────────────────────────────────────────────────────────────
+#   A process is under the vault lock iff MNEMON_VAULT_LOCK_FD names a descriptor whose fstat has
+#   the (st_dev, st_ino) of THIS vault's lock file ($MNEMON_VAULT_STATE_DIR/lock) and re-asserting
+#   flock(LOCK_EX | LOCK_NB) on it succeeds (a no-op on the description that holds the lock;
+#   EWOULDBLOCK = another description holds it → exit 75). The exported inode is a hint, not the
+#   proof; a descriptor for another vault never passes. `cap_under_lock` is that check (one python
+#   call); on a miss the gateway re-execs itself through bin/vault-lock.py
+#   (`cap_reexec_under_lock`) unless --dry-run. Nothing here ever calls LOCK_UN or replaces the
+#   lock file; children that must not hold the lock (claude via extract-run.py, the background qmd
+#   refresh, media-extract.py) get the descriptor closed and the two variables scrubbed.
 #
 # ─── Canonical request (§3.1) ───────────────────────────────────────────────────────────────────
 #   mnemon-request/1 = {"schema","origin","resource_kind","resource_key","input_sha256"|null,
@@ -106,10 +111,18 @@ def fsync_dir(p):
     except OSError:
         pass
 if cmd == "under-lock":
+    import errno, fcntl
     try:
-        sys.exit(0 if os.fstat(int(a[0])).st_ino == int(a[1]) else 1)
+        fd = int(a[0]); st = os.fstat(fd); on_disk = os.stat(a[1])
     except (OSError, ValueError):
         sys.exit(1)
+    if (st.st_dev, st.st_ino) != (on_disk.st_dev, on_disk.st_ino):
+        sys.exit(1)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        sys.exit(75 if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN) else 1)
+    sys.exit(0)
 elif cmd == "fsync-file":
     fsync_path(a[0])
 elif cmd == "fsync-rename":
@@ -231,20 +244,38 @@ cap_state_init() {
   chmod 700 "$CAP_STATE" "$CAPTURES_DIR" "$RUNS_DIR" "$STATE_RAW_DIR" 2>/dev/null || true
 }
 
+# The §12 A1 proof (see the header): 0 = under this vault's lock; 1 = no proof (acquire); and a
+# descriptor open on this lock file whose re-asserted flock is refused means another description
+# holds the lock → exit 75 right here, nothing acquired, nothing written.
 cap_under_lock() {
-  [[ -n "${MNEMON_VAULT_LOCK_FD:-}" && -n "${MNEMON_VAULT_LOCK_INODE:-}" ]] || return 1
-  cap_py under-lock "$MNEMON_VAULT_LOCK_FD" "$MNEMON_VAULT_LOCK_INODE"
+  [[ -n "${MNEMON_VAULT_LOCK_FD:-}" ]] || return 1
+  local st=0
+  cap_py under-lock "$MNEMON_VAULT_LOCK_FD" "$MNEMON_VAULT_STATE_DIR/lock" || st=$?
+  case "$st" in
+    0)  return 0 ;;
+    75) echo "ERROR: another writer holds the vault lock ($MNEMON_VAULT_STATE_DIR/lock); retry when it finishes" >&2; exit 75 ;;
+    *)  return 1 ;;
+  esac
 }
 
 cap_reexec_under_lock() {  # <script> <args…>
+  # One re-exec at most: when the descriptor vault-lock.py handed down still fails the proof,
+  # the lock path derivations disagree — a loud exit 2, never a loop.
+  if [[ "${MNEMON_VAULT_LOCK_REEXEC:-}" == "1" ]]; then
+    cap_die2 "started through vault-lock.py, but its descriptor does not prove this vault's lock ($MNEMON_VAULT_STATE_DIR/lock); the lock path derivations disagree"
+  fi
   unset MNEMON_VAULT_LOCK_FD MNEMON_VAULT_LOCK_INODE
+  export MNEMON_VAULT_LOCK_REEXEC=1
   exec python3 "$_LIB_CAPTURE_DIR/vault-lock.py" --vault "$VAULT_PATH" -- "$@"
 }
 
-# Close the inherited lock descriptor in a background subshell so it does not keep the lock.
+# For a background subshell that must not keep the lock alive (the qmd refresh): close the
+# inherited descriptor and scrub the variables (§12 A1, A8). Never LOCK_UN — that would release
+# the lock for every process sharing the description.
 cap_release_inherited_fd() {
   [[ -n "${MNEMON_VAULT_LOCK_FD:-}" ]] || return 0
   eval "exec ${MNEMON_VAULT_LOCK_FD}>&-" 2>/dev/null || true
+  unset MNEMON_VAULT_LOCK_FD MNEMON_VAULT_LOCK_INODE MNEMON_VAULT_LOCK_REEXEC
 }
 
 # ---------------------------------------------------------------------------------------------

@@ -332,7 +332,22 @@ def cmd_audio(args):
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def drop_vault_lock_descriptor() -> None:
+    """§12 A1: this helper never mutates the vault, so it must not keep the vault lock alive through
+    its own subprocesses (yt-dlp, ffmpeg, whisper): close the inherited descriptor and scrub the
+    MNEMON_VAULT_LOCK_* variables before anything is spawned. The gateway keeps its own descriptor."""
+    raw = os.environ.pop("MNEMON_VAULT_LOCK_FD", None)
+    for key in [k for k in os.environ if k.startswith("MNEMON_VAULT_LOCK_")]:
+        os.environ.pop(key, None)
+    if raw:
+        try:
+            os.close(int(raw))
+        except (ValueError, OSError):
+            pass
+
+
 def main():
+    drop_vault_lock_descriptor()
     parser = argparse.ArgumentParser(description="Media extraction for knowledge-gateway")
     sub = parser.add_subparsers(dest="command", required=True)
 

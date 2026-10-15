@@ -351,6 +351,38 @@ assert_eq "$(res locked test-producer:text-plain 'd["state"]')" "captured" "...a
 run "$MNEMON" --instance t doctor
 assert_contains "$out" "ok vault-lock — free ($LOCK)" "doctor: the vault lock is free afterwards"
 
+# --- 7b. the §12 A1 proof: this vault's lock file, re-asserted; another vault's descriptor is none ---
+echo "--- vault lock: the A1 proof ---"
+materialize a1 text-plain
+python3 - "$LOCK" <<'PY' &
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+time.sleep(30)
+PY
+HOLDER=$!
+sleep 0.5
+# a descriptor open on the lock file that holds nothing, while another process holds the lock
+STUB_DIR="$TEST_TMPDIR/stub-a1" run python3 - "$LOCK" "$MNEMON" "$(inbox_of a1)" <<'PY'
+import os, subprocess, sys
+fd = os.open(sys.argv[1], os.O_RDWR)
+os.set_inheritable(fd, True)
+env = dict(os.environ, MNEMON_VAULT_LOCK_FD=str(fd), MNEMON_VAULT_LOCK_INODE=str(os.fstat(fd).st_ino))
+sys.exit(subprocess.run([sys.argv[2], "--instance", "t", "ingest", sys.argv[3]], env=env, pass_fds=(fd,)).returncode)
+PY
+assert_eq "$rc" "75" "a descriptor on the lock file that holds nothing, lock held elsewhere: the re-asserted flock decides → 75"
+assert_contains "$out" "another writer holds the vault lock" "...with the message"
+assert_eq "$(calls a1)" "0" "...nothing dispatched"
+# a descriptor for another vault's lock: acquire this vault's lock afresh
+"$MNEMON" init v2 --vault "$TEST_TMPDIR/vault-v2" --non-interactive >/dev/null 2>&1
+STUB_DIR="$TEST_TMPDIR/stub-a1" run python3 "$MNEMON_ROOT/bin/vault-lock.py" --vault "$TEST_TMPDIR/vault-v2" -- "$MNEMON" --instance t ingest "$(inbox_of a1)"
+assert_eq "$rc" "75" "an ingest started under another vault's lock descriptor acquires this vault's lock itself: 75 while it is held"
+kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null || true
+STUB_DIR="$TEST_TMPDIR/stub-a1" run python3 "$MNEMON_ROOT/bin/vault-lock.py" --vault "$TEST_TMPDIR/vault-v2" -- "$MNEMON" --instance t ingest "$(inbox_of a1)"
+assert_eq "$rc" "0" "...and runs once it is free"
+assert_eq "$(res a1 test-producer:text-plain 'd["state"]')" "captured" "...capturing under its own lock"
+assert_eq "$(call a1 1 'd["lock_held"]')" "True" "...which the stub saw held"
+
 # --- 8. crash injection and recovery (MNEMON_TEST_CRASH_AT) ---------------------------
 echo "--- crash injection ---"
 materialize crash1 text-plain

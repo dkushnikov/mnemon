@@ -22,9 +22,9 @@ Stdout is one word, the class the gateway maps: `ok` (exit 0, result.json parses
 object) · `timeout` · `claude-exit` (non-zero exit; result.json kept for its subtype) ·
 `invalid-json` (exit 0 but no JSON object). Exit status 0 for `ok`, 1 otherwise.
 
-The inherited vault-lock descriptor (MNEMON_VAULT_LOCK_FD, see bin/vault-lock.py) is passed to the
-child on purpose: every process that can touch capture state keeps the kernel lock alive.
-Stdlib only, python 3.9.
+The inherited vault-lock descriptor (MNEMON_VAULT_LOCK_FD, see bin/vault-lock.py) is NOT passed to
+the child and the MNEMON_VAULT_LOCK_* variables are scrubbed from its environment (§12 A1): the
+extractor cannot mutate the vault and must never keep the kernel lock alive. Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
@@ -51,16 +51,9 @@ def shell_line(argv: list) -> str:
     return " ".join(out)
 
 
-def inherited_lock_fd():
-    raw = os.environ.get("MNEMON_VAULT_LOCK_FD")
-    if not raw:
-        return None
-    try:
-        fd = int(raw)
-        os.fstat(fd)
-    except (ValueError, OSError):
-        return None
-    return fd
+def fenced_env() -> dict:
+    """The extractor's environment: everything but the vault lock variables (§12 A1)."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("MNEMON_VAULT_LOCK_")}
 
 
 def group_alive(pgid: int) -> bool:
@@ -132,13 +125,12 @@ def main() -> int:
 
     result_path = os.path.join(attempt, "result.json")
     stderr_path = os.path.join(attempt, "stderr.txt")
-    lock_fd = inherited_lock_fd()
-    pass_fds = (lock_fd,) if lock_fd is not None else ()
-
+    # close_fds (the default) closes the inherited lock descriptor for the child; the environment
+    # loses the MNEMON_VAULT_LOCK_* variables with it (§12 A1).
     with open(args.prompt, "rb") as stdin_fh, open(result_path, "wb") as out_fh, open(stderr_path, "wb") as err_fh:
         try:
             proc = subprocess.Popen(argv, stdin=stdin_fh, stdout=out_fh, stderr=err_fh, cwd=attempt,
-                                    start_new_session=True, pass_fds=pass_fds)
+                                    start_new_session=True, env=fenced_env())
         except OSError as exc:
             err_fh.write(f"extract-run: cannot start {args.claude}: {exc.strerror}\n".encode("utf-8"))
             print("claude-exit")

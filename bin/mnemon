@@ -487,8 +487,8 @@ _doctor_vault_state() {
   fi
 }
 
-# vault-lock — a non-blocking flock probe of <vault state>/lock, released at once;
-# a missing lock file is never created.
+# vault-lock — a non-blocking flock probe of <vault state>/lock on a private descriptor that is
+# closed at once (closing releases it; nothing here calls LOCK_UN); a missing lock file is never created.
 _doctor_vault_lock() {
   local lockf res
   lockf="$(_vault_state_dir)/lock"
@@ -504,7 +504,7 @@ try:
 except OSError:
     print("held")
     sys.exit(0)
-fcntl.flock(fd, fcntl.LOCK_UN)
+os.close(fd)
 print("free")
 PY
 )"
@@ -1253,7 +1253,10 @@ case "$cmd" in
             exec "$BIN_DIR/knowledge-gateway.sh" status "$@" ;;
   search)   if ! _has_flag --vault "$@"; then _resolve_or_die; fi
             exec python3 "$BIN_DIR/mnemon-search.py" "$@" ;;
-  reindex)  _resolve_or_die; exec python3 "$BIN_DIR/knowledge-reindex.py" "$VAULT_PATH" "$@" ;;
+  reindex)  _resolve_or_die
+            # index.md is written inside the vault: a writer, so it runs under the vault lock
+            # (D15, §12 A1) — vault-lock.py acquires it, or proves an inherited descriptor holds it
+            exec python3 "$BIN_DIR/vault-lock.py" --vault "$VAULT_PATH" -- python3 "$BIN_DIR/knowledge-reindex.py" "$VAULT_PATH" "$@" ;;
   triage)   _resolve_or_die; exec python3 "$BIN_DIR/triage-urls.py" --vault "$VAULT_PATH" "$@" ;;
   audit)    _resolve_or_die; exec python3 "$BIN_DIR/archive-audit.py" --config "$MNEMON_CONFIG_FILE" "$@" ;;
   init)     cmd_init "$@" ;;

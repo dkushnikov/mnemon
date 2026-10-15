@@ -41,6 +41,9 @@ echo "$n" > "$STUB_DIR/count"
 printf '%s\n' "$@" > "$STUB_DIR/call-$n.argv"
 pwd > "$STUB_DIR/call-$n.cwd"
 cat > "$STUB_DIR/call-$n.stdin"
+# §12 A1: the vault lock descriptor is closed and its variables scrubbed before claude runs
+if [[ -z "${MNEMON_VAULT_LOCK_FD:-}${MNEMON_VAULT_LOCK_INODE:-}" ]]; then echo unset
+elif [[ -e "/dev/fd/${MNEMON_VAULT_LOCK_FD:-999}" ]]; then echo open; else echo closed; fi > "$STUB_DIR/call-$n.lockfd"
 if [[ -n "${STUB_VAULT:-}" ]]; then
   (shopt -s nullglob; for f in "$STUB_VAULT"/Sources/*/source.md; do echo "$f"; done) > "$STUB_DIR/call-$n.sources"
   (shopt -s nullglob; for d in "$STUB_VAULT"/Sources/.*.staging-*; do echo "$d"; done) > "$STUB_DIR/call-$n.staging"

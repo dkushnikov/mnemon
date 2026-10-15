@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""vault-lock.py — the one vault lock (docs/specs/2026-10-15-capture-contracts.md D10, §3.5).
+"""vault-lock.py — the one vault lock (docs/specs/2026-10-15-capture-contracts.md D10, §3.5, §12 A1).
 
-    vault-lock.py --vault <path> -- <command> [args…]   acquire, then exec the command under the lock
+    vault-lock.py --vault <path> -- <command> [args…]   run the command under the lock
     vault-lock.py --vault <path> --probe                 print `held` or `free` (for `mnemon doctor`)
 
 The lock file is `<vault state>/lock`, where the vault state dir is
@@ -15,17 +15,21 @@ is exec'd (os.execvp) — this process *becomes* the command, so no parent survi
 anything early. Every child that inherits the descriptor keeps the lock alive; the kernel
 releases it only when the last process holding the descriptor exits.
 
-How a process checks that it is already under the lock (the inherited-descriptor rule):
-`MNEMON_VAULT_LOCK_FD` is set and `os.fstat(int(fd)).st_ino == int(MNEMON_VAULT_LOCK_INODE)`
-(the descriptor is open on the lock file, so the lock the kernel attached to it is this vault's
-and is still held). A mismatch — a stale environment, a descriptor that belongs to another vault,
-a number recycled by a shell redirection — means the process is NOT under the lock and must
-acquire on its own. bash does the same check with one python call; bin/lib-capture.sh keeps it as
-`capture_under_lock`. Nothing else is a valid proof: not the presence of the variable, not a pid
-file, not the age of anything.
+Already under the lock (§12 A1) — the proof, applied here before acquiring and by every
+participant (`cap_under_lock` in bin/lib-capture.sh, `inherited_lock_fd` in bin/mnemon-ingest.py):
+`MNEMON_VAULT_LOCK_FD` names a descriptor whose `fstat` has the same `(st_dev, st_ino)` as
+`stat(<vault state of THIS vault>/lock)`, and re-asserting `flock(LOCK_EX | LOCK_NB)` on it
+succeeds — a no-op on the open file description that already holds the lock. `EWOULDBLOCK`
+there means another description holds it → exit 75. A descriptor inherited for another vault,
+a stale environment or a number recycled by a shell redirection fails the stat comparison and
+is no proof: the lock is acquired afresh. The exported inode is a hint for humans, never the
+proof. When the proof holds, the command is exec'd with that same descriptor (kept inheritable)
+and the two variables re-exported — nothing is acquired and nothing is released.
 
-`--probe` takes the lock non-blocking and releases it at once; it never execs and never keeps the
-descriptor. Exit 0 either way; the word on stdout is the answer.
+Participants never call LOCK_UN and never unlink or replace the lock file (unlocking a shared
+description would release it for every descendant); the lock ends when the last descriptor
+closes. `--probe` opens a private descriptor, tries the lock and closes the descriptor at once
+(closing releases whatever it took); it never execs and never keeps anything.
 
 Exit codes: 75 lock held · 2 usage · 126/127 the command could not be exec'd · otherwise the
 command's own status (it replaces this process). Stdlib only, python 3.9.
@@ -50,6 +54,10 @@ def vault_state_dir(vault: str) -> str:
     return os.path.join(state_home, "mnemon", "vaults", hashlib.sha256(phys.encode("utf-8")).hexdigest()[:16])
 
 
+def lock_path(vault: str) -> str:
+    return os.path.join(vault_state_dir(vault), "lock")
+
+
 def ensure_state_dir(path: str) -> None:
     os.makedirs(path, mode=0o700, exist_ok=True)
     try:
@@ -61,8 +69,7 @@ def ensure_state_dir(path: str) -> None:
 def open_lock(vault: str) -> int:
     state = vault_state_dir(vault)
     ensure_state_dir(state)
-    fd = os.open(os.path.join(state, "lock"), os.O_RDWR | os.O_CREAT, 0o600)
-    return fd
+    return os.open(os.path.join(state, "lock"), os.O_RDWR | os.O_CREAT, 0o600)
 
 
 def try_lock(fd: int) -> bool:
@@ -73,6 +80,39 @@ def try_lock(fd: int) -> bool:
             return False
         raise
     return True
+
+
+def inherited_descriptor(path: str):
+    """The §12 A1 proof for the lock file at `path`.
+
+    Returns (fd, True) when the environment's descriptor holds this vault's lock, (fd, False) when
+    the descriptor is open on this lock file but another description holds the lock (EWOULDBLOCK),
+    and (None, False) when the descriptor is no proof at all (unset, closed, another file).
+    """
+    raw = os.environ.get("MNEMON_VAULT_LOCK_FD", "")
+    if not raw:
+        return None, False
+    try:
+        fd = int(raw)
+        st = os.fstat(fd)
+        on_disk = os.stat(path)
+    except (ValueError, OSError):
+        return None, False
+    if (st.st_dev, st.st_ino) != (on_disk.st_dev, on_disk.st_ino):
+        return None, False
+    return fd, try_lock(fd)
+
+
+def keep_descriptor(fd: int) -> None:
+    """Keep the descriptor across exec and tell the command where it is."""
+    flags = fcntl.fcntl(fd, fcntl.F_GETFD)
+    fcntl.fcntl(fd, fcntl.F_SETFD, flags & ~fcntl.FD_CLOEXEC)
+    os.environ["MNEMON_VAULT_LOCK_FD"] = str(fd)
+    os.environ["MNEMON_VAULT_LOCK_INODE"] = str(os.fstat(fd).st_ino)
+
+
+def held_message(vault: str) -> str:
+    return f"vault-lock: another writer holds the vault lock ({lock_path(vault)}); retry when it finishes"
 
 
 def usage(msg: str = "") -> int:
@@ -110,26 +150,23 @@ def main(argv: list) -> int:
     if not probe and not command:
         return usage("a command after -- is required")
 
-    fd = open_lock(vault)
     if probe:
-        if try_lock(fd):
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            print("free")
-        else:
-            print("held")
-        os.close(fd)
+        fd = open_lock(vault)
+        print("free" if try_lock(fd) else "held")
+        os.close(fd)  # a private descriptor: closing it releases what it took; never LOCK_UN
         return 0
 
-    if not try_lock(fd):
-        print(f"vault-lock: another writer holds the vault lock ({os.path.join(vault_state_dir(vault), 'lock')}); "
-              "retry when it finishes", file=sys.stderr)
-        return LOCK_HELD_EXIT
-
-    # Keep the descriptor across exec and tell the command where it is.
-    flags = fcntl.fcntl(fd, fcntl.F_GETFD)
-    fcntl.fcntl(fd, fcntl.F_SETFD, flags & ~fcntl.FD_CLOEXEC)
-    os.environ["MNEMON_VAULT_LOCK_FD"] = str(fd)
-    os.environ["MNEMON_VAULT_LOCK_INODE"] = str(os.fstat(fd).st_ino)
+    fd, held = inherited_descriptor(lock_path(vault))
+    if fd is not None:
+        if not held:
+            print(held_message(vault), file=sys.stderr)
+            return LOCK_HELD_EXIT
+    else:
+        fd = open_lock(vault)
+        if not try_lock(fd):
+            print(held_message(vault), file=sys.stderr)
+            return LOCK_HELD_EXIT
+    keep_descriptor(fd)
     try:
         os.execvp(command[0], command)
     except OSError as exc:

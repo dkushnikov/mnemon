@@ -261,10 +261,17 @@ def parse_result_lines(stdout: str) -> dict:
 # --- the vault lock ---------------------------------------------------------
 
 def inherited_lock_fd(lock_path: str):
-    """The descriptor a parent (vault-lock.py, or an outer ingest) handed down, verified."""
+    """The §12 A1 proof that a parent (vault-lock.py, or an outer ingest) handed down THIS vault's lock.
+
+    MNEMON_VAULT_LOCK_FD must name a descriptor whose fstat has the (st_dev, st_ino) of lock_path,
+    and re-asserting flock(LOCK_EX | LOCK_NB) on it must succeed — a no-op on the open file
+    description that holds the lock. Returns the descriptor; None when it is no proof (unset,
+    closed, another vault's lock: acquire afresh); raises LockHeld when the descriptor is open on
+    this lock file but another description holds the lock (EWOULDBLOCK). The exported inode is a
+    hint for humans, never the proof.
+    """
     fd_text = os.environ.get("MNEMON_VAULT_LOCK_FD", "")
-    ino_text = os.environ.get("MNEMON_VAULT_LOCK_INODE", "")
-    if not fd_text or not ino_text:
+    if not fd_text:
         return None
     try:
         fd = int(fd_text)
@@ -272,7 +279,13 @@ def inherited_lock_fd(lock_path: str):
         on_disk = os.stat(lock_path)
     except (ValueError, OSError):
         return None
-    if str(st.st_ino) != ino_text or st.st_ino != on_disk.st_ino or st.st_dev != on_disk.st_dev:
+    if (st.st_dev, st.st_ino) != (on_disk.st_dev, on_disk.st_ino):
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+            raise LockHeld(lock_path)
         return None
     return fd
 

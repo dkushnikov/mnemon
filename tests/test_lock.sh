@@ -96,6 +96,52 @@ assert_eq "$rc" "0" "a gateway started through vault-lock.py captures under the 
 assert_eq "$(result status)" "extracted" "...extracted"
 
 # ---------------------------------------------------------------------------------------------
+echo "--- A1. the lock proof is this vault's lock file, re-asserted; no child releases it ---"
+# the extractor never sees the descriptor: closed and scrubbed before claude runs
+stub_reset
+run_gw --url "https://example.com/a1-claude" --capture-id a1-claude
+assert_eq "$rc" "0" "a capture for the claude-environment check exits 0"
+assert_eq "$(cat "$STUB_DIR/call-1.lockfd")" "unset" "claude runs without MNEMON_VAULT_LOCK_FD/INODE and without the descriptor"
+# a descriptor for another vault's lock is no proof: the gateway acquires this vault's lock itself
+mkdir -p "$TEST_TMPDIR/other-vault/Sources"
+rc=0; python3 "$LOCK" --vault "$TEST_TMPDIR/other-vault" -- "$GW" source-add --config "$CONFIG" --url "https://example.com/a1-other" --capture-id a1-other </dev/null >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+out="$(cat "$TEST_TMPDIR/run.out")"
+assert_eq "$rc" "0" "started under another vault's lock descriptor: the gateway acquires its own and captures"
+assert_eq "$(result status)" "extracted" "...extracted"
+python3 "$LOCK" --vault "$VAULT" -- sleep 3 & holder=$!
+sleep 0.5
+rc=0; python3 "$LOCK" --vault "$TEST_TMPDIR/other-vault" -- "$GW" source-add --config "$CONFIG" --url "https://example.com/a1-other2" --capture-id a1-other2 </dev/null >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+assert_eq "$rc" "75" "...and gets 75 while this vault's lock is held elsewhere (the other vault's descriptor matched the inode hint, not the proof)"
+[[ -f "$(receipt a1-other2)" ]] && fail "...no receipt on 75" "exists" || pass "...no receipt on 75"
+# a descriptor open on this vault's lock file that holds nothing, with the lock held elsewhere:
+# the stat comparison passes, the re-asserted flock is refused → 75, never "under the lock" by the hint
+rc=0; python3 - "$VSTATE/lock" "$GW" "$CONFIG" <<'PY' >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+import os, subprocess, sys
+fd = os.open(sys.argv[1], os.O_RDWR)
+os.set_inheritable(fd, True)
+env = dict(os.environ, MNEMON_VAULT_LOCK_FD=str(fd), MNEMON_VAULT_LOCK_INODE=str(os.fstat(fd).st_ino))
+sys.exit(subprocess.run([sys.argv[2], "source-add", "--config", sys.argv[3], "--url", "https://example.com/a1-unlocked",
+                         "--capture-id", "a1-unlocked"], env=env, pass_fds=(fd,), stdin=subprocess.DEVNULL).returncode)
+PY
+assert_eq "$rc" "75" "a descriptor on this lock file that holds nothing, lock held elsewhere: the re-asserted flock is refused → 75"
+assert_contains "$(cat "$TEST_TMPDIR/run.err")" "another writer holds the vault lock" "...with the lock message"
+[[ -f "$(receipt a1-unlocked)" ]] && fail "...no receipt on 75" "exists" || pass "...no receipt on 75"
+wait "$holder" 2>/dev/null || true
+# an abnormal child exit releases nothing: the parent's descriptor still holds the lock
+export MNEMON_TEST_HOOKS=1
+python3 "$LOCK" --vault "$VAULT" -- bash -c 'MNEMON_TEST_CRASH_AT=after-source-published "$0" source-add --config "$1" --url https://example.com/a1-crash --capture-id a1-crash </dev/null >"$2/crash.out" 2>"$2/crash.err"; sleep 3' "$GW" "$CONFIG" "$TEST_TMPDIR" &
+parent=$!
+sleep 1.5
+unset MNEMON_TEST_HOOKS
+assert_eq "$(python3 "$LOCK" --vault "$VAULT" --probe)" "held" "a child gateway killed mid-capture: the parent's descriptor still holds the lock"
+run_gw --url "https://example.com/a1-third" --capture-id a1-third
+assert_eq "$rc" "75" "...a third writer gets 75 (no child released the lock)"
+wait "$parent" 2>/dev/null || true
+assert_eq "$(python3 "$LOCK" --vault "$VAULT" --probe)" "free" "...and the lock is free once the parent exits"
+assert_eq "$(rget a1-crash '.state')" "started" "...the crashed capture's receipt is still started (the crash point precedes the receipt update)"
+assert_file_exists "$VAULT/Sources/$(rget a1-crash '.revision')/source.md" "...behind its published source.md"
+
+# ---------------------------------------------------------------------------------------------
 echo "--- 12. timeout ---"
 sed 's/^instance: captest/instance: captest-timeout/; s/^extract_timeout: .*/extract_timeout: 2/' "$CONFIG" > "$TEST_TMPDIR/timeout.yaml"
 marker="mnemon-timeout-marker-$$"
