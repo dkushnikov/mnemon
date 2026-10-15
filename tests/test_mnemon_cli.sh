@@ -365,7 +365,8 @@ assert_contains "$out" "ok writer — writer_host not set" "doctor: ok writer wh
 assert_contains "$out" "ok pending-writes — none" "doctor: ok pending-writes"
 assert_contains "$out" " deps — " "doctor: deps line present"
 assert_contains "$out" " deps-optional — " "doctor: deps-optional line present"
-assert_contains "$out" " deps-python — " "doctor: deps-python line present (pyyaml, requests)"
+assert_contains "$out" " deps-python — " "doctor: deps-python line present (pyyaml)"
+assert_eq "$(printf '%s\n' "$out" | grep ' deps-python — ' | grep -c 'requests' || true)" "0" "doctor: deps-python no longer names requests (capture layer §3.10)"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^fail deps-python' || true)" "0" "doctor: missing python packages warn, never fail"
 fails=$(printf '%s\n' "$out" | grep -c '^fail ' || true)
 depfails=$(printf '%s\n' "$out" | grep -c '^fail deps' || true)
@@ -452,6 +453,83 @@ assert_contains "$out" "warn qmd-collection — not probed (qmd never ran here: 
 assert_eq "$(cat "$QMD_LOG" 2>/dev/null)" "collection list" "...and qmd was not run again"
 run env PATH="/usr/bin:/bin" "$MNEMON" --instance qinst doctor
 assert_contains "$out" "fail qmd — search_provider is qmd but qmd is not installed" "doctor: fail qmd when search_provider is qmd and qmd is missing"
+
+# --- doctor: capture-deps, egress, canonical (capture layer §3.10, §7.15, §12 A12) ---
+echo "--- doctor: capture-deps / egress / canonical (phase 2) ---"
+PY_VER="$(python3 --version 2>&1)"
+echo "  toolchain: $PY_VER ($(command -v python3)) · bash $BASH_VERSION"
+if [[ "$(command -v python3)" == /usr/bin/python3 ]]; then
+  assert_contains "$PY_VER" "Python 3.9." "legacy toolchain: python3 is 3.9.x"
+  assert_contains "$BASH_VERSION" "3.2." "legacy toolchain: bash is 3.2.x"
+fi
+unset FIRECRAWL_API_KEY JINA_API_KEY HTTP_PROXY HTTPS_PROXY
+CSTUB="$TEST_TMPDIR/capstub"; mkdir -p "$CSTUB"
+mk_stub() { printf '#!/bin/sh\n%s\n' "$2" > "$CSTUB/$1"; chmod +x "$CSTUB/$1"; }
+mk_stub defuddle 'echo 0.8.0'
+mk_stub pandoc 'echo "pandoc 3.9.0.2"'
+mk_stub pdftotext 'echo "pdftotext version 26.04.0" >&2'
+mk_stub pdfinfo 'exit 0'
+mk_stub google-chrome 'echo "Google Chrome 130.0.6723.91"'
+run env PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" "ok capture-deps — defuddle 0.8.0 · pandoc 3.9.0.2 · chrome Google Chrome " "doctor: capture-deps ok with versions (defuddle ≥ 0.6, pandoc ≥ 3, Chrome by render-url.sh's candidates)"
+assert_contains "$out" " · poppler 26.04.0" "...and Poppler's version"
+mk_stub defuddle 'echo 0.5.2'
+mk_stub pandoc 'echo "pandoc 2.19.2"'
+rm -f "$CSTUB/pdftotext"
+run env PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" "warn capture-deps — defuddle 0.5.2 (< 0.6 — upgrade: npm install -g defuddle) · pandoc 2.19.2 (< 3 — upgrade: brew install pandoc)" "doctor: capture-deps warns below the version floors"
+assert_contains "$out" " · poppler missing (PDF captures refused: brew install poppler)" "...and on a missing Poppler"
+rm -f "$CSTUB/defuddle" "$CSTUB/pandoc"
+run env PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" "warn capture-deps — defuddle missing (pandoc and the DOM text remain as converters) · pandoc missing (html conversion falls back to the DOM text)" "doctor: capture-deps names missing converters"
+assert_eq "$(printf '%s\n' "$out" | grep -c '^fail capture-deps' || true)" "0" "doctor: capture-deps never fails (every tool is optional)"
+
+run "$MNEMON" doctor
+assert_contains "$out" "ok egress — external_fetch off (never past the local chain); firecrawl: FIRECRAWL_API_KEY not set · jina: JINA_API_KEY not set" "doctor: egress off by default, every fetcher's key reported as not set"
+run env FIRECRAWL_API_KEY=secret-firecrawl-key-123 "$MNEMON" doctor
+assert_contains "$out" "firecrawl: FIRECRAWL_API_KEY set · jina: JINA_API_KEY not set" "doctor: egress reports a set key"
+assert_not_contains "$out" "secret-firecrawl-key-123" "...and never prints the key"
+printf 'external_fetch: auto\n' >> "$CFG_DIR/instances/alpha.yaml"
+run "$MNEMON" doctor
+assert_contains "$out" "warn egress — external_fetch auto but no fetcher has a key (external stage always skipped); firecrawl: FIRECRAWL_API_KEY not set · jina: JINA_API_KEY not set" "doctor: egress auto without any key warns"
+run env JINA_API_KEY=secret-jina-key-456 "$MNEMON" doctor
+assert_contains "$out" "ok egress — external_fetch auto (after direct and rendered fail on a bot wall, a 403 or a JavaScript shell); firecrawl: FIRECRAWL_API_KEY not set · jina: JINA_API_KEY set" "doctor: egress auto with a key is ok"
+assert_not_contains "$out" "secret-jina-key-456" "...key never printed"
+printf 'external_fetchers: jina\n' >> "$CFG_DIR/instances/alpha.yaml"
+run "$MNEMON" doctor
+assert_contains "$out" "; jina: JINA_API_KEY not set" "doctor: egress lists the configured fetchers"
+assert_not_contains "$out" "firecrawl:" "...and only those"
+sed -i.bak '/^external_fetch/d' "$CFG_DIR/instances/alpha.yaml"; rm -f "$CFG_DIR/instances/alpha.yaml.bak"
+
+run "$MNEMON" doctor
+assert_contains "$out" " canonical — canonicalization v1" "doctor: the canonical line names canonicalization v1"
+if [[ -f "$MNEMON_ROOT/bin/capture-fetch.py" ]]; then
+  assert_contains "$out" "ok canonical — canonicalization v1 (capture-fetch.py --canonical-only)" "...answered by capture-fetch.py --canonical-only"
+else
+  assert_contains "$out" "warn canonical — canonicalization v1 expected, but bin/capture-fetch.py is not present" "...warns while the capture layer is absent from this engine"
+fi
+run "$MNEMON" doctor --json
+names=$(printf '%s' "$out" | jget '" ".join(c["name"] for c in d["checks"])')
+assert_contains "$names" "deps-python capture-deps egress canonical" "doctor --json lists the three phase-2 checks after deps-python"
+run "$MNEMON" help
+assert_contains "$out" "audit --canonical" "help lists audit --canonical"
+assert_contains "$out" "reindex [--no-hand-edit-report]" "help lists reindex --no-hand-edit-report"
+
+# --- audit --canonical dispatch: a copy of bin/ with a stub canonical-audit.py (the real one is the capture layer's) ---
+echo "--- audit --canonical dispatch ---"
+ENG="$TEST_TMPDIR/engine"; mkdir -p "$ENG"
+cp -R "$MNEMON_ROOT/bin" "$ENG/bin"
+printf 'import sys\nprint("canonical-audit argv: " + " ".join(sys.argv[1:]))\n' > "$ENG/bin/canonical-audit.py"
+run "$ENG/bin/mnemon" audit --canonical
+assert_eq "$rc" "0" "audit --canonical exits 0 (stub)"
+assert_eq "$out" "canonical-audit argv: --vault $VAULT_A" "audit --canonical runs canonical-audit.py --vault <vault>"
+run "$ENG/bin/mnemon" audit --canonical --json
+assert_eq "$out" "canonical-audit argv: --vault $VAULT_A --json" "...passing the other arguments through"
+run "$ENG/bin/mnemon" --instance beta audit --json --canonical
+assert_eq "$out" "canonical-audit argv: --vault $VAULT_B --json" "...for the selected instance, the flag anywhere"
+run "$ENG/bin/mnemon" audit
+assert_not_contains "$out" "canonical-audit" "plain audit still runs archive-audit.py"
+rm -rf "$ENG"
 
 # --- engine maintenance lock (A3) ---
 echo "--- engine lock ---"
@@ -604,6 +682,17 @@ receipt c-integ integrity-error '"2026-10-15_aaaaaaaa"'
 run "$MNEMON" doctor
 assert_contains "$out" "; 1 integrity-error receipt(s) — a published source.md is missing or was edited (operator: restore it, then replay); 2 receipt(s) point at missing files" "doctor: captures counts integrity-error receipts (A3) as an operator item, apart from the --resume hint"
 rm -rf "$VSTATE_A/captures" "$VAULT_A/Sources/2026-10-15_aaaaaaaa" "$VAULT_A/Sources/2026-10-15_bbbbbbbb"
+# §12 A2 — receipt-independent: a source.md whose header is never closed is malformed-frontmatter
+mkdir -p "$VAULT_A/Sources/2026-10-15_mmmmmmmm" "$VAULT_A/Sources/2026-10-15_nnnnnnnn"
+printf -- '---\ntype: source\nurl: "https://example.com/open"\n' > "$VAULT_A/Sources/2026-10-15_mmmmmmmm/source.md"
+printf -- '---\ntype: source\n---\nbody\n' > "$VAULT_A/Sources/2026-10-15_nnnnnnnn/source.md"
+run "$MNEMON" doctor
+assert_contains "$out" "warn captures — none (no $VSTATE_A/captures yet); 1 malformed-frontmatter folder(s) — source.md header without a closing --- within 256 KB, unreadable to the lookup: 2026-10-15_mmmmmmmm" "doctor: captures lists malformed-frontmatter folders without a ledger (A2)"
+assert_not_contains "$out" "2026-10-15_nnnnnnnn" "...a closed header is not listed"
+mkdir -p "$VSTATE_A/captures"
+run "$MNEMON" doctor
+assert_contains "$out" "warn captures — 1 malformed-frontmatter folder(s)" "doctor: ...and with a ledger"
+rm -rf "$VSTATE_A/captures" "$VAULT_A/Sources/2026-10-15_mmmmmmmm" "$VAULT_A/Sources/2026-10-15_nnnnnnnn"
 IRES="$VSTATE_A/ingest/abcd1234/results"
 mkdir -p "$IRES"
 printf '{"inbox": "/srv/inbox-a", "instance": "alpha"}\n' > "$VSTATE_A/ingest/abcd1234/inbox.json"

@@ -32,9 +32,13 @@ Commands:
   add <gateway options>      Capture a source (knowledge-gateway.sh source-add)
   status                     Pipeline status for the instance
   search --query <q> [...]   Search extracts (JSON; --human for text)
-  reindex                    Rebuild the vault's index.md
+  reindex [--no-hand-edit-report]
+                             Rebuild the vault's index.md from Sources/: every row regenerated,
+                             replaced rows preserved in _inputs/index-hand-edits-<date>.md
+                             (the flag skips that step)
   triage <input> [...]       Content-aware URL triage against the vault
   audit [--cutoff DATE]      Archive consistency audit
+  audit --canonical          Folders whose URLs coincide under canonicalization v1 (read-only)
   init <name> --vault <path> [--archive <dir>] [--collection <name>]
        [--search-provider grep|qmd] [--reader-context <path> | --reader-context-path <path>]
        [--charter <path>] [--writer-host <host>] [--default] [--force] [--non-interactive]
@@ -530,19 +534,147 @@ PY
 
 # captures — receipts in <vault state>/captures/: failed / extract-failed (finish with
 # --resume), and published receipts whose revision folder or source.md is gone.
+# --- phase 2 (capture layer §3.10): the converter chain's tools, the egress policy, canonical identity ---
+
+# _version_ge <have> <want>: dotted numeric comparison (non-numeric suffixes ignored). bash 3.2.
+_version_ge() {
+  local have="$1" want="$2" i hv wv
+  local -a h w
+  IFS=. read -r -a h <<<"$have"
+  IFS=. read -r -a w <<<"$want"
+  for ((i = 0; i < ${#w[@]}; i++)); do
+    hv="${h[i]:-0}"; wv="${w[i]:-0}"
+    hv="${hv%%[^0-9]*}"; wv="${wv%%[^0-9]*}"
+    [[ "${hv:-0}" -gt "${wv:-0}" ]] && return 0
+    [[ "${hv:-0}" -lt "${wv:-0}" ]] && return 1
+  done
+  return 0
+}
+
+# The Chrome/Chromium the renderer would use — the same candidate list as bin/render-url.sh.
+_chrome_path() {
+  local candidate
+  for candidate in \
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+    "/Applications/Chromium.app/Contents/MacOS/Chromium" \
+    "$(command -v google-chrome 2>/dev/null)" \
+    "$(command -v chromium 2>/dev/null)"; do
+    if [[ -n "$candidate" && -x "$candidate" ]]; then printf '%s' "$candidate"; return 0; fi
+  done
+  return 1
+}
+
+# capture-deps — defuddle ≥ 0.6, pandoc ≥ 3, Chrome (rendering), Poppler (PDF), with versions.
+# Every one is optional at runtime (a missing converter is a skipped candidate, a missing Chrome
+# means no rendered stage, a missing Poppler refuses PDFs): warn, never fail.
+_doctor_capture_deps() {
+  local status=ok detail="" v chrome
+  if command -v defuddle >/dev/null 2>&1; then
+    v="$(defuddle --version 2>/dev/null | head -1 | tr -d '[:space:]')"; v="${v#v}"
+    if _version_ge "${v:-0}" 0.6; then
+      detail="defuddle ${v:-?}"
+    else
+      status=warn; detail="defuddle ${v:-?} (< 0.6 — upgrade: npm install -g defuddle)"
+    fi
+  else
+    status=warn; detail="defuddle missing (pandoc and the DOM text remain as converters)"
+  fi
+  if command -v pandoc >/dev/null 2>&1; then
+    v="$(pandoc --version 2>/dev/null | head -1 | awk '{print $2}')"
+    if _version_ge "${v:-0}" 3; then
+      detail="$detail · pandoc ${v:-?}"
+    else
+      status=warn; detail="$detail · pandoc ${v:-?} (< 3 — upgrade: brew install pandoc)"
+    fi
+  else
+    status=warn; detail="$detail · pandoc missing (html conversion falls back to the DOM text)"
+  fi
+  if chrome="$(_chrome_path)"; then
+    v="$("$chrome" --version 2>/dev/null | head -1 | sed 's/[[:space:]]*$//')"
+    detail="$detail · chrome ${v:-found} ($chrome)"
+  else
+    status=warn; detail="$detail · chrome missing (rendering unavailable: JavaScript shells and bot walls cannot be rendered)"
+  fi
+  if command -v pdftotext >/dev/null 2>&1 && command -v pdfinfo >/dev/null 2>&1; then
+    v="$(pdftotext -v 2>&1 | head -1 | awk '{print $3}')"
+    detail="$detail · poppler ${v:-found}"
+  else
+    status=warn; detail="$detail · poppler missing (PDF captures refused: brew install poppler)"
+  fi
+  _check "$status" capture-deps "$detail"
+}
+
+# egress — the instance's external_fetch value and, per fetcher of external_fetchers, whether its
+# key variable is set. The key itself is never printed. The loader's exports win when present;
+# before them the instance file is read directly; defaults: off, firecrawl,jina (spec §5).
+_doctor_egress() {
+  local mode fetchers f var detail="" keyed=0
+  mode="${EXTERNAL_FETCH:-}"
+  if [[ -z "$mode" && -n "${MNEMON_CONFIG_FILE:-}" && -f "${MNEMON_CONFIG_FILE:-}" ]]; then
+    mode="$(_parse_yaml_value external_fetch "$MNEMON_CONFIG_FILE" 2>/dev/null || true)"
+  fi
+  mode="${mode:-off}"
+  fetchers="${EXTERNAL_FETCHERS:-}"
+  if [[ -z "$fetchers" && -n "${MNEMON_CONFIG_FILE:-}" && -f "${MNEMON_CONFIG_FILE:-}" ]]; then
+    fetchers="$(_parse_yaml_value external_fetchers "$MNEMON_CONFIG_FILE" 2>/dev/null || true)"
+  fi
+  fetchers="${fetchers:-firecrawl,jina}"
+  for f in $(printf '%s' "$fetchers" | tr ',' ' '); do
+    case "$f" in
+      firecrawl) var=FIRECRAWL_API_KEY ;;
+      jina)      var=JINA_API_KEY ;;
+      *)         detail="${detail:+$detail · }$f: unknown fetcher"; continue ;;
+    esac
+    if [[ -n "${!var:-}" ]]; then
+      detail="${detail:+$detail · }$f: $var set"; keyed=$((keyed + 1))
+    else
+      detail="${detail:+$detail · }$f: $var not set"
+    fi
+  done
+  case "$mode" in
+    off)  _check ok egress "external_fetch off (never past the local chain); $detail" ;;
+    auto) if [[ $keyed -gt 0 ]]; then
+            _check ok egress "external_fetch auto (after direct and rendered fail on a bot wall, a 403 or a JavaScript shell); $detail"
+          else
+            _check warn egress "external_fetch auto but no fetcher has a key (external stage always skipped); $detail"
+          fi ;;
+    *)    _check warn egress "external_fetch '$mode' is not off|auto (the loader refuses it); $detail" ;;
+  esac
+}
+
+# canonical — the identity rules this engine applies to new url captures: canonicalization v1,
+# answered by capture-fetch.py --canonical-only (no network) when the capture layer is present.
+_doctor_canonical() {
+  local cf="$BIN_DIR/capture-fetch.py" out ver
+  if [[ ! -f "$cf" ]]; then
+    _check warn canonical "canonicalization v1 expected, but bin/capture-fetch.py is not present in this engine (URL captures unavailable)"
+    return 0
+  fi
+  if out="$(python3 "$cf" --canonical-only 'https://example.com/post?utm_source=doctor' 2>/dev/null)" \
+     && ver="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["canonical_version"])' 2>/dev/null)"; then
+    if [[ "$ver" == 1 ]]; then
+      _check ok canonical "canonicalization v1 (capture-fetch.py --canonical-only)"
+    else
+      _check warn canonical "capture-fetch.py reports canonicalization v$ver; this engine expects v1"
+    fi
+  else
+    _check warn canonical "canonicalization v1 expected, but capture-fetch.py --canonical-only failed"
+  fi
+}
+
+# captures — the ledger's receipts (failed with the --resume hint, integrity errors, missing files,
+# unreadable) and, receipt-independent (§12 A2), every Sources/*/source.md whose header is not
+# closed within 256 KB: malformed-frontmatter folders the lookup cannot read.
 _doctor_captures() {
   local cdir out status detail tab
   cdir="$(_vault_state_dir)/captures"
-  if [[ ! -d "$cdir" ]]; then
-    _check ok captures "none (no $cdir yet)"
-    return 0
-  fi
   out="$(python3 - "$cdir" "$VAULT_PATH" <<'PY' 2>/dev/null || printf 'warn\tcould not scan %s' "$cdir"
 import glob, json, os, sys
 cdir, vault = sys.argv[1], sys.argv[2]
 total = failed = missing = unreadable = integrity = 0
 first_failed = None
-for path in sorted(glob.glob(os.path.join(cdir, "*.json"))):
+have_ledger = os.path.isdir(cdir)
+for path in (sorted(glob.glob(os.path.join(glob.escape(cdir), "*.json"))) if have_ledger else []):
     total += 1
     try:
         with open(path, encoding="utf-8") as fh:
@@ -564,6 +696,30 @@ for path in sorted(glob.glob(os.path.join(cdir, "*.json"))):
         rev = rec.get("revision")
         if not isinstance(rev, str) or not rev or not os.path.isfile(os.path.join(vault, "Sources", rev, "source.md")):
             missing += 1
+# §12 A2 — the whole header of every source.md, through the closing delimiter, cap 256 KB: an opening
+# `---` without a closing `---`/`...` within the cap is malformed-frontmatter (never silently truncated)
+CAP = 256 * 1024
+malformed = []
+for sm in sorted(glob.glob(os.path.join(glob.escape(vault), "Sources", "*", "source.md"))):
+    folder = os.path.basename(os.path.dirname(sm))
+    try:
+        with open(sm, "rb") as fh:
+            data = fh.read(CAP + 1)
+    except OSError:
+        malformed.append(folder)
+        continue
+    lines = data.decode("utf-8", errors="replace").split("\n")
+    if not lines or lines[0].strip() != "---":
+        continue
+    pos = len(lines[0]) + 1
+    closed = False
+    for ln in lines[1:]:
+        if ln.strip() in ("---", "..."):
+            closed = pos <= CAP
+            break
+        pos += len(ln) + 1
+    if not closed:
+        malformed.append(folder)
 parts = []
 if failed:
     parts.append("%d failed/extract-failed receipt(s) — finish with: mnemon add --resume %s" % (failed, first_failed))
@@ -573,8 +729,13 @@ if missing:
     parts.append("%d receipt(s) point at missing files" % missing)
 if unreadable:
     parts.append("%d unreadable receipt(s)" % unreadable)
+if malformed:
+    parts.append("%d malformed-frontmatter folder(s) — source.md header without a closing --- within 256 KB, unreadable to the lookup: %s"
+                 % (len(malformed), ", ".join(malformed[:5]) + (", …" if len(malformed) > 5 else "")))
 if parts:
-    print("warn\t" + "; ".join(parts))
+    print("warn\t" + ("none (no %s yet); " % cdir if not have_ledger else "") + "; ".join(parts))
+elif not have_ledger:
+    print("ok\tnone (no %s yet)" % cdir)
 else:
     print("ok\t%d receipt(s), none failed" % total)
 PY
@@ -756,16 +917,21 @@ cmd_doctor() {
   else
     _check warn deps-optional "missing: $missing_opt"
   fi
-  # python packages used by depth-aware capture (kb-depth-fold.py, kb_fetch.py):
-  # without them `--depth auto` degrades to a plain capture
+  # python packages: pyyaml for the depth manifest (kb-depth-fold.py). `requests` is no longer
+  # used — every request the engine makes goes through bin/capture/policy.py on the stdlib (D3)
   local missing_py=""
   python3 -c 'import yaml' >/dev/null 2>&1 || missing_py="pyyaml"
-  python3 -c 'import requests' >/dev/null 2>&1 || missing_py="${missing_py:+$missing_py }requests"
   if [[ -z "$missing_py" ]]; then
-    _check ok deps-python "pyyaml requests"
+    _check ok deps-python "pyyaml"
   else
-    _check warn deps-python "missing: $missing_py (depth-aware capture degrades; pip3 install $missing_py)"
+    _check warn deps-python "missing: $missing_py (depth-aware capture needs it; pip3 install $missing_py)"
   fi
+
+  # phase 2 (capture layer §3.10): the converter chain's tools with versions, the egress policy,
+  # the canonical identity rules
+  _doctor_capture_deps
+  _doctor_egress
+  _doctor_canonical
 
   # qmd — required only when search_provider is qmd
   if $have_config && [[ "$SEARCH_PROVIDER" == qmd ]]; then
@@ -1290,7 +1456,15 @@ case "$cmd" in
             # (D15, §12 A1) — vault-lock.py acquires it, or proves an inherited descriptor holds it
             exec python3 "$BIN_DIR/vault-lock.py" --vault "$VAULT_PATH" -- python3 "$BIN_DIR/knowledge-reindex.py" "$VAULT_PATH" "$@" ;;
   triage)   _resolve_or_die; exec python3 "$BIN_DIR/triage-urls.py" --vault "$VAULT_PATH" "$@" ;;
-  audit)    _resolve_or_die; exec python3 "$BIN_DIR/archive-audit.py" --config "$MNEMON_CONFIG_FILE" "$@" ;;
+  audit)    _resolve_or_die
+            # --canonical (capture layer §3.10, D5): groups Sources/*/source.md by the v1 canonical form of
+            # their URLs and prints the groups of ≥ 2; never writes, never merges
+            if _has_flag --canonical "$@"; then
+              _audit_args=()
+              for _aa in "$@"; do [[ "$_aa" == --canonical ]] || _audit_args+=("$_aa"); done
+              exec python3 "$BIN_DIR/canonical-audit.py" --vault "$VAULT_PATH" ${_audit_args[@]+"${_audit_args[@]}"}
+            fi
+            exec python3 "$BIN_DIR/archive-audit.py" --config "$MNEMON_CONFIG_FILE" "$@" ;;
   init)     cmd_init "$@" ;;
   doctor)   cmd_doctor "$@" ;;
   config)   cmd_config "$@" ;;
