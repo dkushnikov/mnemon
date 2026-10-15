@@ -26,7 +26,9 @@ from pathlib import Path
 ENGINE_ROOT = Path(__file__).resolve().parent.parent
 
 EXPORTS = (
+    "MNEMON_CONFIG",
     "MNEMON_CONFIG_FILE",
+    "MNEMON_CONFIG_SOURCE",
     "MNEMON_INSTANCE",
     "MNEMON_STATE_DIR",
     "VAULT_PATH",

@@ -30,8 +30,9 @@ Options:
   --manifest <path>     JSON manifest file (for origin=batch)
   --import-source <s>   Import source label (apple-notes, safari, telegram-saved, etc.)
   --import-batch <id>   Batch ID for grouping dump items
-  --config <path>       Path to mnemon.yaml
-  --instance <name>     Mnemon instance to use (sets MNEMON_INSTANCE; see bin/mnemon-config.sh)
+  --config <path>       Instance config file (outranks MNEMON_CONFIG/MNEMON_INSTANCE)
+  --instance <name>     Mnemon instance to use (exports MNEMON_INSTANCE, drops an inherited
+                        MNEMON_CONFIG; see bin/mnemon-config.sh). Not together with --config.
   --model <model>       Override default model
   --dry-run             Show prompt without executing
   --whisper-model <m>   Whisper model (default from config)
@@ -65,6 +66,7 @@ MANIFEST=""
 IMPORT_SOURCE=""
 IMPORT_BATCH=""
 CONFIG_PATH=""
+INSTANCE_FLAG=""
 MODEL_FLAG=""
 DRY_RUN=false
 WHISPER_MODEL_FLAG=""
@@ -94,7 +96,7 @@ while [[ $# -gt 0 ]]; do
     --import-source) [[ $# -lt 2 ]] && { echo "ERROR: --import-source requires a value" >&2; exit 1; }; IMPORT_SOURCE="$2"; shift 2 ;;
     --import-batch)  [[ $# -lt 2 ]] && { echo "ERROR: --import-batch requires a value" >&2; exit 1; }; IMPORT_BATCH="$2"; shift 2 ;;
     --config)        [[ $# -lt 2 ]] && { echo "ERROR: --config requires a value" >&2; exit 1; }; CONFIG_PATH="$2"; shift 2 ;;
-    --instance)      [[ $# -lt 2 ]] && { echo "ERROR: --instance requires a value" >&2; exit 1; }; export MNEMON_INSTANCE="$2"; shift 2 ;;
+    --instance)      [[ $# -lt 2 ]] && { echo "ERROR: --instance requires a value" >&2; exit 1; }; INSTANCE_FLAG="$2"; shift 2 ;;
     --model)         [[ $# -lt 2 ]] && { echo "ERROR: --model requires a value" >&2; exit 1; }; MODEL_FLAG="$2"; shift 2 ;;
     --dry-run)       DRY_RUN=true; shift ;;
     --whisper-model) [[ $# -lt 2 ]] && { echo "ERROR: --whisper-model requires a value" >&2; exit 1; }; WHISPER_MODEL_FLAG="$2"; shift 2 ;;
@@ -106,7 +108,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Load config (uses CONFIG_PATH if set, otherwise auto-discovers)
+# Selectors: --config (explicit path) outranks --instance outranks the inherited
+# MNEMON_CONFIG / MNEMON_INSTANCE pair; both flags on one command line is an error.
+if [[ -n "$CONFIG_PATH" && -n "$INSTANCE_FLAG" ]]; then
+  echo "ERROR: conflicting selectors: --config and --instance on one command line (use one)" >&2
+  exit 2
+fi
+if [[ -n "$INSTANCE_FLAG" ]]; then
+  export MNEMON_INSTANCE="$INSTANCE_FLAG" MNEMON_SELECTED_BY="--instance"
+  unset MNEMON_CONFIG MNEMON_CONFIG_SOURCE
+fi
+# Load config (uses CONFIG_PATH if set, otherwise resolves from the environment;
+# a loader refusal — conflict, missing instance — ends the script with its status)
 load_config "$CONFIG_PATH"
 
 # Flags override config values

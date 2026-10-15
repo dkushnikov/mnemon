@@ -166,8 +166,58 @@ assert_contains "$out" "MNEMON_STATE_DIR=$XDG_STATE_HOME/mnemon/alpha" "config d
 assert_contains "$out" "CHARTER_PATH=" "config dump has CHARTER_PATH"
 assert_contains "$out" "WRITER_HOST=" "config dump has WRITER_HOST"
 run "$MNEMON" --instance nosuch config path
-assert_eq "$rc" "1" "missing instance fails config path"
+assert_eq "$rc" "2" "missing instance fails config path with exit 2"
 assert_contains "$out" "instances/nosuch.yaml" "missing instance error names the path"
+run "$MNEMON" config get config_source
+assert_eq "$out" "default" "config get config_source names the winning selector"
+
+# --- A1: explicit selectors outrank the inherited environment; conflicts fail closed ---
+echo "--- selectors (A1) ---"
+ALPHA_YAML="$CFG_DIR/instances/alpha.yaml"
+BETA_YAML="$CFG_DIR/instances/beta.yaml"
+run env MNEMON_CONFIG="$ALPHA_YAML" "$MNEMON" --instance beta config get vault_path
+assert_eq "$out" "$VAULT_B" "--instance beats an inherited MNEMON_CONFIG"
+run env MNEMON_INSTANCE=alpha "$MNEMON" --config "$BETA_YAML" config get vault_path
+assert_eq "$out" "$VAULT_B" "--config beats an inherited MNEMON_INSTANCE"
+run env MNEMON_CONFIG="$ALPHA_YAML" MNEMON_INSTANCE=beta "$MNEMON" config path
+assert_eq "$rc" "2" "MNEMON_CONFIG + MNEMON_INSTANCE naming different configs → exit 2"
+assert_contains "$out" "conflicting selectors in the environment (MNEMON_CONFIG=$ALPHA_YAML, MNEMON_INSTANCE=beta)" "environment conflict is named"
+run env MNEMON_CONFIG="$BETA_YAML" MNEMON_INSTANCE=beta "$MNEMON" config get vault_path
+assert_eq "$out" "$VAULT_B" "a consistent environment pair resolves"
+run "$MNEMON" --config "$ALPHA_YAML" --instance beta config path
+assert_eq "$rc" "2" "--config together with --instance → exit 2"
+assert_contains "$out" "conflicting selectors" "flag conflict message"
+run "$MNEMON" --config "$ALPHA_YAML" doctor --instance beta
+assert_eq "$rc" "2" "global --config with doctor --instance → exit 2"
+run "$MNEMON" --instance beta config dump
+assert_contains "$out" "MNEMON_CONFIG=$BETA_YAML" "dump: the child-facing MNEMON_CONFIG is the resolved file"
+assert_contains "$out" "MNEMON_INSTANCE=beta" "dump: MNEMON_INSTANCE is the resolved name"
+assert_contains "$out" "MNEMON_CONFIG_SOURCE=--instance" "dump: the winning selector is reported"
+run env MNEMON_INSTANCE=adhoc "$MNEMON" config path
+assert_eq "$rc" "2" "MNEMON_INSTANCE=adhoc without MNEMON_CONFIG → exit 2"
+run "$MNEMON" --instance adhoc config path
+assert_eq "$rc" "2" "--instance adhoc → exit 2 (reserved name)"
+run "$MNEMON" add --instance beta --url https://example.com/x --dry-run
+assert_eq "$rc" "2" "a selector after the command is refused (dispatcher resolves once)"
+assert_contains "$out" "--instance belongs before the command" "...with the hint"
+run "$MNEMON" status --config "$BETA_YAML"
+assert_eq "$rc" "2" "--config after the command is refused"
+# a by-path copy declaring instance: alpha — the gateway child must see a consistent pair
+cp "$ALPHA_YAML" "$TEST_TMPDIR/copy-of-alpha.yaml"
+run "$MNEMON" --config "$TEST_TMPDIR/copy-of-alpha.yaml" config dump
+assert_contains "$out" "MNEMON_INSTANCE=alpha" "by-path copy: instance from the yaml key"
+assert_contains "$out" "MNEMON_CONFIG=$TEST_TMPDIR/copy-of-alpha.yaml" "by-path copy: MNEMON_CONFIG is the copy"
+run "$MNEMON" --config "$TEST_TMPDIR/copy-of-alpha.yaml" status
+assert_eq "$rc" "0" "by-path copy: the gateway child resolves the exported pair without a conflict"
+assert_contains "$out" "Vault: $VAULT_A" "...and lands on the same vault"
+# gateway called directly: its flags follow the same rule
+run "$MNEMON_ROOT/bin/knowledge-gateway.sh" status --config "$ALPHA_YAML" --instance beta
+assert_eq "$rc" "2" "gateway: --config with --instance → exit 2"
+run env MNEMON_CONFIG="$ALPHA_YAML" "$MNEMON_ROOT/bin/knowledge-gateway.sh" status --instance beta
+assert_eq "$rc" "0" "gateway: --instance beats an inherited MNEMON_CONFIG"
+assert_contains "$out" "Vault: $VAULT_B" "...and selects beta"
+run env MNEMON_CONFIG="$ALPHA_YAML" MNEMON_INSTANCE=beta "$MNEMON_ROOT/bin/knowledge-gateway.sh" status
+assert_eq "$rc" "2" "gateway: an inconsistent environment pair → exit 2"
 
 # --- doctor ---
 echo "--- doctor ---"
@@ -269,7 +319,7 @@ assert_contains "$out" "--vault" "triage help mentions --vault"
 run python3 "$MNEMON_ROOT/bin/triage-urls.py" "$CFG_DIR/default"
 assert_eq "$rc" "2" "triage-urls.py without --vault is an error (no hardcoded vault)"
 run "$MNEMON" --instance nosuch reindex
-assert_eq "$rc" "1" "config-dependent subcommand fails with the loader message"
+assert_eq "$rc" "2" "config-dependent subcommand fails with the loader's status (2: missing instance)"
 assert_contains "$out" "instances/nosuch.yaml" "...naming the missing instance file"
 
 # --- release (temp dev repo + temp release worktree + temp bare origin) ---

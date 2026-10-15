@@ -124,18 +124,22 @@ out=$( (cd "$TEST_TMPDIR/cwd" && load_config ./rel.yaml >/dev/null 2>&1 && print
 assert_eq "$out" "$TEST_TMPDIR/cwd/rel.yaml" "relative config path is reported absolute"
 rm -f "$TEST_TMPDIR/cwd/rel.yaml"
 
-# --- Resolution order ---
+# --- Resolution order (A1: explicit beats inherited; conflicts fail closed) ---
+# The direct load_config calls above exported the pair MNEMON_CONFIG +
+# MNEMON_INSTANCE into this shell; the scenarios below start from a clean slate.
+unset MNEMON_CONFIG MNEMON_INSTANCE MNEMON_CONFIG_SOURCE MNEMON_SELECTED_BY
 # resolve: run load_config in the calling subshell from the temp cwd and print
-# "<file>|<instance>|<stderr>" on success, or the error text with rc 1.
-# Always call it inside ( ... ) with the environment the scenario needs.
+# "<file>|<instance>|<source>|<stderr>" on success, or the error text with the
+# loader's return code. Always call it inside ( ... ) with the scenario's env.
 resolve() {
   cd "$TEST_TMPDIR/cwd" || return 1
-  local err="$TEST_TMPDIR/resolve.err"
+  local err="$TEST_TMPDIR/resolve.err" rc=0
   if load_config "$@" >/dev/null 2>"$err"; then
-    printf '%s|%s|%s' "$MNEMON_CONFIG_FILE" "$MNEMON_INSTANCE" "$(tr '\n' ' ' <"$err")"
+    printf '%s|%s|%s|%s' "$MNEMON_CONFIG_FILE" "$MNEMON_INSTANCE" "$MNEMON_CONFIG_SOURCE" "$(tr '\n' ' ' <"$err")"
   else
+    rc=$?
     cat "$err"
-    return 1
+    return $rc
   fi
 }
 mk_cfg() { printf 'vault_path: %s\n' "$2" > "$1"; }
@@ -145,52 +149,85 @@ mk_cfg "$CFG_DIR/instances/alpha.yaml" "$TEST_TMPDIR/vault-alpha"
 mk_cfg "$CFG_DIR/instances/beta.yaml"  "$TEST_TMPDIR/vault-beta"
 mk_cfg "$TEST_TMPDIR/explicit.yaml"    "$TEST_TMPDIR/vault-explicit"
 mk_cfg "$TEST_TMPDIR/envcfg.yaml"      "$TEST_TMPDIR/vault-env"
+printf 'instance: alpha\nvault_path: %s\n' "$TEST_TMPDIR/vault-alpha-copy" > "$TEST_TMPDIR/copy-of-alpha.yaml"
 
-# 1. explicit path beats MNEMON_CONFIG and MNEMON_INSTANCE
+# 1. explicit path beats MNEMON_CONFIG and MNEMON_INSTANCE (even a conflicting pair)
 out=$( (export MNEMON_CONFIG="$TEST_TMPDIR/envcfg.yaml" MNEMON_INSTANCE=alpha; resolve "$TEST_TMPDIR/explicit.yaml") ) || true
-assert_contains "$out" "$TEST_TMPDIR/explicit.yaml|adhoc|" "explicit path wins over MNEMON_CONFIG and MNEMON_INSTANCE"
+assert_contains "$out" "$TEST_TMPDIR/explicit.yaml|adhoc|--config|" "explicit path wins over MNEMON_CONFIG and MNEMON_INSTANCE"
 
-# 2. MNEMON_CONFIG beats MNEMON_INSTANCE
-out=$( (export MNEMON_CONFIG="$TEST_TMPDIR/envcfg.yaml" MNEMON_INSTANCE=alpha; resolve) ) || true
-assert_contains "$out" "$TEST_TMPDIR/envcfg.yaml|adhoc|" "MNEMON_CONFIG wins over MNEMON_INSTANCE"
+# 2. MNEMON_CONFIG alone
+out=$( (export MNEMON_CONFIG="$TEST_TMPDIR/envcfg.yaml"; resolve) ) || true
+assert_contains "$out" "$TEST_TMPDIR/envcfg.yaml|adhoc|MNEMON_CONFIG|" "MNEMON_CONFIG selects the file (source MNEMON_CONFIG)"
+
+# 2b. both set and inconsistent → exit 2, nothing selected
+rc=0; out=$( (export MNEMON_CONFIG="$TEST_TMPDIR/envcfg.yaml" MNEMON_INSTANCE=alpha; resolve) ) || rc=$?
+assert_eq "$rc" "2" "MNEMON_CONFIG + MNEMON_INSTANCE naming different configs → exit 2"
+assert_contains "$out" "conflicting selectors in the environment (MNEMON_CONFIG=$TEST_TMPDIR/envcfg.yaml, MNEMON_INSTANCE=alpha)" "conflict message names both selectors"
+
+# 2c. both set and consistent (a): the same file
+out=$( (export MNEMON_CONFIG="$CFG_DIR/instances/alpha.yaml" MNEMON_INSTANCE=alpha; resolve) ) || true
+assert_contains "$out" "$CFG_DIR/instances/alpha.yaml|alpha|MNEMON_CONFIG|" "consistent pair (same file) resolves, keeps the instance name"
+
+# 2d. both set and consistent (b): the file declares instance: <name>
+out=$( (export MNEMON_CONFIG="$TEST_TMPDIR/copy-of-alpha.yaml" MNEMON_INSTANCE=alpha; resolve) ) || true
+assert_contains "$out" "$TEST_TMPDIR/copy-of-alpha.yaml|alpha|" "consistent pair (file declares the instance) resolves"
+
+# 2e. both set and consistent (c): adhoc with a path
+out=$( (export MNEMON_CONFIG="$TEST_TMPDIR/envcfg.yaml" MNEMON_INSTANCE=adhoc; resolve) ) || true
+assert_contains "$out" "$TEST_TMPDIR/envcfg.yaml|adhoc|" "MNEMON_INSTANCE=adhoc with MNEMON_CONFIG resolves the file"
+
+# 2f. inherited MNEMON_CONFIG_SOURCE survives in a consistent child
+out=$( (export MNEMON_CONFIG="$CFG_DIR/instances/alpha.yaml" MNEMON_INSTANCE=alpha MNEMON_CONFIG_SOURCE=--instance; resolve) ) || true
+assert_contains "$out" "|alpha|--instance|" "a child keeps the parent's selector label"
 
 # 3. MNEMON_INSTANCE selects instances/<name>.yaml
 out=$( (export MNEMON_INSTANCE=alpha; resolve) ) || true
-assert_contains "$out" "$CFG_DIR/instances/alpha.yaml|alpha|" "MNEMON_INSTANCE selects instances/<name>.yaml"
+assert_contains "$out" "$CFG_DIR/instances/alpha.yaml|alpha|MNEMON_INSTANCE|" "MNEMON_INSTANCE selects instances/<name>.yaml"
 
-# 3b. missing instance → error naming the path and suggesting mnemon init
+# 3b. missing instance → exit 2 naming the path and suggesting mnemon init
 rc=0; out=$( (export MNEMON_INSTANCE=nosuch; resolve) ) || rc=$?
-assert_eq "$rc" "1" "missing instance fails"
+assert_eq "$rc" "2" "missing instance exits 2"
 assert_contains "$out" "$CFG_DIR/instances/nosuch.yaml" "missing instance error names the expected path"
 assert_contains "$out" "mnemon init nosuch --vault" "missing instance error suggests mnemon init"
+
+# 3c. adhoc is reserved: MNEMON_INSTANCE=adhoc without MNEMON_CONFIG → exit 2, no fallback
+printf 'beta\n' > "$CFG_DIR/default"
+rc=0; out=$( (export MNEMON_INSTANCE=adhoc; resolve) ) || rc=$?
+assert_eq "$rc" "2" "MNEMON_INSTANCE=adhoc alone exits 2 (never falls through to the default)"
+assert_contains "$out" "MNEMON_INSTANCE=adhoc names no instance file" "adhoc-alone error explains itself"
+rm -f "$CFG_DIR/default"
+
+# 3d. a flag label set by the dispatcher/gateway is reported as the source
+out=$( (export MNEMON_INSTANCE=alpha MNEMON_SELECTED_BY=--instance; resolve) ) || true
+assert_contains "$out" "$CFG_DIR/instances/alpha.yaml|alpha|--instance|" "MNEMON_SELECTED_BY labels the source"
 
 # 4. ./mnemon.yaml in the cwd beats the default file
 mk_cfg "$TEST_TMPDIR/cwd/mnemon.yaml" "$TEST_TMPDIR/vault-cwd"
 printf 'beta\n' > "$CFG_DIR/default"
 out=$( (resolve) ) || true
-assert_contains "$out" "$TEST_TMPDIR/cwd/mnemon.yaml|adhoc|" "./mnemon.yaml wins over the default file"
+assert_contains "$out" "$TEST_TMPDIR/cwd/mnemon.yaml|adhoc|./mnemon.yaml|" "./mnemon.yaml wins over the default file"
 rm -f "$TEST_TMPDIR/cwd/mnemon.yaml"
 
 # 5. default file → instances/<name>.yaml
 out=$( (resolve) ) || true
-assert_contains "$out" "$CFG_DIR/instances/beta.yaml|beta|" "default file selects its instance"
+assert_contains "$out" "$CFG_DIR/instances/beta.yaml|beta|default|" "default file selects its instance"
 
 # 5b. default file with comments/blank lines still names the instance
 printf '# the default instance\n\n  beta  \n' > "$CFG_DIR/default"
 out=$( (resolve) ) || true
 assert_contains "$out" "$CFG_DIR/instances/beta.yaml|beta|" "default file tolerates comments and whitespace"
 
-# 5c. default naming a missing instance → error
+# 5c. default naming a missing instance → exit 2
 printf 'ghost\n' > "$CFG_DIR/default"
 rc=0; out=$( (resolve) ) || rc=$?
-assert_eq "$rc" "1" "default → missing instance fails"
+assert_eq "$rc" "2" "default → missing instance exits 2"
 assert_contains "$out" "$CFG_DIR/instances/ghost.yaml" "default → missing instance error names the path"
 rm -f "$CFG_DIR/default"
 
 # 6a. legacy $MNEMON_CONFIG_DIR/mnemon.yaml, with a one-line warning
 mk_cfg "$CFG_DIR/mnemon.yaml" "$TEST_TMPDIR/vault-legacy1"
 out=$( (resolve) ) || true
-assert_contains "$out" "$CFG_DIR/mnemon.yaml|adhoc|" "legacy config-dir mnemon.yaml resolves"
+assert_contains "$out" "$CFG_DIR/mnemon.yaml|adhoc|legacy|" "legacy config-dir mnemon.yaml resolves"
 assert_contains "$out" "mnemon: legacy config $CFG_DIR/mnemon.yaml; create an instance with: mnemon init <name> --vault <vault>" "legacy warning text"
 rm -f "$CFG_DIR/mnemon.yaml"
 
@@ -198,17 +235,14 @@ rm -f "$CFG_DIR/mnemon.yaml"
 mkdir -p "$TEST_TMPDIR/fakeroot"
 mk_cfg "$TEST_TMPDIR/fakeroot/mnemon.yaml" "$TEST_TMPDIR/vault-legacy2"
 out=$( (MNEMON_ROOT="$TEST_TMPDIR/fakeroot"; resolve) ) || true
-assert_contains "$out" "$TEST_TMPDIR/fakeroot/mnemon.yaml|adhoc|" "legacy MNEMON_ROOT/mnemon.yaml resolves"
+assert_contains "$out" "$TEST_TMPDIR/fakeroot/mnemon.yaml|adhoc|legacy|" "legacy MNEMON_ROOT/mnemon.yaml resolves"
 assert_contains "$out" "legacy config $TEST_TMPDIR/fakeroot/mnemon.yaml" "legacy root warning names the file"
-
-# 6c. adhoc is reserved: MNEMON_INSTANCE=adhoc never selects an instance file
-out=$( (export MNEMON_INSTANCE=adhoc; MNEMON_ROOT="$TEST_TMPDIR/fakeroot"; resolve) ) || true
-assert_contains "$out" "$TEST_TMPDIR/fakeroot/mnemon.yaml|adhoc|" "MNEMON_INSTANCE=adhoc falls through (reserved name)"
 
 # 7. nothing found → error listing every location tried
 rc=0; out=$( (MNEMON_ROOT="$TEST_TMPDIR/emptyroot"; resolve) ) || rc=$?
 assert_eq "$rc" "1" "no config anywhere → error"
 assert_contains "$out" "no Mnemon config found" "error headline"
+assert_contains "$out" "--instance <name>" "error lists --instance"
 assert_contains "$out" "MNEMON_CONFIG" "error lists MNEMON_CONFIG"
 assert_contains "$out" "$CFG_DIR/instances/<name>.yaml" "error lists the instances dir"
 assert_contains "$out" "$TEST_TMPDIR/cwd/mnemon.yaml" "error lists ./mnemon.yaml (absolute)"
@@ -220,6 +254,18 @@ assert_contains "$out" "mnemon init <name> --vault <vault>" "error suggests mnem
 # 8. instance resolution sets the per-instance state dir default
 out=$( (export MNEMON_INSTANCE=alpha; cd "$TEST_TMPDIR/cwd" && load_config >/dev/null 2>&1 && printf '%s' "$MNEMON_STATE_DIR") ) || true
 assert_eq "$out" "$XDG_STATE_HOME/mnemon/alpha" "state dir default uses the resolved instance name"
+
+# 9. a successful load exports the consistent pair; a child resolving from the
+#    environment lands on the same file and name (the dispatcher decides once)
+echo "--- exported pair ---"
+child='source "$MNEMON_ROOT/bin/mnemon-config.sh" && load_config >/dev/null && printf "%s|%s|%s" "$MNEMON_CONFIG_FILE" "$MNEMON_INSTANCE" "$MNEMON_CONFIG"'
+out=$( (export MNEMON_INSTANCE=alpha; cd "$TEST_TMPDIR/cwd" && load_config >/dev/null 2>&1 && printf '%s|%s\n' "$MNEMON_CONFIG" "$MNEMON_INSTANCE" && bash -c "$child") ) || true
+assert_contains "$out" "$CFG_DIR/instances/alpha.yaml|alpha" "load_config exports MNEMON_CONFIG=<file> together with MNEMON_INSTANCE"
+assert_contains "$out" "$CFG_DIR/instances/alpha.yaml|alpha|$CFG_DIR/instances/alpha.yaml" "a child re-resolving from the environment lands on the same file"
+out=$( (cd "$TEST_TMPDIR/cwd" && load_config "$TEST_TMPDIR/copy-of-alpha.yaml" >/dev/null 2>&1 && bash -c "$child") ) || true
+assert_eq "$out" "$TEST_TMPDIR/copy-of-alpha.yaml|alpha|$TEST_TMPDIR/copy-of-alpha.yaml" "by-path config declaring instance: alpha → child sees a consistent pair (not a conflict)"
+out=$( (cd "$TEST_TMPDIR/cwd" && load_config "$TEST_TMPDIR/envcfg.yaml" >/dev/null 2>&1 && bash -c "$child") ) || true
+assert_eq "$out" "$TEST_TMPDIR/envcfg.yaml|adhoc|$TEST_TMPDIR/envcfg.yaml" "by-path config without instance: → adhoc + MNEMON_CONFIG, consistent for a child"
 
 rm -rf "$TEST_TMPDIR"
 summary

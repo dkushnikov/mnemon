@@ -40,7 +40,7 @@ Add a source to the knowledge library. The engine fetches the content, applies t
 
 ## Instance selection
 
-`--instance <name>` is a dispatcher option: it goes **before** the command (`mnemon --instance <name> add …`). Without it the engine resolves the instance in this order: `--config <path>` → `$MNEMON_CONFIG` → `--instance` / `$MNEMON_INSTANCE` → `./mnemon.yaml` in the working directory → the name stored in `~/.config/mnemon/default`.
+`--instance <name>` is a dispatcher option: it goes **before** the command (`mnemon --instance <name> add …`; after the command it is refused). It outranks anything inherited from the environment. Without it the engine resolves the instance in this order: `--config <path>` → `--instance <name>` → `$MNEMON_CONFIG` → `$MNEMON_INSTANCE` → `./mnemon.yaml` in the working directory → the name stored in `~/.config/mnemon/default`. If `$MNEMON_CONFIG` and `$MNEMON_INSTANCE` are both set and disagree, the engine exits 2 with `conflicting selectors` instead of guessing — pass `--instance <name>` explicitly.
 
 A vault that should always capture into its own instance sets the variable in its `.claude/settings.json`:
 

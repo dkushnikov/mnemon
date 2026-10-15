@@ -106,13 +106,16 @@ Each skill runs the installed engine's dispatcher. From the shell, the same and 
 
 ## Configuration
 
-**Instances.** One per vault: `~/.config/mnemon/instances/<name>.yaml` — flat YAML with `vault_path`, `reader_context_path`, `archive_dir`, `search_provider`, `qmd_collection`, `default_model` and the media settings — written by `mnemon init`; `~/.config/mnemon/default` names the default instance. The engine selects an instance in this order:
+**Instances.** One per vault: `~/.config/mnemon/instances/<name>.yaml` — flat YAML with `vault_path`, `reader_context_path`, `archive_dir`, `search_provider`, `qmd_collection`, `default_model` and the media settings — written by `mnemon init`; `~/.config/mnemon/default` names the default instance. The engine selects an instance in this order — an explicit selection always outranks an inherited one:
 
-1. `--config <path>`
-2. `$MNEMON_CONFIG`
-3. `--instance <name>` / `$MNEMON_INSTANCE`
-4. `./mnemon.yaml` in the working directory
-5. `~/.config/mnemon/default`
+1. `--config <path>` (dispatcher or gateway flag)
+2. `--instance <name>` (dispatcher or gateway flag)
+3. `$MNEMON_CONFIG`
+4. `$MNEMON_INSTANCE`
+5. `./mnemon.yaml` in the working directory
+6. `~/.config/mnemon/default`
+
+Conflicts fail closed with exit 2: `--config` together with `--instance` on one command line; `$MNEMON_CONFIG` and `$MNEMON_INSTANCE` both set unless they agree (the same file, the file declares `instance: <name>`, or `MNEMON_INSTANCE=adhoc` next to a path). `MNEMON_INSTANCE=adhoc` on its own and an instance name without a file are errors too, never a silent fallback to the default. The dispatcher resolves once and exports the pair `MNEMON_CONFIG=<file>` + `MNEMON_INSTANCE=<name>` to the command, so a child that resolves again lands on the same file; `mnemon config dump` shows the pair and `MNEMON_CONFIG_SOURCE` (which selector won). Selectors are global options — `mnemon add --instance x` is refused, write `mnemon --instance x add`.
 
 Claude Code sessions select an instance by putting `"env": {"MNEMON_INSTANCE": "<name>"}` into the vault's `.claude/settings.json`. The legacy single file `~/.config/mnemon/mnemon.yaml` keeps working with a warning.
 

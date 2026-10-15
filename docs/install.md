@@ -99,13 +99,16 @@ mnemon --instance work doctor
 mnemon --instance work status
 ```
 
-The engine selects an instance in this order — the first that applies wins:
+The engine selects an instance in this order — the first that applies wins, and an explicit flag always outranks a variable inherited from the shell or a session:
 
-1. `--config <path>` — an explicit instance file
-2. `$MNEMON_CONFIG` — same, from the environment
-3. `--instance <name>` / `$MNEMON_INSTANCE` — a name under `~/.config/mnemon/instances/`
-4. `./mnemon.yaml` in the working directory
-5. the name stored in `~/.config/mnemon/default`
+1. `--config <path>` — an explicit instance file (dispatcher or gateway flag)
+2. `--instance <name>` — a name under `~/.config/mnemon/instances/` (flag)
+3. `$MNEMON_CONFIG` — a file path, from the environment
+4. `$MNEMON_INSTANCE` — an instance name, from the environment
+5. `./mnemon.yaml` in the working directory
+6. the name stored in `~/.config/mnemon/default`
+
+`--config` and `--instance` on one command line exit 2 (`conflicting selectors`), and so do `$MNEMON_CONFIG` and `$MNEMON_INSTANCE` when they name different configs — a session that inherited `MNEMON_CONFIG` for one vault cannot be silently redirected by a stray `MNEMON_INSTANCE`; `mnemon --instance <name> …` or `mnemon --config <path> …` is the explicit way out. Put the selector before the command (`mnemon --instance work add …`, not `mnemon add --instance work`). `mnemon config dump` prints the resolved pair and `MNEMON_CONFIG_SOURCE`, the selector that won.
 
 Bind a vault to its instance so Claude Code sessions started there never need `--instance`: put this into the vault's `.claude/settings.json`:
 

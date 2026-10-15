@@ -49,13 +49,16 @@ Commands:
   help                       This text
   ingest | scan | monitor    Reserved (program phase 4)
 
-Global options (exported to the command):
-  --instance <name>          Select an instance   (MNEMON_INSTANCE)
-  --config <path>            Explicit config file (MNEMON_CONFIG)
+Global options (one of them; both on one command line → exit 2):
+  --instance <name>          Select an instance   (exports MNEMON_INSTANCE, drops an inherited MNEMON_CONFIG)
+  --config <path>            Explicit config file (exports MNEMON_CONFIG, drops an inherited MNEMON_INSTANCE)
 
-Config resolution: --config → $MNEMON_CONFIG → $MNEMON_INSTANCE → ./mnemon.yaml →
-$MNEMON_CONFIG_DIR/default → legacy mnemon.yaml (warns). MNEMON_CONFIG_DIR defaults
-to ${XDG_CONFIG_HOME:-~/.config}/mnemon; instances live in its instances/ folder.
+Config resolution — explicit beats inherited: --config → --instance → $MNEMON_CONFIG →
+$MNEMON_INSTANCE → ./mnemon.yaml → $MNEMON_CONFIG_DIR/default → legacy mnemon.yaml (warns).
+$MNEMON_CONFIG and $MNEMON_INSTANCE both set must agree (same file, or the file declares
+that instance), otherwise exit 2. The dispatcher resolves once and exports the pair to the
+command. MNEMON_CONFIG_DIR defaults to ${XDG_CONFIG_HOME:-~/.config}/mnemon; instances live
+in its instances/ folder.
 USAGE
 }
 
@@ -84,6 +87,44 @@ _host() {
   local h
   h="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)"
   printf '%s' "${h%%.*}"
+}
+
+# --- Instance selection (A1): a flag outranks the inherited environment ---
+CLI_CONFIG=""
+CLI_INSTANCE=""
+_select_config()   { CLI_CONFIG="$(_abs_path "$1")"; }
+_select_instance() { CLI_INSTANCE="$1"; }
+# Export the flag's selector and drop the other inherited one; refuse both flags.
+_apply_selectors() {
+  if [[ -n "$CLI_CONFIG" && -n "$CLI_INSTANCE" ]]; then
+    usage_error "conflicting selectors: --config and --instance on one command line (use one)"
+  fi
+  if [[ -n "$CLI_CONFIG" ]]; then
+    export MNEMON_CONFIG="$CLI_CONFIG" MNEMON_SELECTED_BY="--config"
+    unset MNEMON_INSTANCE MNEMON_CONFIG_SOURCE
+  elif [[ -n "$CLI_INSTANCE" ]]; then
+    export MNEMON_INSTANCE="$CLI_INSTANCE" MNEMON_SELECTED_BY="--instance"
+    unset MNEMON_CONFIG MNEMON_CONFIG_SOURCE
+  fi
+}
+# Resolve once; the exported MNEMON_CONFIG + MNEMON_INSTANCE pair is what children see.
+_resolve_or_die() { load_config || exit $?; }
+# Selectors are global options; a child must never re-decide (`mnemon add --instance x` is refused).
+_reject_post_command_selectors() {
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --config|--config=*|--instance|--instance=*)
+        usage_error "$a belongs before the command: mnemon $a <command> …" ;;
+    esac
+  done
+}
+_has_flag() {
+  local want="$1" a; shift
+  for a in "$@"; do
+    case "$a" in "$want"|"$want"=*) return 0 ;; esac
+  done
+  return 1
 }
 
 # JSON string body (no surrounding quotes).
@@ -256,7 +297,7 @@ _check() {
 cmd_doctor() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --instance) [[ $# -lt 2 ]] && usage_error "doctor: --instance requires a value"; export MNEMON_INSTANCE="$2"; shift 2 ;;
+      --instance) [[ $# -lt 2 ]] && usage_error "doctor: --instance requires a value"; _select_instance "$2"; _apply_selectors; shift 2 ;;
       --json)     DOCTOR_JSON=true; shift ;;
       -h|--help)  usage; exit 0 ;;
       *)          usage_error "doctor: unknown option $1" ;;
@@ -428,7 +469,7 @@ cmd_doctor() {
 # config
 # ---------------------------------------------------------------------------
 
-CONFIG_EXPORTS="MNEMON_ROOT MNEMON_CONFIG_FILE MNEMON_INSTANCE MNEMON_STATE_DIR VAULT_PATH READER_CONTEXT_PATH CHARTER_PATH SEARCH_PROVIDER QMD_COLLECTION DEFAULT_MODEL DEFAULT_LANGUAGE WHISPER_MODEL AUTO_DETECT_ORIGIN ARCHIVE_DIR WRITER_HOST"
+CONFIG_EXPORTS="MNEMON_ROOT MNEMON_CONFIG MNEMON_CONFIG_FILE MNEMON_CONFIG_SOURCE MNEMON_INSTANCE MNEMON_STATE_DIR VAULT_PATH READER_CONTEXT_PATH CHARTER_PATH SEARCH_PROVIDER QMD_COLLECTION DEFAULT_MODEL DEFAULT_LANGUAGE WHISPER_MODEL AUTO_DETECT_ORIGIN ARCHIVE_DIR WRITER_HOST"
 
 cmd_config_list() {
   local dir inst_dir def f name vault marker count=0
@@ -474,18 +515,19 @@ cmd_config() {
         writer_host)         var=WRITER_HOST ;;
         instance)            var=MNEMON_INSTANCE ;;
         config_file)         var=MNEMON_CONFIG_FILE ;;
+        config_source)       var=MNEMON_CONFIG_SOURCE ;;
         config_dir)          mnemon_config_dir; echo; return 0 ;;
         *) printf 'mnemon config get: unknown key %s\n' "$key" >&2; exit 2 ;;
       esac
-      load_config || exit 1
+      _resolve_or_die
       printf '%s\n' "${!var}" ;;
     path)
-      load_config || exit 1
+      _resolve_or_die
       printf '%s\n' "$MNEMON_CONFIG_FILE" ;;
     list)
       cmd_config_list ;;
     dump)
-      load_config || exit 1
+      _resolve_or_die
       local v
       printf 'MNEMON_CONFIG_DIR=%s\n' "$(mnemon_config_dir)"
       for v in $CONFIG_EXPORTS; do
@@ -613,10 +655,10 @@ cmd_version() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --instance)   [[ $# -lt 2 ]] && usage_error "--instance requires a value"; export MNEMON_INSTANCE="$2"; shift 2 ;;
-    --instance=*) export MNEMON_INSTANCE="${1#--instance=}"; shift ;;
-    --config)     [[ $# -lt 2 ]] && usage_error "--config requires a value"; export MNEMON_CONFIG="$(_abs_path "$2")"; shift 2 ;;
-    --config=*)   export MNEMON_CONFIG="$(_abs_path "${1#--config=}")"; shift ;;
+    --instance)   [[ $# -lt 2 ]] && usage_error "--instance requires a value"; _select_instance "$2"; shift 2 ;;
+    --instance=*) _select_instance "${1#--instance=}"; shift ;;
+    --config)     [[ $# -lt 2 ]] && usage_error "--config requires a value"; _select_config "$2"; shift 2 ;;
+    --config=*)   _select_config "${1#--config=}"; shift ;;
     -h|--help)    usage; exit 0 ;;
     --)           shift; break ;;
     -*)           usage_error "unknown option: $1" ;;
@@ -626,14 +668,18 @@ done
 [[ $# -gt 0 ]] || usage_error "a command is required"
 cmd="$1"
 shift
+_apply_selectors
 
 case "$cmd" in
-  add)      exec "$BIN_DIR/knowledge-gateway.sh" source-add "$@" ;;
-  status)   exec "$BIN_DIR/knowledge-gateway.sh" status "$@" ;;
-  search)   exec python3 "$BIN_DIR/mnemon-search.py" "$@" ;;
-  reindex)  load_config || exit 1; exec python3 "$BIN_DIR/knowledge-reindex.py" "$VAULT_PATH" "$@" ;;
-  triage)   load_config || exit 1; exec python3 "$BIN_DIR/triage-urls.py" --vault "$VAULT_PATH" "$@" ;;
-  audit)    load_config || exit 1; exec python3 "$BIN_DIR/archive-audit.py" --config "$MNEMON_CONFIG_FILE" "$@" ;;
+  add)      _reject_post_command_selectors "$@"; _resolve_or_die
+            exec "$BIN_DIR/knowledge-gateway.sh" source-add "$@" ;;
+  status)   _reject_post_command_selectors "$@"; _resolve_or_die
+            exec "$BIN_DIR/knowledge-gateway.sh" status "$@" ;;
+  search)   if ! _has_flag --vault "$@"; then _resolve_or_die; fi
+            exec python3 "$BIN_DIR/mnemon-search.py" "$@" ;;
+  reindex)  _resolve_or_die; exec python3 "$BIN_DIR/knowledge-reindex.py" "$VAULT_PATH" "$@" ;;
+  triage)   _resolve_or_die; exec python3 "$BIN_DIR/triage-urls.py" --vault "$VAULT_PATH" "$@" ;;
+  audit)    _resolve_or_die; exec python3 "$BIN_DIR/archive-audit.py" --config "$MNEMON_CONFIG_FILE" "$@" ;;
   init)     cmd_init "$@" ;;
   doctor)   cmd_doctor "$@" ;;
   config)   cmd_config "$@" ;;
