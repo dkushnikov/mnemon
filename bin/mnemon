@@ -140,6 +140,29 @@ _git_common_dir() {
   (cd "$d" 2>/dev/null && pwd -P)
 }
 
+# Path without trailing slashes ("/" stays "/").
+_strip_trailing_slashes() {
+  local p="$1"
+  while [[ "$p" == */ && "$p" != / ]]; do p="${p%/}"; done
+  printf '%s' "$p"
+}
+
+# Escape every ERE metacharacter so a path can be used literally in pgrep -f.
+_re_escape() { printf '%s' "$1" | sed -e 's/[]\\.^$*+?(){}|[]/\\&/g'; }
+
+# pgrep -f pattern for engine processes under <home>/bin/ in both spellings of
+# the engine path: the physical one ($1) and the one MNEMON_HOME was given as
+# ($2) — a process started through a symlinked MNEMON_HOME carries the symlink
+# spelling on its command line.
+_drain_pattern() {
+  local phys="$1" given="$2"
+  if [[ "$phys" == "$given" ]]; then
+    printf '%s/bin/' "$(_re_escape "$phys")"
+  else
+    printf '(%s|%s)/bin/' "$(_re_escape "$phys")" "$(_re_escape "$given")"
+  fi
+}
+
 # Closest existing ancestor of a path (the path itself if it exists).
 _nearest_existing_parent() {
   local p="$1"
@@ -630,17 +653,19 @@ _release_lock_acquire() {
   echo "release: lock $f (pid $$, target $target)"
 }
 
-# PIDs of engine processes running from $1/bin/ — pgrep -f over the command
-# line, same user and host only (documented limitation); never this process.
+# PIDs of engine processes whose command line matches the drain pattern $1
+# (see _drain_pattern) — pgrep -f, same user and host only (documented
+# limitation); never this process or its parent.
 _engine_pids() {
-  pgrep -f -- "$1/bin/" 2>/dev/null | grep -v -x -e "$$" -e "$PPID" | tr '\n' ' ' | sed 's/ *$//' || true
+  pgrep -f -- "$1" 2>/dev/null | grep -v -x -e "$$" -e "$PPID" | tr '\n' ' ' | sed 's/ *$//' || true
 }
 
-# Wait up to $2 seconds for engine processes under $1 to finish; 1 on timeout.
+# Wait up to $2 seconds for engine processes under $1 (matched by the drain
+# pattern $3) to finish; 1 on timeout.
 _release_drain() {
-  local home="$1" timeout="$2" waited=0 pids
+  local home="$1" timeout="$2" pattern="$3" waited=0 pids
   while :; do
-    pids="$(_engine_pids "$home")"
+    pids="$(_engine_pids "$pattern")"
     if [[ -z "$pids" ]]; then
       echo "release: drain — no engine processes running from $home/bin/"
       return 0
@@ -701,9 +726,16 @@ cmd_release() {
   [[ "$drain_timeout" =~ ^[0-9]+$ ]] || usage_error "release: --drain-timeout must be a number of seconds"
 
   # --- preflight: read-only checks ---
-  local home="${MNEMON_HOME:-}"
+  local home="${MNEMON_HOME:-}" home_given drain_pattern
   [[ -n "$home" ]] || die "release: MNEMON_HOME is not set (it must point at the installed engine worktree on branch release)"
   [[ -d "$home" ]] || die "release: MNEMON_HOME=$home does not exist"
+  # Normalize once: `home` is the canonical physical path (no trailing slash,
+  # symlinks resolved); `home_given` keeps the spelling MNEMON_HOME used, for the
+  # drain pattern — "engine/" would otherwise look for "engine//bin/" and match nothing.
+  home_given="$(_strip_trailing_slashes "$(_expand_tilde "$home")")"
+  case "$home_given" in /*) ;; *) home_given="$PWD/$home_given" ;; esac
+  home="$(_abs_dir "$home_given")" || die "release: cannot resolve MNEMON_HOME=$MNEMON_HOME"
+  drain_pattern="$(_drain_pattern "$home" "$home_given")"
   git -C "$home" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "release: $home is not a git worktree"
   git -C "$MNEMON_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "release: dev tree $MNEMON_ROOT is not a git worktree"
   local home_branch
@@ -738,10 +770,14 @@ cmd_release() {
   if $dry; then
     echo "mnemon release — dry run (nothing changes)"
     echo "  dev tree:  $MNEMON_ROOT ($dev_branch @ $dev_sha, $dirty)"
-    echo "  installed: $home (release @ $prev)"
+    if [[ "$home" == "$home_given" ]]; then
+      echo "  installed: $home (release @ $prev)"
+    else
+      echo "  installed: $home (release @ $prev; MNEMON_HOME=$MNEMON_HOME)"
+    fi
     echo "  main:      $main_sha"
     echo "  1. lock:   $lock (pid, timestamp, target $target_sha); removed last, also on failure"
-    echo "  2. drain:  wait up to ${drain_timeout}s for processes matching: pgrep -f $home/bin/"
+    echo "  2. drain:  wait up to ${drain_timeout}s for processes matching: pgrep -f $drain_pattern"
     if [[ -n "$rollback" ]]; then
       echo "  3. reset:  git -C $home reset --hard $rollback   ($prev → $target_sha)"
       echo "  4. print:  git -C $home push --force-with-lease origin release   (not run)"
@@ -763,7 +799,7 @@ cmd_release() {
 
   # --- 1. lock (removed by trap on every exit) · 2. drain ---
   _release_lock_acquire "$lock" "$target_sha"
-  _release_drain "$home" "$drain_timeout" || exit 1
+  _release_drain "$home" "$drain_timeout" "$drain_pattern" || exit 1
 
   # --- rollback: reset under the lock, print the push ---
   if [[ -n "$rollback" ]]; then

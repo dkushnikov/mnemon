@@ -416,10 +416,14 @@ g "$REPO" push -q origin main
 git -C "$REPO" worktree add -q -b release "$RWT" main
 assert_eq "$(git -C "$RWT" rev-parse --abbrev-ref HEAD)" "release" "fixture: release worktree on branch release"
 
+# the drain pattern is the engine path with every ERE metacharacter escaped (the
+# temp dir may contain a '.'), followed by /bin/
+re_escape() { printf '%s' "$1" | sed -e 's/[]\\.^$*+?(){}|[]/\\&/g'; }
+RWT_RE="$(re_escape "$RWT")"
 run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --dry-run
 assert_eq "$rc" "0" "release --dry-run exits 0"
 assert_contains "$out" "1. lock:   $LOCK" "dry-run prints the lock step"
-assert_contains "$out" "2. drain:  wait up to 120s for processes matching: pgrep -f $RWT/bin/" "dry-run prints the drain step"
+assert_contains "$out" "2. drain:  wait up to 120s for processes matching: pgrep -f $RWT_RE/bin/" "dry-run prints the drain step with the escaped pattern"
 assert_contains "$out" "git -C $RWT merge --ff-only main" "dry-run prints the ff-merge step with real paths"
 assert_contains "$out" "$RWT/bin/mnemon doctor" "dry-run prints the smoke step"
 assert_contains "$out" "$RWT/bin/mnemon version (reports $(git -C "$REPO" rev-parse --short main))" "dry-run names the commit the smoke expects"
@@ -535,7 +539,40 @@ assert_contains "$out" "engine busy after 1s" "drain timeout message"
 assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$PREV_FULL" "a drain timeout touches no files"
 [[ -e "$LOCK" ]] && fail "lock removed after a drain timeout" "lock exists" || pass "lock removed after a drain timeout"
 wait "$BUSY_PID" 2>/dev/null || true
-rm -f "$RWT/bin/busy.sh"
+
+# F2: MNEMON_HOME is normalized before the drain pattern is built — a trailing
+# slash used to yield "engine//bin/", which matches nothing (the drain failed open)
+run env MNEMON_HOME="$RWT/" "$REPO/bin/mnemon" release --dry-run
+assert_eq "$rc" "0" "release --dry-run accepts MNEMON_HOME with a trailing slash"
+assert_contains "$out" "installed: $RWT (release @ $PREV_REL)" "trailing slash: MNEMON_HOME is reported normalized"
+assert_contains "$out" "pgrep -f $RWT_RE/bin/" "trailing slash: the drain pattern has one slash before bin/"
+assert_not_contains "$out" "//bin/" "trailing slash: no // in the drain pattern"
+bash "$RWT/bin/busy.sh" &
+BUSY_PID=$!
+sleep 0.3
+run env MNEMON_HOME="$RWT/" "$REPO/bin/mnemon" release --drain-timeout 1
+assert_eq "$rc" "1" "trailing slash: a process running from \$MNEMON_HOME/bin/ is still detected"
+assert_contains "$out" "waiting up to 1s for engine processes to finish ($BUSY_PID" "trailing slash: drain names the running process"
+assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$PREV_FULL" "trailing slash: the drain timeout touches no files"
+wait "$BUSY_PID" 2>/dev/null || true
+# a symlinked MNEMON_HOME with a regex metacharacter in its name: the pattern
+# carries both spellings (a process started through the symlink has the symlink
+# path on its command line), each escaped
+ln -s "$RWT" "$TEST_TMPDIR/eng.ine"
+ENG_RE="$(re_escape "$TEST_TMPDIR/eng.ine")"
+run env MNEMON_HOME="$TEST_TMPDIR/eng.ine/" "$REPO/bin/mnemon" release --dry-run
+assert_eq "$rc" "0" "release --dry-run accepts a symlinked MNEMON_HOME"
+assert_contains "$out" "installed: $RWT (release @ $PREV_REL; MNEMON_HOME=$TEST_TMPDIR/eng.ine/)" "symlink: the physical path is reported next to the given MNEMON_HOME"
+assert_contains "$out" "pgrep -f ($RWT_RE|$ENG_RE)/bin/" "symlink: the drain pattern carries both spellings, metacharacters escaped"
+assert_contains "$out" 'eng\.ine' "symlink: the '.' in the name is escaped"
+bash "$TEST_TMPDIR/eng.ine/bin/busy.sh" &
+BUSY_PID=$!
+sleep 0.3
+run env MNEMON_HOME="$TEST_TMPDIR/eng.ine/" "$REPO/bin/mnemon" release --drain-timeout 1
+assert_eq "$rc" "1" "symlink: a process started through the symlink spelling is detected"
+assert_contains "$out" "engine processes to finish ($BUSY_PID" "symlink: drain names it"
+wait "$BUSY_PID" 2>/dev/null || true
+rm -f "$RWT/bin/busy.sh" "$TEST_TMPDIR/eng.ine"
 
 # with the engine idle again, the pending main commit releases cleanly
 run env PATH="$STUBBIN:$PATH" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
