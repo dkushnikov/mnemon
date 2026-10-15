@@ -1,0 +1,90 @@
+{
+ "schema": "mnemon-track-fixtures/1",
+ "about": "choose_track(tracks, original_language) of bin/media-extract.py (spec D12, §3.7, §7.12): the order is a manual track in the video's language · an automatic one in it (-orig first) · manual en, then ru · automatic en, then ru · the first manual · the first automatic · null (whisper). Matching is by primary subtag.",
+ "cases": [
+  {
+   "name": "pt manual + en auto, original pt → the pt manual track",
+   "original_language": "pt",
+   "tracks": [{"lang": "en", "kind": "auto", "orig": false}, {"lang": "pt", "kind": "manual", "orig": false}],
+   "expect": {"lang": "pt", "kind": "manual", "orig": false}
+  },
+  {
+   "name": "en-orig auto only, original en → it",
+   "original_language": "en",
+   "tracks": [{"lang": "en", "kind": "auto", "orig": true}],
+   "expect": {"lang": "en", "kind": "auto", "orig": true}
+  },
+  {
+   "name": "en-orig auto only, original unknown → it",
+   "original_language": null,
+   "tracks": [{"lang": "en", "kind": "auto", "orig": true}],
+   "expect": {"lang": "en", "kind": "auto", "orig": true}
+  },
+  {
+   "name": "manual en + auto ru, original ja absent → the manual en track",
+   "original_language": "ja",
+   "tracks": [{"lang": "ru", "kind": "auto", "orig": false}, {"lang": "en", "kind": "manual", "orig": false}],
+   "expect": {"lang": "en", "kind": "manual", "orig": false}
+  },
+  {
+   "name": "nothing → null (whisper)",
+   "original_language": "pt",
+   "tracks": [],
+   "expect": null
+  },
+  {
+   "name": "auto pt and auto pt-orig, original pt → the -orig track first",
+   "original_language": "pt",
+   "tracks": [{"lang": "pt", "kind": "auto", "orig": false}, {"lang": "pt", "kind": "auto", "orig": true}],
+   "expect": {"lang": "pt", "kind": "auto", "orig": true}
+  },
+  {
+   "name": "manual en + manual pt, original pt → the video's language beats en",
+   "original_language": "pt",
+   "tracks": [{"lang": "en", "kind": "manual", "orig": false}, {"lang": "pt", "kind": "manual", "orig": false}],
+   "expect": {"lang": "pt", "kind": "manual", "orig": false}
+  },
+  {
+   "name": "manual en + auto pt, original pt → the automatic track in the video's language beats manual en",
+   "original_language": "pt",
+   "tracks": [{"lang": "en", "kind": "manual", "orig": false}, {"lang": "pt", "kind": "auto", "orig": false}],
+   "expect": {"lang": "pt", "kind": "auto", "orig": false}
+  },
+  {
+   "name": "manual ru + auto en, original ja → manual ru before auto en",
+   "original_language": "ja",
+   "tracks": [{"lang": "en", "kind": "auto", "orig": false}, {"lang": "ru", "kind": "manual", "orig": false}],
+   "expect": {"lang": "ru", "kind": "manual", "orig": false}
+  },
+  {
+   "name": "auto ru + auto en, original ja → auto en before auto ru",
+   "original_language": "ja",
+   "tracks": [{"lang": "ru", "kind": "auto", "orig": false}, {"lang": "en", "kind": "auto", "orig": false}],
+   "expect": {"lang": "en", "kind": "auto", "orig": false}
+  },
+  {
+   "name": "manual de only, original ja → the first manual track",
+   "original_language": "ja",
+   "tracks": [{"lang": "de", "kind": "manual", "orig": false}],
+   "expect": {"lang": "de", "kind": "manual", "orig": false}
+  },
+  {
+   "name": "auto de + auto fr only, original ja → the first automatic track",
+   "original_language": "ja",
+   "tracks": [{"lang": "de", "kind": "auto", "orig": false}, {"lang": "fr", "kind": "auto", "orig": false}],
+   "expect": {"lang": "de", "kind": "auto", "orig": false}
+  },
+  {
+   "name": "manual pt-BR, original pt → the primary subtag matches",
+   "original_language": "pt",
+   "tracks": [{"lang": "en", "kind": "auto", "orig": false}, {"lang": "pt-BR", "kind": "manual", "orig": false}],
+   "expect": {"lang": "pt-BR", "kind": "manual", "orig": false}
+  },
+  {
+   "name": "manual pt, original pt-BR → the primary subtag matches",
+   "original_language": "pt-BR",
+   "tracks": [{"lang": "pt", "kind": "manual", "orig": false}],
+   "expect": {"lang": "pt", "kind": "manual", "orig": false}
+  }
+ ]
+}
