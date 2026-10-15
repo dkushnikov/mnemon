@@ -63,7 +63,7 @@ Not done, on purpose: `www.` stripping, `http` → `https`, trailing-slash colla
 
 `lib_url.normalize_url` stays for the depth helpers' same-site comparison only and says so in its docstring; `triage-urls.py` keeps its own normalizer (advisory dedup; phase 3).
 
-`capture-fetch.py --canonical-only <url>` prints one JSON object and exits 0: `{"schema":"mnemon-canonical/1","url":"<as given, trimmed>","canonical_url":"…","canonical_version":1,"kind":"page|arxiv|youtube|github","fetch_url":"…","requested_version":null|N}`; exit 2 with `{"error_class":"invalid-url","error":"…"}` on stderr otherwise. No network.
+`capture-fetch.py --canonical-only <url>` prints one JSON object and exits 0: `{"schema":"mnemon-canonical/1","url":"<as given, trimmed>","canonical_url":"…","canonical_version":1,"kind":"page|arxiv|youtube|github","fetch_url":"…","requested_version":null|N}`; exit 2 with `{"error_class":"invalid-url","error":"…"}` on stderr otherwise. `--canonical-only --stdin` reads one URL per line and prints one such object per line (an invalid line prints an object with `error_class` and the run still exits 0) — the gateway's lookup canonicalizes every candidate folder's URLs in one call. No network.
 
 ### 3.2 Policy — `capture/policy.py`
 
@@ -147,9 +147,12 @@ The report `mnemon-capture-text/2`: the `/1` keys (`schema`, `url`, `method`, `b
 mnemon [--instance I] site map <url> [--max-pages N] [--include <regex>]… [--exclude <regex>]… [--out <plan.json>] [--json]
 capture-site.py map <url> … --out <plan.json>
 capture-site.py fetch-bundle <plan.json> --out <staged bundle dir> --report <json> [--site-timeout S] [--policy <json>] [--render-cmd …] [--external …]
+capture-site.py verify <bundle dir> --sha256 <expected manifest sha256>
 capture-site.py assemble <bundle dir> --out <capture.md> --report <json>
 mnemon add --url <landing> --site <plan.json | auto> [other add flags]
 ```
+
+`verify` is the bundle verification the gateway runs before every commit and every reconversion: exit 0 when the manifest's canonical bytes hash to the expected value and every member is present with its recorded size and hash, no symlink and no escaping path; exit 1 with `evidence-missing <member>` or `evidence-mismatch <member|manifest>` on stderr otherwise.
 
 **Host eligibility** (no public-suffix guessing): a candidate is same-site when its host, after stripping one leading `www.`, equals the landing's; or when it is `docs.`, `help.`, `developer.`, `developers.`, `blog.`, `api.`, `learn.`, `support.` + the landing's host (also `www.`-stripped); or when the plan lists it explicitly (hand-edited plans may add a host; `mnemon add` prints the added hosts). Redirects to another host exclude the page (`excluded: redirect-off-site`). A GitHub repository linked from the landing contributes its README only (role `github_readme`, text).
 
