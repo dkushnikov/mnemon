@@ -479,7 +479,12 @@ cap_alias_replay() {
     keep="$KEEP_LOCATOR"
     cap_receipt_update "$CAPTURE_ID" '.replayed=true'
   fi
-  cap_verify_source "$REVISION" "$owner" "$TEXT_SHA256" "$LEGACY_MATCH" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+  if [[ "$LEGACY_MATCH" == true ]]; then
+    # a legacy / alias match carries no owner id to compare with: the folder's own hash decides
+    cap_verify_folder_source "$REVISION" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+  else
+    cap_verify_source "$REVISION" "$owner" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+  fi
   if [[ -n "$ALIAS_ID" && ( "$RECEIPT_STATE" == "started" || "$RECEIPT_STATE" == "failed" ) ]]; then
     # the owner's receipt lagged behind its published folder (crash after the rename)
     cap_receipt_update "$CAPTURE_ID" '.state="source-published" | .source_published=true | .error_class=null | .error=null | .retryable=null'
@@ -614,6 +619,11 @@ cap_fresh() {
     REVISION="$folder"
     if [[ "$legacy" == "true" || -f "$VAULT_PATH/Sources/$folder/extract.md" ]]; then
       [[ -n "$incoming" ]] && rm -f "$incoming"
+      # every success path verifies the published source first (§3.4 step 5, §9.5): a duplicate
+      # has no receipt of its own, so the folder's own capture.text_sha256 is the reference —
+      # an edited body is integrity-error/evidence-mismatch (exit 1), never skipped-duplicate;
+      # a legacy source without the field is verified by existence only
+      cap_verify_folder_source "$folder" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
       echo "WARNING: already captured at Sources/$folder/ — skipping (use --recapture for a new revision)" >&2
       if $CAPTURE_ID_GIVEN; then
         TEXT_SHA256="$(cap_source_text_sha "$folder" 2>/dev/null || true)"

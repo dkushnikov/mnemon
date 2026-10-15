@@ -1114,6 +1114,25 @@ cap_verify_source() {
 
 cap_source_text_sha() { cap_py nested "$VAULT_PATH/Sources/$1/source.md" capture text_sha256; }
 
+# cap_verify_folder_source <revision> → 0, or 1 with VERIFY_CLASS/VERIFY_MSG. The verification of
+# §3.4 step 5 for a success path that has no receipt to compare with — a duplicate (§9.5) or a
+# legacy / alias match (§3.1): the body hash is checked against the source's OWN frontmatter
+# `capture.text_sha256`; a legacy source without that field is verified by existence only (it
+# predates the field and is never modified). A mismatch is integrity-error/evidence-mismatch.
+cap_verify_folder_source() {
+  local rev="$1" f="$VAULT_PATH/Sources/$1/source.md" want got
+  if [[ ! -f "$f" ]]; then VERIFY_CLASS=evidence-missing; VERIFY_MSG="Sources/$rev/source.md is missing"; return 1; fi
+  want="$(cap_py nested "$f" capture text_sha256)"
+  [[ -n "$want" ]] || return 0
+  got="$(cap_py body-sha256 "$f")"
+  if [[ "$got" != "$want" ]]; then
+    VERIFY_CLASS=evidence-mismatch
+    VERIFY_MSG="Sources/$rev/source.md body hash $got differs from its own capture.text_sha256 $want (edited?)"
+    return 1
+  fi
+  return 0
+}
+
 cap_title_from_files() {   # <revision> → title of extract.md, else source.md, else empty
   local d="$VAULT_PATH/Sources/$1" t=""
   [[ -f "$d/extract.md" ]] && t="$(_mnemon_yaml_literal title "$d/extract.md")"

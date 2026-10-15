@@ -556,6 +556,46 @@ run_gw --capture-id edit-2
 assert_eq "$rc" "0" "the body restored: the resume finishes the extraction"
 assert_eq "$(rget edit-2 '.state')" "extracted" "...owner extracted"
 assert_eq "$(stub_calls)" "1" "...with one extraction"
+# a duplicate (fresh request, no receipt of its own) is verified against the folder's OWN
+# capture.text_sha256 (§3.4 step 5, §9.5): an edited body is integrity-error, never skipped-duplicate
+stub_reset
+run_gw --url "https://example.com/dup-check" --capture-id dup-0
+revd="$(result revision)"
+run_gw --url "https://example.com/dup-check"
+assert_eq "$rc $(result status) $(result revision)" "0 skipped-duplicate $revd" "an untouched duplicate → skipped-duplicate"
+assert_eq "$(result source_sha256)" "$(body_sha "$VAULT/Sources/$revd/source.md")" "...with the folder's recomputed body hash"
+printf 'edited duplicate\n' >> "$VAULT/Sources/$revd/source.md"
+run_gw --url "https://example.com/dup-check"
+assert_eq "$rc" "1" "an edited duplicate (no --capture-id) → exit 1"
+assert_eq "$(result status) $(result error_class) $(result retryable)" "integrity-error evidence-mismatch false" "...integrity-error/evidence-mismatch, not retried"
+assert_eq "$(result revision) $(result path)" "$revd Sources/$revd/" "...revision and path reported"
+assert_eq "$(result source_sha256)" "$(body_sha "$VAULT/Sources/$revd/source.md")" "...source_sha256 = the recomputed hash of the edited body"
+assert_contains "$err" "differs from its own capture.text_sha256" "...the message names the folder's own hash as the reference"
+assert_eq "$(stub_calls)" "1" "...no extraction ran for the duplicate checks"
+run_gw --url "https://example.com/dup-check" --capture-id dup-alias
+assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error evidence-mismatch" "...the same with an unknown --capture-id"
+assert_eq "$(result capture_id)" "dup-alias" "...reported under the requested id"
+[[ -f "$(receipt dup-alias)" ]] && fail "no alias receipt for a duplicate that failed verification" "exists" || pass "...no alias receipt is written for it"
+python3 - "$VAULT/Sources/$revd/source.md" <<'PY'
+import sys
+p = sys.argv[1]; d = open(p, "rb").read()
+assert d.endswith(b"edited duplicate\n"); open(p, "wb").write(d[:-len(b"edited duplicate\n")])
+PY
+run_gw --url "https://example.com/dup-check" --capture-id dup-alias
+assert_eq "$rc $(result status)" "0 skipped-duplicate" "the body restored: skipped-duplicate again"
+assert_eq "$(rget dup-alias '.resolved_to_revision') $(rget dup-alias '.state')" "$revd extracted" "...and the alias receipt is written now"
+# a legacy folder (url: only, no capture block) is verified by existence only: its body is never checked
+dl="$VAULT/Sources/2026-09-01_1e9acy00"; mkdir -p "$dl"
+printf -- '---\ntype: source\nsource_type: article\norigin: url\nurl: "https://example.com/legacy-dup"\ncaptured: 2026-09-01\ncaptured_by: agent\n---\nlegacy body\n' > "$dl/source.md"
+printf -- '---\ntype: extract\ntitle: "Legacy"\nstatus: extracted\n---\n### Summary\n' > "$dl/extract.md"
+printf 'edited legacy body\n' >> "$dl/source.md"
+run_gw --url "https://example.com/legacy-dup"
+assert_eq "$rc $(result status) $(result revision)" "0 skipped-duplicate 2026-09-01_1e9acy00" "a legacy duplicate without capture.text_sha256 → skipped-duplicate (existence only)"
+assert_eq "$(result source_sha256)" "$(body_sha "$dl/source.md")" "...its body hash still reported as it is"
+run_gw --url "https://example.com/legacy-dup" --capture-id legacy-alias
+assert_eq "$(rget legacy-alias '.legacy_match') $(result status)" "true skipped-duplicate" "...an alias of it records legacy_match"
+run_gw --capture-id legacy-alias
+assert_eq "$rc $(result status) $(result replayed)" "0 skipped-duplicate true" "...and replays from the files"
 
 # ---------------------------------------------------------------------------------------------
 echo "--- 8. url chain ---"
