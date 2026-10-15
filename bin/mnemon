@@ -1,0 +1,647 @@
+#!/usr/bin/env bash
+# mnemon — command dispatcher for the Mnemon engine.
+#
+#   mnemon [--instance <name>] [--config <path>] <command> [args…]
+#
+# MNEMON_ROOT is this script's own repo root (symlinks resolved), so a symlink
+# such as ~/.local/bin/mnemon → $MNEMON_HOME/bin/mnemon works. Subcommands that
+# need configuration call load_config (bin/mnemon-config.sh) and fail with its
+# message. bash 3.2 compatible: no associative arrays, no ${var,,}, no mapfile.
+set -euo pipefail
+
+# --- Locate the engine root: resolve symlinks of $0 without readlink -f ---
+_self="${BASH_SOURCE[0]:-$0}"
+while [[ -L "$_self" ]]; do
+  _target="$(readlink "$_self")"
+  case "$_target" in
+    /*) _self="$_target" ;;
+    *)  _self="$(dirname "$_self")/$_target" ;;
+  esac
+done
+MNEMON_ROOT="$(cd "$(dirname "$_self")/.." && pwd -P)"
+export MNEMON_ROOT
+BIN_DIR="$MNEMON_ROOT/bin"
+# shellcheck source=mnemon-config.sh
+source "$BIN_DIR/mnemon-config.sh"
+
+usage() {
+  cat <<'USAGE'
+Usage: mnemon [--instance <name>] [--config <path>] <command> [args...]
+
+Commands:
+  add <gateway options>      Capture a source (knowledge-gateway.sh source-add)
+  status                     Pipeline status for the instance
+  search --query <q> [...]   Search extracts (JSON; --human for text)
+  reindex                    Rebuild the vault's index.md
+  triage <input> [...]       Content-aware URL triage against the vault
+  audit [--cutoff DATE]      Archive consistency audit
+  init <name> --vault <path> [--archive <dir>] [--collection <name>]
+       [--reader-context <path>] [--charter <path>] [--writer-host <host>]
+       [--default] [--force] [--non-interactive]
+                             Create an instance config and scaffold its vault
+  doctor [--instance <name>] [--json]
+                             Health checks: ok|warn|fail <check> — <detail>
+  config get <key> | path | list | dump
+                             Resolved configuration
+  release [--dry-run] [--now]
+                             Maintainer: promote main → release → installed engine
+  version                    Engine version, branch and root
+  help                       This text
+  ingest | scan | monitor    Reserved (program phase 4)
+
+Global options (exported to the command):
+  --instance <name>          Select an instance   (MNEMON_INSTANCE)
+  --config <path>            Explicit config file (MNEMON_CONFIG)
+
+Config resolution: --config → $MNEMON_CONFIG → $MNEMON_INSTANCE → ./mnemon.yaml →
+$MNEMON_CONFIG_DIR/default → legacy mnemon.yaml (warns). MNEMON_CONFIG_DIR defaults
+to ${XDG_CONFIG_HOME:-~/.config}/mnemon; instances live in its instances/ folder.
+USAGE
+}
+
+die() { printf 'mnemon: %s\n' "$*" >&2; exit 1; }
+usage_error() { printf 'mnemon: %s\n\n' "$*" >&2; usage >&2; exit 2; }
+
+# Physical path of an existing directory.
+_abs_dir() { (cd "$1" 2>/dev/null && pwd -P); }
+
+_expand_tilde() { printf '%s' "${1/#\~/$HOME}"; }
+
+# Tilde-free absolute path; the parent must exist, the leaf need not.
+_abs_path() {
+  local p d
+  p="$(_expand_tilde "$1")"
+  case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+  d="$(cd "$(dirname "$p")" 2>/dev/null && pwd -P)" || { printf '%s' "$p"; return 0; }
+  if [[ "$d" == "/" ]]; then printf '/%s' "$(basename "$p")"; else printf '%s/%s' "$d" "$(basename "$p")"; fi
+}
+
+# Escape a replacement string for `sed s|...|...|`.
+_sed_esc() { printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'; }
+
+# Short host name (hostname -s, falling back to the first label of hostname).
+_host() {
+  local h
+  h="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)"
+  printf '%s' "${h%%.*}"
+}
+
+# JSON string body (no surrounding quotes).
+_json_str() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n\t' '  '; }
+
+# Absolute physical path of a worktree's common git dir (same repo ⇔ same value).
+_git_common_dir() {
+  local d
+  d="$(git -C "$1" rev-parse --git-common-dir 2>/dev/null)" || return 1
+  case "$d" in /*) ;; *) d="$1/$d" ;; esac
+  (cd "$d" 2>/dev/null && pwd -P)
+}
+
+# Copy src → dst unless dst exists (never overwrite vault files).
+_copy_if_missing() {
+  local src="$1" dst="$2" label="$3"
+  if [[ -f "$dst" ]]; then
+    echo "  ○ skipped $label (exists)"
+  elif [[ ! -f "$src" ]]; then
+    echo "  ○ skipped $label (no template at $src)"
+  else
+    mkdir -p "$(dirname "$dst")"
+    cp "$src" "$dst"
+    echo "  ✓ created $label"
+  fi
+}
+
+# Set `key: value` in a flat yaml file: replace an existing line, uncomment a
+# `# key:` template line, or append.
+_yaml_set() {
+  local file="$1" key="$2" value="$3" tmp
+  tmp="$(mktemp "$file.XXXXXX")"
+  if grep -q "^$key:" "$file" 2>/dev/null; then
+    sed -e "s|^$key:.*|$key: $(_sed_esc "$value")|" "$file" > "$tmp"
+  elif grep -q "^# $key:" "$file" 2>/dev/null; then
+    sed -e "s|^# $key:.*|$key: $(_sed_esc "$value")|" "$file" > "$tmp"
+  else
+    cat "$file" > "$tmp"
+    printf '%s: %s\n' "$key" "$value" >> "$tmp"
+  fi
+  mv "$tmp" "$file"
+}
+
+# ---------------------------------------------------------------------------
+# init
+# ---------------------------------------------------------------------------
+
+cmd_init() {
+  local name="" vault="" archive="" collection="" reader_src="" charter="" writer_host=""
+  local set_default=false force=false non_interactive=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --vault)           [[ $# -lt 2 ]] && usage_error "init: --vault requires a path"; vault="$2"; shift 2 ;;
+      --archive)         [[ $# -lt 2 ]] && usage_error "init: --archive requires a dir"; archive="$2"; shift 2 ;;
+      --collection)      [[ $# -lt 2 ]] && usage_error "init: --collection requires a name"; collection="$2"; shift 2 ;;
+      --reader-context)  [[ $# -lt 2 ]] && usage_error "init: --reader-context requires a path"; reader_src="$2"; shift 2 ;;
+      --charter)         [[ $# -lt 2 ]] && usage_error "init: --charter requires a path"; charter="$2"; shift 2 ;;
+      --writer-host)     [[ $# -lt 2 ]] && usage_error "init: --writer-host requires a host"; writer_host="$2"; shift 2 ;;
+      --default)         set_default=true; shift ;;
+      --force)           force=true; shift ;;
+      --non-interactive) non_interactive=true; shift ;;
+      -h|--help)         usage; exit 0 ;;
+      -*)                usage_error "init: unknown option $1" ;;
+      *)
+        [[ -z "$name" ]] || usage_error "init: unexpected argument '$1'"
+        name="$1"; shift ;;
+    esac
+  done
+  [[ -n "$name" ]] || usage_error "init: instance name required"
+  local name_re='^[A-Za-z0-9][A-Za-z0-9._-]*$'
+  [[ "$name" =~ $name_re ]] || die "init: invalid instance name '$name' (letters, digits, . _ - ; must start with a letter or digit)"
+  [[ "$name" != "$MNEMON_ADHOC_INSTANCE" ]] || die "init: '$MNEMON_ADHOC_INSTANCE' is reserved for configs loaded by path"
+
+  if [[ -z "$vault" ]]; then
+    if ! $non_interactive && [[ -t 0 ]]; then
+      printf 'Vault path for instance %s: ' "$name" >&2
+      IFS= read -r vault || vault=""
+    fi
+    [[ -n "$vault" ]] || usage_error "init: --vault <path> required"
+  fi
+
+  local cfg_dir inst_dir inst_file template
+  cfg_dir="$(mnemon_config_dir)"
+  inst_dir="$cfg_dir/instances"
+  inst_file="$inst_dir/$name.yaml"
+  template="$MNEMON_ROOT/mnemon.yaml.template"
+  [[ -f "$template" ]] || die "init: template not found: $template"
+  if [[ -f "$inst_file" ]] && ! $force; then
+    die "init: instance '$name' already exists at $inst_file (use --force to overwrite the config; vault files are never overwritten)"
+  fi
+
+  # Vault: create and make tilde-free absolute.
+  vault="$(_expand_tilde "$vault")"
+  mkdir -p "$vault" || die "init: cannot create vault directory $vault"
+  vault="$(_abs_dir "$vault")"
+
+  echo "=== mnemon init: $name ==="
+  echo "Vault:  $vault"
+  echo "Config: $inst_file"
+  echo ""
+
+  # 1. Vault scaffold (like setup.sh steps 1–2; never overwrites)
+  echo "1. Vault scaffold"
+  mkdir -p "$vault/Sources" "$vault/Synthesis" "$vault/_meta"
+  echo "  ✓ Sources/ Synthesis/ _meta/"
+  _copy_if_missing "$MNEMON_ROOT/vault-template/CLAUDE.md" "$vault/CLAUDE.md" "CLAUDE.md"
+  _copy_if_missing "$MNEMON_ROOT/vault-template/_meta/Protocol.md" "$vault/_meta/Protocol.md" "_meta/Protocol.md"
+  if [[ -n "$reader_src" ]]; then
+    reader_src="$(_expand_tilde "$reader_src")"
+    [[ -f "$reader_src" ]] || die "init: reader context not found: $reader_src"
+    _copy_if_missing "$reader_src" "$vault/reader-context.md" "reader-context.md (from $reader_src)"
+  else
+    _copy_if_missing "$MNEMON_ROOT/reader-context.md.template" "$vault/reader-context.md" "reader-context.md (generic — edit to personalize)"
+  fi
+  _copy_if_missing "$MNEMON_ROOT/mnemon-seed.md" "$vault/mnemon-seed.md" "mnemon-seed.md (reader profile builder)"
+
+  # 2. Instance config from the template
+  echo "2. Instance config"
+  mkdir -p "$inst_dir"
+  local tmp
+  tmp="$(mktemp "$inst_dir/.$name.XXXXXX")"
+  sed -e "s|{{instance}}|$(_sed_esc "$name")|g" \
+      -e "s|{{vault_path}}|$(_sed_esc "$vault")|g" \
+      "$template" > "$tmp"
+  if [[ -n "$collection" ]];  then _yaml_set "$tmp" qmd_collection "$collection"; fi
+  if [[ -n "$archive" ]];     then _yaml_set "$tmp" archive_dir "$(_abs_path "$archive")"; fi
+  if [[ -n "$charter" ]];     then _yaml_set "$tmp" charter_path "$(_abs_path "$charter")"; fi
+  if [[ -n "$writer_host" ]]; then _yaml_set "$tmp" writer_host "$writer_host"; fi
+  mv "$tmp" "$inst_file"
+  if $force; then echo "  ✓ wrote $inst_file (overwritten)"; else echo "  ✓ wrote $inst_file"; fi
+
+  # 3. Default instance
+  echo "3. Default instance"
+  local def_file="$cfg_dir/default" prev=""
+  prev="$(_mnemon_default_instance "$def_file" 2>/dev/null || true)"
+  if $set_default || [[ -z "$prev" ]]; then
+    printf '%s\n' "$name" > "$def_file"
+    echo "  ✓ default instance → $name ($def_file)"
+    prev="$name"
+  else
+    echo "  ○ default instance unchanged: $prev (use --default to switch)"
+  fi
+
+  echo ""
+  echo "Next: mnemon doctor"
+  if [[ "$prev" != "$name" ]]; then
+    echo "      (this instance is not the default — select it with: mnemon --instance $name doctor)"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# doctor
+# ---------------------------------------------------------------------------
+
+DOCTOR_JSON=false
+DOCTOR_FAILS=0
+DOCTOR_ITEMS=""
+
+_check() {
+  local status="$1" name="$2" detail="$3"
+  if [[ "$status" == fail ]]; then DOCTOR_FAILS=$((DOCTOR_FAILS + 1)); fi
+  if $DOCTOR_JSON; then
+    if [[ -n "$DOCTOR_ITEMS" ]]; then DOCTOR_ITEMS="$DOCTOR_ITEMS,"; fi
+    DOCTOR_ITEMS="$DOCTOR_ITEMS{\"name\":\"$(_json_str "$name")\",\"status\":\"$status\",\"detail\":\"$(_json_str "$detail")\"}"
+  else
+    printf '%s %s — %s\n' "$status" "$name" "$detail"
+  fi
+}
+
+cmd_doctor() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --instance) [[ $# -lt 2 ]] && usage_error "doctor: --instance requires a value"; export MNEMON_INSTANCE="$2"; shift 2 ;;
+      --json)     DOCTOR_JSON=true; shift ;;
+      -h|--help)  usage; exit 0 ;;
+      *)          usage_error "doctor: unknown option $1" ;;
+    esac
+  done
+
+  local have_config=false errf warn
+  errf="$(mktemp)"
+  if load_config 2>"$errf"; then
+    have_config=true
+    warn="$(tr '\n' ' ' <"$errf" | sed 's/[[:space:]]*$//')"
+    if [[ -n "$warn" ]]; then
+      _check warn config "$MNEMON_CONFIG_FILE (instance $MNEMON_INSTANCE); $warn"
+    else
+      _check ok config "$MNEMON_CONFIG_FILE (instance $MNEMON_INSTANCE)"
+    fi
+  else
+    _check fail config "$(tr '\n' ' ' <"$errf" | sed 's/[[:space:]]*$//')"
+  fi
+  rm -f "$errf"
+
+  if $have_config; then
+    # vault
+    local missing=""
+    if [[ ! -d "$VAULT_PATH" ]]; then
+      missing="vault directory"
+    else
+      [[ -d "$VAULT_PATH/Sources" ]] || missing="Sources/"
+      if [[ ! -d "$VAULT_PATH/_meta" ]]; then missing="${missing:+$missing, }_meta/"; fi
+    fi
+    if [[ -z "$missing" ]]; then
+      _check ok vault "$VAULT_PATH"
+    else
+      _check fail vault "$VAULT_PATH (missing: $missing) — run: mnemon init $MNEMON_INSTANCE --vault $VAULT_PATH --force"
+    fi
+
+    # reader-context
+    if [[ -f "$READER_CONTEXT_PATH" ]]; then
+      _check ok reader-context "$READER_CONTEXT_PATH"
+    else
+      _check fail reader-context "not found: $READER_CONTEXT_PATH"
+    fi
+
+    # charter
+    if [[ -f "$CHARTER_PATH" ]]; then
+      _check ok charter "$CHARTER_PATH"
+    else
+      _check warn charter "missing $CHARTER_PATH (optional)"
+    fi
+
+    # archive
+    if [[ -z "$ARCHIVE_DIR" ]]; then
+      _check ok archive "archive_dir not set (skipped)"
+    elif [[ ! -d "$ARCHIVE_DIR" ]]; then
+      _check fail archive "not a directory: $ARCHIVE_DIR"
+    elif [[ ! -w "$ARCHIVE_DIR" ]]; then
+      _check fail archive "not writable: $ARCHIVE_DIR"
+    else
+      _check ok archive "$ARCHIVE_DIR (writable)"
+    fi
+
+    # state
+    if [[ -d "$MNEMON_STATE_DIR" ]]; then
+      _check ok state "$MNEMON_STATE_DIR"
+    elif mkdir -p "$MNEMON_STATE_DIR" 2>/dev/null; then
+      _check ok state "$MNEMON_STATE_DIR (created)"
+    else
+      _check fail state "cannot create $MNEMON_STATE_DIR"
+    fi
+  fi
+
+  # deps — required
+  local required="claude jq shasum python3" optional="defuddle pandoc yt-dlp ffprobe whisper"
+  local dep missing_req="" missing_opt=""
+  for dep in $required; do
+    command -v "$dep" >/dev/null 2>&1 || missing_req="${missing_req:+$missing_req }$dep"
+  done
+  if [[ -z "$missing_req" ]]; then
+    _check ok deps "required present: $required"
+  else
+    _check fail deps "missing required: $missing_req"
+  fi
+  for dep in $optional; do
+    command -v "$dep" >/dev/null 2>&1 || missing_opt="${missing_opt:+$missing_opt }$dep"
+  done
+  if [[ -z "$missing_opt" ]]; then
+    _check ok deps-optional "all present: $optional"
+  else
+    _check warn deps-optional "missing: $missing_opt"
+  fi
+
+  # qmd — required only when search_provider is qmd
+  if $have_config && [[ "$SEARCH_PROVIDER" == qmd ]]; then
+    if ! command -v qmd >/dev/null 2>&1; then
+      _check fail qmd "search_provider is qmd but qmd is not installed"
+    else
+      _check ok qmd "$(command -v qmd)"
+      local listing
+      if listing="$(qmd collection list 2>/dev/null)"; then
+        if printf '%s\n' "$listing" | awk -v c="$QMD_COLLECTION" '$1 == c { found = 1 } END { exit !found }'; then
+          _check ok qmd-collection "$QMD_COLLECTION"
+        else
+          _check warn qmd-collection "collection '$QMD_COLLECTION' not in 'qmd collection list' — run: qmd collection add $QMD_COLLECTION $VAULT_PATH --mode hybrid"
+        fi
+      else
+        _check warn qmd-collection "could not run 'qmd collection list' (skipped)"
+      fi
+    fi
+  fi
+
+  # engine
+  local root_phys home_phys branch
+  root_phys="$(_abs_dir "$MNEMON_ROOT")"
+  if [[ -z "${MNEMON_HOME:-}" ]]; then
+    _check warn engine "MNEMON_HOME not set (running from $root_phys)"
+  else
+    home_phys="$(_abs_dir "$MNEMON_HOME" 2>/dev/null || true)"
+    if [[ -z "$home_phys" ]]; then
+      _check warn engine "MNEMON_HOME=$MNEMON_HOME does not exist (running from $root_phys)"
+    elif [[ "$home_phys" != "$root_phys" ]]; then
+      _check warn engine "running from $root_phys, installed engine is $MNEMON_HOME"
+    elif git -C "$home_phys" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      branch="$(git -C "$home_phys" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+      if [[ "$branch" == release ]]; then
+        _check ok engine "$MNEMON_HOME (branch release)"
+      else
+        _check warn engine "$MNEMON_HOME is on branch $branch, expected release"
+      fi
+    else
+      _check ok engine "$MNEMON_HOME"
+    fi
+  fi
+
+  if $have_config; then
+    # writer
+    if [[ -z "$WRITER_HOST" ]]; then
+      _check ok writer "writer_host not set (any host may write)"
+    else
+      local this_host
+      this_host="$(_host)"
+      if [[ "$this_host" == "$WRITER_HOST" ]]; then
+        _check ok writer "this host ($this_host) is the writer"
+      else
+        _check fail writer "this host must not write vault $VAULT_PATH (writer_host $WRITER_HOST, this host $this_host)"
+      fi
+    fi
+
+    # pending-writes
+    local pdir="$VAULT_PATH/_inputs/pending-writes" n=0
+    if [[ -d "$pdir" ]]; then
+      n=$(find "$pdir" -type f -not -name '.*' 2>/dev/null | wc -l | tr -d ' ')
+    fi
+    if [[ "$n" -gt 0 ]]; then
+      _check warn pending-writes "$n file(s) in $pdir"
+    else
+      _check ok pending-writes "none"
+    fi
+  fi
+
+  local rc=0
+  if [[ $DOCTOR_FAILS -gt 0 ]]; then rc=1; fi
+  if $DOCTOR_JSON; then
+    printf '{"checks":[%s],"exit":%d}\n' "$DOCTOR_ITEMS" "$rc"
+  fi
+  exit $rc
+}
+
+# ---------------------------------------------------------------------------
+# config
+# ---------------------------------------------------------------------------
+
+CONFIG_EXPORTS="MNEMON_ROOT MNEMON_CONFIG_FILE MNEMON_INSTANCE MNEMON_STATE_DIR VAULT_PATH READER_CONTEXT_PATH CHARTER_PATH SEARCH_PROVIDER QMD_COLLECTION DEFAULT_MODEL DEFAULT_LANGUAGE WHISPER_MODEL AUTO_DETECT_ORIGIN ARCHIVE_DIR WRITER_HOST"
+
+cmd_config_list() {
+  local dir inst_dir def f name vault marker count=0
+  dir="$(mnemon_config_dir)"
+  inst_dir="$dir/instances"
+  def="$(_mnemon_default_instance "$dir/default" 2>/dev/null || true)"
+  if [[ -d "$inst_dir" ]]; then
+    for f in "$inst_dir"/*.yaml; do
+      [[ -f "$f" ]] || continue
+      name="$(basename "$f" .yaml)"
+      vault="$(_parse_yaml_value vault_path "$f")"
+      marker=" "
+      if [[ "$name" == "$def" ]]; then marker="*"; fi
+      printf '%s %-16s %s\n' "$marker" "$name" "$vault"
+      count=$((count + 1))
+    done
+  fi
+  if [[ $count -eq 0 ]]; then
+    printf 'no instances in %s\n  create one with: mnemon init <name> --vault <path>\n' "$inst_dir" >&2
+  fi
+}
+
+cmd_config() {
+  local sub="${1:-}"
+  [[ -n "$sub" ]] || usage_error "config: expected get <key> | path | list | dump"
+  shift
+  case "$sub" in
+    get)
+      local key="${1:-}" var=""
+      [[ -n "$key" ]] || usage_error "config get: key required"
+      case "$key" in
+        vault_path)          var=VAULT_PATH ;;
+        reader_context_path) var=READER_CONTEXT_PATH ;;
+        archive_dir)         var=ARCHIVE_DIR ;;
+        qmd_collection)      var=QMD_COLLECTION ;;
+        search_provider)     var=SEARCH_PROVIDER ;;
+        default_model)       var=DEFAULT_MODEL ;;
+        default_language)    var=DEFAULT_LANGUAGE ;;
+        whisper_model)       var=WHISPER_MODEL ;;
+        auto_detect_origin)  var=AUTO_DETECT_ORIGIN ;;
+        state_dir)           var=MNEMON_STATE_DIR ;;
+        charter_path)        var=CHARTER_PATH ;;
+        writer_host)         var=WRITER_HOST ;;
+        instance)            var=MNEMON_INSTANCE ;;
+        config_file)         var=MNEMON_CONFIG_FILE ;;
+        config_dir)          mnemon_config_dir; echo; return 0 ;;
+        *) printf 'mnemon config get: unknown key %s\n' "$key" >&2; exit 2 ;;
+      esac
+      load_config || exit 1
+      printf '%s\n' "${!var}" ;;
+    path)
+      load_config || exit 1
+      printf '%s\n' "$MNEMON_CONFIG_FILE" ;;
+    list)
+      cmd_config_list ;;
+    dump)
+      load_config || exit 1
+      local v
+      printf 'MNEMON_CONFIG_DIR=%s\n' "$(mnemon_config_dir)"
+      for v in $CONFIG_EXPORTS; do
+        printf '%s=%s\n' "$v" "${!v}"
+      done ;;
+    *) usage_error "config: unknown subcommand '$sub' (expected get | path | list | dump)" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# release — main → release → installed engine ($MNEMON_HOME)
+# ---------------------------------------------------------------------------
+
+cmd_release() {
+  local dry=false now=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) dry=true; shift ;;
+      --now)     now=true; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *)         usage_error "release: unknown option $1" ;;
+    esac
+  done
+
+  local home="${MNEMON_HOME:-}"
+  [[ -n "$home" ]] || die "release: MNEMON_HOME is not set (it must point at the installed engine worktree on branch release)"
+  [[ -d "$home" ]] || die "release: MNEMON_HOME=$home does not exist"
+  git -C "$home" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "release: $home is not a git worktree"
+  git -C "$MNEMON_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "release: dev tree $MNEMON_ROOT is not a git worktree"
+  local home_branch
+  home_branch="$(git -C "$home" rev-parse --abbrev-ref HEAD)"
+  [[ "$home_branch" == release ]] || die "release: $home is on branch '$home_branch', expected 'release'"
+  local dev_common home_common
+  dev_common="$(_git_common_dir "$MNEMON_ROOT")" || die "release: cannot read git dir of $MNEMON_ROOT"
+  home_common="$(_git_common_dir "$home")" || die "release: cannot read git dir of $home"
+  [[ "$dev_common" == "$home_common" ]] || die "release: $home is not a worktree of this repo ($home_common != $dev_common)"
+  git -C "$MNEMON_ROOT" rev-parse --verify -q main >/dev/null || die "release: no 'main' branch in $MNEMON_ROOT"
+
+  local prev main_sha dev_branch dev_sha dirty="clean" ancestor="yes"
+  prev="$(git -C "$home" rev-parse --short HEAD)"
+  main_sha="$(git -C "$MNEMON_ROOT" rev-parse --short main)"
+  dev_branch="$(git -C "$MNEMON_ROOT" rev-parse --abbrev-ref HEAD)"
+  dev_sha="$(git -C "$MNEMON_ROOT" rev-parse --short HEAD)"
+  if [[ -n "$(git -C "$MNEMON_ROOT" status --porcelain --untracked-files=no)" ]]; then dirty="DIRTY (uncommitted tracked changes)"; fi
+  if ! git -C "$MNEMON_ROOT" merge-base --is-ancestor release main 2>/dev/null; then ancestor="NO — release has diverged from main"; fi
+
+  if $dry; then
+    echo "mnemon release — dry run (nothing changes)"
+    echo "  dev tree:  $MNEMON_ROOT ($dev_branch @ $dev_sha, $dirty)"
+    echo "  installed: $home (release @ $prev)"
+    echo "  main:      $main_sha"
+    echo "  1. check:  git -C $MNEMON_ROOT status --porcelain --untracked-files=no   → $dirty"
+    echo "  2. fetch:  git -C $MNEMON_ROOT fetch origin"
+    echo "  3. check:  git -C $MNEMON_ROOT merge-base --is-ancestor release main   → $ancestor"
+    echo "  4. merge:  git -C $home merge --ff-only main   ($prev → $main_sha)"
+    echo "  5. push:   git -C $home push origin release"
+    echo "  6. smoke:  $home/bin/mnemon doctor && bash $home/tests/test_config.sh"
+    if $now; then echo "  7. ping:   node ping not implemented (program phase 4)"; fi
+    echo "  rollback:  git -C $home reset --hard $prev"
+    exit 0
+  fi
+
+  # 1. dev tree clean
+  if [[ "$dirty" != clean ]]; then
+    die "release: dev tree $MNEMON_ROOT has uncommitted tracked changes — commit or stash first"
+  fi
+  # 2. fetch (non-fatal)
+  if ! git -C "$MNEMON_ROOT" fetch origin >/dev/null 2>&1; then
+    echo "mnemon release: warning — 'git fetch origin' failed (offline?); continuing with local refs" >&2
+  fi
+  # 3. release must be an ancestor of main
+  if ! git -C "$MNEMON_ROOT" merge-base --is-ancestor release main 2>/dev/null; then
+    die "release: release has diverged from main (release=$(git -C "$MNEMON_ROOT" rev-parse --short release), main=$main_sha) — reconcile manually"
+  fi
+  # 4. ff-merge: moves the release branch and the installed worktree together
+  echo "release: $home  $prev → $main_sha (ff-only merge of main)"
+  if ! git -C "$home" merge --ff-only main; then
+    die "release: ff-merge failed — roll back with: git -C $home reset --hard $prev"
+  fi
+  # 5. push (non-fatal)
+  if ! git -C "$home" push origin release >/dev/null 2>&1; then
+    echo "mnemon release: warning — 'git push origin release' failed (offline?); push later with: git -C $home push origin release" >&2
+  fi
+  # 6. smoke
+  local smoke_ok=true log
+  log="$(mktemp)"
+  echo "release: smoke — $home/bin/mnemon doctor"
+  if ! "$home/bin/mnemon" doctor; then smoke_ok=false; fi
+  echo "release: smoke — bash $home/tests/test_config.sh"
+  if bash "$home/tests/test_config.sh" >"$log" 2>&1; then
+    tail -1 "$log"
+  else
+    cat "$log"
+    smoke_ok=false
+  fi
+  rm -f "$log"
+  if ! $smoke_ok; then
+    echo "mnemon release: smoke failed. Roll back with:" >&2
+    echo "  git -C $home reset --hard $prev" >&2
+    exit 1
+  fi
+  if $now; then echo "node ping not implemented (program phase 4)"; fi
+  echo "released $(git -C "$home" rev-parse --short HEAD) → $home"
+}
+
+# ---------------------------------------------------------------------------
+# version
+# ---------------------------------------------------------------------------
+
+cmd_version() {
+  local desc branch
+  if git -C "$MNEMON_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    desc="$(git -C "$MNEMON_ROOT" describe --tags --always --dirty 2>/dev/null || echo unknown)"
+    branch="$(git -C "$MNEMON_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+  else
+    desc="unknown"
+    branch="no-git"
+  fi
+  printf 'mnemon %s (%s) %s\n' "$desc" "$branch" "$MNEMON_ROOT"
+}
+
+# ---------------------------------------------------------------------------
+# Global options + dispatch
+# ---------------------------------------------------------------------------
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --instance)   [[ $# -lt 2 ]] && usage_error "--instance requires a value"; export MNEMON_INSTANCE="$2"; shift 2 ;;
+    --instance=*) export MNEMON_INSTANCE="${1#--instance=}"; shift ;;
+    --config)     [[ $# -lt 2 ]] && usage_error "--config requires a value"; export MNEMON_CONFIG="$(_abs_path "$2")"; shift 2 ;;
+    --config=*)   export MNEMON_CONFIG="$(_abs_path "${1#--config=}")"; shift ;;
+    -h|--help)    usage; exit 0 ;;
+    --)           shift; break ;;
+    -*)           usage_error "unknown option: $1" ;;
+    *)            break ;;
+  esac
+done
+[[ $# -gt 0 ]] || usage_error "a command is required"
+cmd="$1"
+shift
+
+case "$cmd" in
+  add)      exec "$BIN_DIR/knowledge-gateway.sh" source-add "$@" ;;
+  status)   exec "$BIN_DIR/knowledge-gateway.sh" status "$@" ;;
+  search)   exec python3 "$BIN_DIR/mnemon-search.py" "$@" ;;
+  reindex)  load_config || exit 1; exec python3 "$BIN_DIR/knowledge-reindex.py" "$VAULT_PATH" "$@" ;;
+  triage)   load_config || exit 1; exec python3 "$BIN_DIR/triage-urls.py" --vault "$VAULT_PATH" "$@" ;;
+  audit)    load_config || exit 1; exec python3 "$BIN_DIR/archive-audit.py" --config "$MNEMON_CONFIG_FILE" "$@" ;;
+  init)     cmd_init "$@" ;;
+  doctor)   cmd_doctor "$@" ;;
+  config)   cmd_config "$@" ;;
+  release)  cmd_release "$@" ;;
+  version)  cmd_version ;;
+  ingest|scan|monitor)
+    printf 'mnemon %s: not implemented yet (program phase 4)\n' "$cmd" >&2
+    exit 2 ;;
+  help|-h|--help) usage; exit 0 ;;
+  *) usage_error "unknown command: $cmd" ;;
+esac
