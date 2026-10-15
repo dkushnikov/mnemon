@@ -37,15 +37,61 @@ import datetime
 from pathlib import Path
 
 
+def decode_dq(inner: str) -> str:
+    """Body of a double-quoted scalar: exactly `\\"` → `"` and `\\\\` → `\\` (spec §4.4), one pass.
+
+    Any other backslash sequence is kept as it is; a single pass means a value that ends
+    in a backslash followed by an escaped quote (`\\\\\\"`) decodes to `\\"`, not to `"`.
+    """
+    out = []
+    i = 0
+    n = len(inner)
+    while i < n:
+        c = inner[i]
+        if c == '\\' and i + 1 < n and inner[i + 1] in ('"', '\\'):
+            out.append(inner[i + 1])
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
+
+def frontmatter_block(text: str) -> str:
+    """The text between the opening `---` line and the closing `---`/`...` line, or the
+    whole text when there is no frontmatter block (legacy files)."""
+    if not text.startswith('---'):
+        return text
+    lines = text.split('\n')
+    if lines[0].strip() != '---':
+        return text
+    for i in range(1, len(lines)):
+        if lines[i].strip() in ('---', '...'):
+            return '\n'.join(lines[1:i])
+    return text
+
+
 def parse_field(text: str, key: str) -> str | None:
-    """Parse 'key: value' from frontmatter. Strips surrounding quotes."""
-    m = re.search(rf'^{key}:\s*(.*)$', text, re.M)
+    """Parse a top-level 'key: value' from the frontmatter block.
+
+    A double-quoted value decodes `\\"` and `\\\\` and nothing else (no tilde expansion,
+    no other escapes — the serialization subset of spec §4.4); a single-quoted value is
+    taken as it is; an unquoted value is trimmed. Nested keys (indented) never match.
+    """
+    m = re.search(rf'^{re.escape(key)}:[ \t]*(.*)$', frontmatter_block(text), re.M)
     if not m:
         return None
     v = m.group(1).strip()
-    if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+    if len(v) >= 2 and v.startswith('"') and v.endswith('"'):
+        v = decode_dq(v[1:-1])
+    elif len(v) >= 2 and v.startswith("'") and v.endswith("'"):
         v = v[1:-1]
     return v or None
+
+
+def display_text(title: str) -> str:
+    """Link display text that cannot close the wikilink or start a new alias (spec §4.4)."""
+    return title.replace(']]', '] ]').replace('|', '/')
 
 
 def parse_list_field(text: str, key: str) -> list[str]:
@@ -98,7 +144,7 @@ def generate_entry(folder: Path) -> str | None:
     if status and status not in ('extracted', None):
         parts.append(status)
 
-    return f"- [[Sources/{folder.name}/extract|{title}]] ({', '.join(parts)})"
+    return f"- [[Sources/{folder.name}/extract|{display_text(title)}]] ({', '.join(parts)})"
 
 
 def reindex(vault: Path) -> tuple[int, int, int, int]:
@@ -189,7 +235,21 @@ Universal reference storage. Sources captured and extracted by AI, synthesis wri
 - `/knowledge-status` — show pipeline status
 """
 
-    index_path.write_text(out, encoding='utf-8')
+    # Atomic: the vault never holds a half-written index.md (D15, §3.5).
+    tmp_path = index_path.with_name('.index.md.tmp')
+    with open(tmp_path, 'w', encoding='utf-8') as fh:
+        fh.write(out)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp_path, index_path)
+    try:
+        dfd = os.open(str(vault), os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
     return sources_count, extracted_count, synthesis_count, len(no_extract)
 
 
