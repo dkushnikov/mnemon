@@ -20,16 +20,16 @@ The dispatcher takes its global options before the command: `mnemon [--instance 
 |---|---|---|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`) | extraction (`claude -p`), the plugin | per its docs; log in once interactively |
 | `git`, `bash`, `python3` | the engine | system / Homebrew |
-| `jq` | gateway JSON handling | `brew install jq` |
-| `pandoc` | document conversion on import | `brew install pandoc` |
-| [`defuddle`](https://github.com/kepano/defuddle) | clean article capture | `npm install -g defuddle` |
-| Python packages `pyyaml`, `requests` | config parsing, fetching | `pip3 install pyyaml requests` (or your preferred Python environment) |
+| `jq`, `shasum` | gateway JSON handling, source hashes | `brew install jq` (shasum ships with macOS / perl) |
+| `pandoc` (optional) | document conversion on import | `brew install pandoc` |
+| [`defuddle`](https://github.com/kepano/defuddle) (optional) | URL triage (`mnemon triage`) and depth probing | `npm install -g defuddle` |
+| Python packages `pyyaml`, `requests` (optional) | depth-aware capture (`--depth auto`, kb-depth-fold / kb_fetch); `mnemon doctor` warns when missing | `pip3 install pyyaml requests` (or your preferred Python environment) |
 | `yt-dlp` (optional) | YouTube transcripts | `brew install yt-dlp` |
 | `ffmpeg` (optional) | audio probing / conversion | `brew install ffmpeg` |
 | `whisper` (optional) | audio transcription | `pip3 install openai-whisper` |
 | [`qmd`](https://github.com/tobi/qmd) (optional) | a hybrid semantic + keyword index of the vault for the qmd CLI; with `search_provider: qmd` the gateway refreshes it after each capture and `mnemon doctor` requires it. `mnemon search` itself is a grep-style scan and does not query qmd yet | `npm install -g @tobilu/qmd` (see the README's known issues) |
 
-`mnemon doctor` reports what is missing and whether the selected instance is healthy; `mnemon doctor --json` for machines.
+`mnemon doctor` reports what is missing (required → `fail`, optional → `warn`) and whether the selected instance is healthy; `mnemon doctor --json` for machines.
 
 ## Variant A — laptop: dev tree + installed engine
 

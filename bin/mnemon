@@ -426,6 +426,16 @@ cmd_doctor() {
   else
     _check warn deps-optional "missing: $missing_opt"
   fi
+  # python packages used by depth-aware capture (kb-depth-fold.py, kb_fetch.py):
+  # without them `--depth auto` degrades to a plain capture
+  local missing_py=""
+  python3 -c 'import yaml' >/dev/null 2>&1 || missing_py="pyyaml"
+  python3 -c 'import requests' >/dev/null 2>&1 || missing_py="${missing_py:+$missing_py }requests"
+  if [[ -z "$missing_py" ]]; then
+    _check ok deps-python "pyyaml requests"
+  else
+    _check warn deps-python "missing: $missing_py (depth-aware capture degrades; pip3 install $missing_py)"
+  fi
 
   # qmd — required only when search_provider is qmd
   if $have_config && [[ "$SEARCH_PROVIDER" == qmd ]]; then

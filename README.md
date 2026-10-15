@@ -57,7 +57,7 @@ Extracts live in your Obsidian vault — searchable, linkable, always available:
 
 ## Install
 
-Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Mnemon uses `claude` internally for extraction), `git`, `python3`, `jq` and [`defuddle`](https://github.com/kepano/defuddle). Optional: `yt-dlp`, `ffmpeg`, `whisper`, [QMD](https://github.com/tobi/qmd). `mnemon doctor` checks all of them.
+Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Mnemon uses `claude` internally for extraction), `git`, `bash`, `python3`, `jq` and `shasum`. Optional: the Python packages `pyyaml` and `requests` (depth-aware capture), [`defuddle`](https://github.com/kepano/defuddle) (URL triage and depth probing), `pandoc`, `yt-dlp`, `ffmpeg`, `whisper`, [QMD](https://github.com/tobi/qmd). `mnemon doctor` checks all of them — required ones fail, optional ones warn.
 
 Mnemon runs from an **installed engine** — a checkout of the `release` branch at `$MNEMON_HOME` (default `~/.local/share/mnemon/engine`) — while development happens in a separate clone (`~/Code/mnemon` by convention; any path works). Sessions, skills and jobs always call the installed engine, never the dev tree. The full recipes — laptop, headless node, a second instance — are in [`docs/install.md`](docs/install.md).
 

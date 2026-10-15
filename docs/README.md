@@ -62,7 +62,7 @@ You → /source-add URL → mnemon add → knowledge-gateway.sh → claude -p �
                           templates/core/*.md
 ```
 
-1. **Capture**: the dispatcher resolves the instance and hands the request to the gateway, which fetches the content (defuddle / WebFetch for URLs, yt-dlp for YouTube, whisper for audio)
+1. **Capture**: the dispatcher resolves the instance and hands the request to the gateway, which fetches the content (WebFetch through `claude -p` for URLs — `--render` pre-renders SPAs, `--depth` probes with `defuddle` — yt-dlp for YouTube, whisper for audio)
 2. **Extract**: Claude applies a source-type-specific template with your reader context embedded
 3. **Store**: Structured source.md + extract.md in `Sources/YYYY-MM-DD_{hash8}/`
 4. **Search**: `/source-search` (= `mnemon search`) scans your library — a grep-style token match over `extract.md` (optionally `source.md` and `Synthesis/`), ranked by rating then date. The JSON reports `provider: "grep"` (the method that ran) and `configured_provider` (the instance's `search_provider`); no qmd-backed search exists yet
@@ -70,12 +70,15 @@ You → /source-add URL → mnemon add → knowledge-gateway.sh → claude -p �
 ## Requirements
 
 - **Claude Code** (required) — any subscription (Pro, Max, API key)
-- **jq**, **defuddle**, **python3** with `pyyaml` and `requests` (required) — capture and config handling
+- **git**, **bash**, **python3**, **jq**, **shasum** (required) — the engine
+- **pyyaml**, **requests** (Python packages, optional) — depth-aware capture (`--depth auto`); without them it degrades to a plain capture
+- **defuddle** (optional) — URL triage (`mnemon triage`) and depth probing
+- **pandoc** (optional) — document conversion on import
 - **yt-dlp** (optional) — for YouTube transcript extraction
 - **ffmpeg** / **whisper** (optional) — for audio detection and transcription
-- **QMD** (optional) — for hybrid semantic + keyword search
+- **QMD** (optional) — a hybrid semantic + keyword index for the qmd CLI; required by `mnemon doctor` only when `search_provider: qmd`
 
-`mnemon doctor` checks all of them.
+`mnemon doctor` checks all of them: a missing required dependency is a `fail`, a missing optional one a `warn` (`deps`, `deps-optional`, `deps-python`, `qmd`).
 
 ## Commands
 

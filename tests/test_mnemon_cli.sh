@@ -257,6 +257,9 @@ assert_contains "$out" "warn engine — MNEMON_HOME not set" "doctor: warn engin
 assert_contains "$out" "ok writer — writer_host not set" "doctor: ok writer when unset"
 assert_contains "$out" "ok pending-writes — none" "doctor: ok pending-writes"
 assert_contains "$out" " deps — " "doctor: deps line present"
+assert_contains "$out" " deps-optional — " "doctor: deps-optional line present"
+assert_contains "$out" " deps-python — " "doctor: deps-python line present (pyyaml, requests)"
+assert_eq "$(printf '%s\n' "$out" | grep -c '^fail deps-python' || true)" "0" "doctor: missing python packages warn, never fail"
 fails=$(printf '%s\n' "$out" | grep -c '^fail ' || true)
 depfails=$(printf '%s\n' "$out" | grep -c '^fail deps' || true)
 if [[ "$rc" -eq 0 ]]; then
