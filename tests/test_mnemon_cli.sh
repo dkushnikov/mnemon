@@ -317,6 +317,50 @@ assert_not_contains "$out" "init adhoc" "doctor never suggests the reserved name
 run "$MNEMON" doctor --bogus
 assert_eq "$rc" "2" "doctor rejects unknown options"
 
+# --- engine maintenance lock (A3) ---
+echo "--- engine lock ---"
+LOCK="$XDG_STATE_HOME/mnemon/engine-release.lock"
+mkdir -p "$(dirname "$LOCK")"
+printf 'pid=99999\ntimestamp=%s\ndate=2026-01-01T00:00:00Z\ntarget=abc1234\n' "$(date +%s)" > "$LOCK"
+run "$MNEMON" help
+assert_eq "$rc" "75" "fresh lock: mnemon help exits 75"
+assert_contains "$out" "mnemon: engine is being updated, retry later" "fresh lock: the message"
+assert_contains "$out" "target abc1234" "fresh lock: names the target"
+run "$MNEMON" --help
+assert_eq "$rc" "75" "fresh lock: mnemon --help exits 75 too"
+run "$MNEMON" config path
+assert_eq "$rc" "75" "fresh lock: config path exits 75"
+run "$MNEMON" version
+assert_eq "$rc" "75" "fresh lock: version exits 75"
+run "$MNEMON_ROOT/bin/knowledge-gateway.sh" source-add --url https://example.com/locked --dry-run
+assert_eq "$rc" "75" "fresh lock: the gateway exits 75"
+assert_not_contains "$out" "DRY RUN" "fresh lock: the gateway does nothing"
+run "$MNEMON" doctor
+assert_contains "$out" "warn engine-lock — engine update in progress since 2026-01-01T00:00:00Z (pid 99999, target abc1234)" "fresh lock: doctor reports it"
+assert_contains "$out" "ok config — " "fresh lock: doctor still runs (exempt)"
+run env MNEMON_ENGINE_LOCK_OWNER=99999 "$MNEMON" version
+assert_eq "$rc" "0" "the lock owner's children pass the guard"
+run env MNEMON_ENGINE_LOCK_OWNER=1 "$MNEMON" version
+assert_eq "$rc" "75" "another pid as owner does not pass"
+printf 'pid=99999\ntimestamp=%s\ndate=2026-01-01T00:00:00Z\ntarget=abc1234\n' "$(( $(date +%s) - 3600 ))" > "$LOCK"
+run "$MNEMON" help
+assert_eq "$rc" "0" "stale lock (timestamp older than 30 min): ignored"
+assert_contains "$out" "mnemon: ignoring stale engine lock $LOCK" "stale lock: reported on stderr"
+run "$MNEMON" doctor
+assert_contains "$out" "warn engine-lock — stale lock $LOCK" "stale lock: doctor reports it as stale"
+printf 'pid=99999\n' > "$LOCK"
+touch -t 202001010000 "$LOCK"
+run "$MNEMON" help
+assert_eq "$rc" "0" "stale lock (no timestamp line, old mtime): ignored"
+printf 'pid=99999\n' > "$LOCK"
+run "$MNEMON" help
+assert_eq "$rc" "75" "lock without a timestamp line but a fresh mtime blocks"
+rm -f "$LOCK"
+run "$MNEMON" doctor
+assert_contains "$out" "ok engine-lock — none ($LOCK)" "no lock: doctor ok"
+run "$MNEMON" help
+assert_eq "$rc" "0" "no lock: help exits 0 again"
+
 # --- subcommand wiring ---
 echo "--- subcommands ---"
 run "$MNEMON" status
@@ -371,12 +415,28 @@ assert_eq "$(git -C "$RWT" rev-parse --abbrev-ref HEAD)" "release" "fixture: rel
 
 run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --dry-run
 assert_eq "$rc" "0" "release --dry-run exits 0"
+assert_contains "$out" "1. lock:   $LOCK" "dry-run prints the lock step"
+assert_contains "$out" "2. drain:  wait up to 120s for processes matching: pgrep -f $RWT/bin/" "dry-run prints the drain step"
 assert_contains "$out" "git -C $RWT merge --ff-only main" "dry-run prints the ff-merge step with real paths"
-assert_contains "$out" "git -C $RWT push origin release" "dry-run prints the push step"
 assert_contains "$out" "$RWT/bin/mnemon doctor" "dry-run prints the smoke step"
+assert_contains "$out" "$RWT/bin/mnemon version (reports $(git -C "$REPO" rev-parse --short main))" "dry-run names the commit the smoke expects"
+assert_contains "$out" "8. push:   git -C $RWT push origin release   (only after a green smoke)" "dry-run prints the push step after the smoke"
+smoke_at=$(printf '%s\n' "$out" | grep -n ' smoke:' | head -1 | cut -d: -f1)
+push_at=$(printf '%s\n' "$out" | grep -n ' push:' | head -1 | cut -d: -f1)
+[[ -n "$smoke_at" && -n "$push_at" && "$smoke_at" -lt "$push_at" ]] && pass "dry-run orders smoke before push" || fail "dry-run orders smoke before push" "smoke line $smoke_at, push line $push_at"
+assert_contains "$out" "unlock:    rm $LOCK" "dry-run prints the unlock step"
+assert_contains "$out" "mnemon release --rollback" "dry-run prints the rollback command"
 assert_contains "$out" "→ clean" "dry-run reports the dev tree as clean"
 assert_contains "$out" "→ yes" "dry-run reports release as an ancestor of main"
 assert_not_contains "$out" "node ping" "dry-run without --now says nothing about ping"
+[[ -e "$LOCK" ]] && fail "dry-run takes no lock" "lock exists" || pass "dry-run takes no lock"
+run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --dry-run --drain-timeout 7
+assert_contains "$out" "wait up to 7s" "--drain-timeout is honoured"
+run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --drain-timeout soon
+assert_eq "$rc" "2" "--drain-timeout must be numeric"
+run env MNEMON_HOME="$RWT" "$RWT/bin/mnemon" release --dry-run
+assert_eq "$rc" "1" "release refuses to run from the installed engine itself"
+assert_contains "$out" "run it from the dev tree" "...and says why"
 run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --dry-run --now
 assert_contains "$out" "node ping not implemented (program phase 4)" "--now prints the phase-4 notice"
 assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$(git -C "$REPO" rev-parse main)" "dry-run changes nothing"
@@ -408,14 +468,77 @@ for d in claude jq shasum; do
     chmod +x "$STUBBIN/$d"
   fi
 done
+printf 'pid=99999\ntimestamp=%s\ndate=2026-01-01T00:00:00Z\ntarget=abc1234\n' "$(date +%s)" > "$LOCK"
+run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
+assert_eq "$rc" "75" "release refuses while another update holds a fresh lock"
+assert_contains "$out" "another engine update holds $LOCK" "...naming the lock"
+assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$(git -C "$REPO" rev-parse main~1)" "a refused release changes nothing"
+rm -f "$LOCK"
+
 run env PATH="$STUBBIN:$PATH" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --now
-assert_eq "$rc" "0" "release succeeds (ff-merge + push + smoke)"
+assert_eq "$rc" "0" "release succeeds (lock + drain + ff-merge + smoke + push)"
+assert_contains "$out" "release: lock $LOCK (pid " "release takes the lock"
+assert_contains "$out" "release: drain — no engine processes running from $RWT/bin/" "release drains before moving files"
 assert_contains "$out" "released $(git -C "$REPO" rev-parse --short main) → $RWT" "release prints the released sha and target"
 assert_contains "$out" "node ping not implemented (program phase 4)" "release --now prints the phase-4 notice"
 assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$(git -C "$REPO" rev-parse main)" "release worktree now at main"
 assert_eq "$(git -C "$ORIGIN" rev-parse release)" "$(git -C "$REPO" rev-parse main)" "origin/release pushed"
+assert_contains "$out" "release: smoke — $RWT/bin/mnemon config path" "release smoke resolves config"
+assert_contains "$out" "mnemon $(git -C "$REPO" rev-parse --short main) (release, $(git -C "$REPO" rev-parse --short main)) $RWT" "release smoke: version reports the new commit"
 assert_contains "$out" "ok config — " "release smoke ran doctor"
 assert_contains "$out" "Results: " "release smoke ran test_config.sh"
+assert_contains "$out" "release: lock removed ($LOCK)" "release removes the lock last"
+[[ -e "$LOCK" ]] && fail "lock removed after a successful release" "lock exists" || pass "lock removed after a successful release"
+
+# a failing smoke never publishes: nothing pushed, rollback printed, lock removed
+PREV_REL=$(git -C "$RWT" rev-parse --short HEAD)
+PREV_FULL=$(git -C "$RWT" rev-parse HEAD)
+printf '# second change\n' >> "$REPO/tests/test-helper.sh"
+g "$REPO" commit -q -am "second change on main"
+NEW_MAIN=$(git -C "$REPO" rev-parse --short main)
+run env MNEMON_SMOKE_CMD=false MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
+assert_eq "$rc" "1" "a failing smoke fails the release"
+assert_contains "$out" "smoke failed on $RWT @ $NEW_MAIN. Nothing was pushed" "smoke failure says nothing was pushed"
+assert_contains "$out" "mnemon release --rollback $PREV_REL" "smoke failure prints the rollback command"
+assert_contains "$out" "git -C $RWT reset --hard $PREV_REL" "smoke failure prints the reset"
+assert_contains "$out" "git -C $RWT push --force-with-lease origin release" "smoke failure prints the force-with-lease push"
+assert_eq "$(git -C "$ORIGIN" rev-parse release)" "$PREV_FULL" "a failing smoke does not move origin/release"
+assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$(git -C "$REPO" rev-parse main)" "the worktree stays at the new commit until an explicit rollback"
+[[ -e "$LOCK" ]] && fail "lock removed after a failed smoke" "lock exists" || pass "lock removed after a failed smoke"
+
+# --rollback <ref>: reset under the lock, print (not run) the force-with-lease push
+run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --rollback "$PREV_REL"
+assert_eq "$rc" "0" "release --rollback exits 0"
+assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$PREV_FULL" "--rollback resets the engine worktree to the ref"
+assert_contains "$out" "rolled back $RWT to $PREV_REL" "--rollback reports the new HEAD"
+assert_contains "$out" "git -C $RWT push --force-with-lease origin release" "--rollback prints the push instead of running it"
+assert_eq "$(git -C "$ORIGIN" rev-parse release)" "$PREV_FULL" "--rollback does not push"
+[[ -e "$LOCK" ]] && fail "lock removed after --rollback" "lock exists" || pass "lock removed after --rollback"
+run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --rollback nosuchref
+assert_eq "$rc" "1" "--rollback with an unknown ref fails"
+assert_contains "$out" "unknown ref 'nosuchref'" "...and names it"
+run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --rollback "$PREV_REL" --dry-run
+assert_contains "$out" "3. reset:  git -C $RWT reset --hard $PREV_REL" "--rollback --dry-run prints the reset step"
+
+# drain: an engine process still running from $MNEMON_HOME/bin/ blocks the release until --drain-timeout
+printf '#!/bin/sh\nsleep 3\n' > "$RWT/bin/busy.sh"
+bash "$RWT/bin/busy.sh" &
+BUSY_PID=$!
+sleep 0.3
+run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --drain-timeout 1
+assert_eq "$rc" "1" "release fails when engine processes outlive --drain-timeout"
+assert_contains "$out" "release: drain — waiting up to 1s for engine processes to finish ($BUSY_PID" "drain names the running process"
+assert_contains "$out" "engine busy after 1s" "drain timeout message"
+assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$PREV_FULL" "a drain timeout touches no files"
+[[ -e "$LOCK" ]] && fail "lock removed after a drain timeout" "lock exists" || pass "lock removed after a drain timeout"
+wait "$BUSY_PID" 2>/dev/null || true
+rm -f "$RWT/bin/busy.sh"
+
+# with the engine idle again, the pending main commit releases cleanly
+run env PATH="$STUBBIN:$PATH" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
+assert_eq "$rc" "0" "release succeeds once the engine is idle"
+assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$(git -C "$REPO" rev-parse main)" "release worktree at the new main"
+assert_eq "$(git -C "$ORIGIN" rev-parse release)" "$(git -C "$REPO" rev-parse main)" "origin/release pushed after the green smoke"
 
 printf '# hotfix on release\n' >> "$RWT/tests/test-helper.sh"
 g "$RWT" commit -q -am "hotfix on release"

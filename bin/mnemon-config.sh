@@ -47,6 +47,64 @@ MNEMON_ROOT="${MNEMON_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # can never break a child process that resolves config again.
 MNEMON_ADHOC_INSTANCE="adhoc"
 
+# --- Engine maintenance lock (A3) -------------------------------------------
+# `mnemon release` holds ${XDG_STATE_HOME:-$HOME/.local/state}/mnemon/engine-release.lock
+# (lines: pid=, timestamp= (epoch), date=, target=) while it moves the installed
+# engine. Every entry point calls mnemon_engine_lock_guard first: a lock younger
+# than MNEMON_ENGINE_LOCK_MAX_AGE makes it exit 75 (EX_TEMPFAIL); an older one is
+# stale — reported on stderr and ignored. The release's own smoke children carry
+# MNEMON_ENGINE_LOCK_OWNER=<pid of the lock> and pass.
+MNEMON_ENGINE_LOCK_MAX_AGE=1800
+
+mnemon_engine_lock_file() {
+  printf '%s/mnemon/engine-release.lock' "$(mnemon_state_home)"
+}
+
+# Value of a `key=` line in the lock file (empty when absent).
+_mnemon_lock_field() {
+  awk -F= -v k="$1" '$1 == k { print substr($0, length(k) + 2); exit }' "$2" 2>/dev/null
+}
+
+# Age of the lock in seconds; return 1 when there is no lock.
+mnemon_engine_lock_age() {
+  local f ts now
+  f="$(mnemon_engine_lock_file)"
+  [[ -f "$f" ]] || return 1
+  ts="$(_mnemon_lock_field timestamp "$f")"
+  now="$(date +%s)"
+  if [[ "$ts" =~ ^[0-9]+$ ]]; then
+    printf '%s' $((now - ts))
+  elif [[ -n "$(find "$f" -mmin +$((MNEMON_ENGINE_LOCK_MAX_AGE / 60)) 2>/dev/null)" ]]; then
+    printf '%s' $((MNEMON_ENGINE_LOCK_MAX_AGE + 1))
+  else
+    printf '0'
+  fi
+}
+
+# 0 = no lock · 1 = fresh lock (update in progress) · 2 = stale lock
+mnemon_engine_lock_state() {
+  local age
+  age="$(mnemon_engine_lock_age)" || return 0
+  if [[ "$age" -ge "$MNEMON_ENGINE_LOCK_MAX_AGE" ]]; then return 2; fi
+  return 1
+}
+
+# Entry-point guard (bin/mnemon, bin/knowledge-gateway.sh).
+mnemon_engine_lock_guard() {
+  local f state=0 owner
+  f="$(mnemon_engine_lock_file)"
+  mnemon_engine_lock_state || state=$?
+  case "$state" in
+    0) return 0 ;;
+    2) echo "mnemon: ignoring stale engine lock $f (older than $((MNEMON_ENGINE_LOCK_MAX_AGE / 60)) min; remove it if no release is running)" >&2
+       return 0 ;;
+  esac
+  owner="$(_mnemon_lock_field pid "$f")"
+  if [[ -n "${MNEMON_ENGINE_LOCK_OWNER:-}" && "$MNEMON_ENGINE_LOCK_OWNER" == "$owner" ]]; then return 0; fi
+  echo "mnemon: engine is being updated, retry later (lock $f, pid ${owner:-?}, target $(_mnemon_lock_field target "$f"))" >&2
+  exit 75
+}
+
 # Directory holding instances/, default and legacy mnemon.yaml.
 mnemon_config_dir() {
   printf '%s' "${MNEMON_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/mnemon}"

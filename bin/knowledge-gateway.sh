@@ -6,6 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MNEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/mnemon-config.sh"
 
+# Engine maintenance lock (mnemon release): exit 75 while the engine is being updated.
+mnemon_engine_lock_guard
+
 usage() {
   cat <<'USAGE'
 Usage: knowledge-gateway.sh <action> [options]

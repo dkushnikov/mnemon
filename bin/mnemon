@@ -43,9 +43,11 @@ Commands:
                              Health checks: ok|warn|fail <check> — <detail>
   config get <key> | path | list | dump
                              Resolved configuration
-  release [--dry-run] [--now]
+  release [--dry-run] [--now] [--drain-timeout <s>] [--rollback <ref>]
                              Maintainer: promote main → release → installed engine
-  version                    Engine version, branch and root
+                             (lock → drain → ff-merge → smoke → push); --rollback resets
+                             the engine to <ref> under the same lock
+  version                    Engine version, branch, commit and root
   help                       This text
   ingest | scan | monitor    Reserved (program phase 4)
 
@@ -467,6 +469,16 @@ cmd_doctor() {
     fi
   fi
 
+  # engine-lock — is a `mnemon release` moving the engine right now?
+  local lockf lstate=0
+  lockf="$(mnemon_engine_lock_file)"
+  mnemon_engine_lock_state || lstate=$?
+  case "$lstate" in
+    0) _check ok engine-lock "none ($lockf)" ;;
+    1) _check warn engine-lock "engine update in progress since $(_mnemon_lock_field date "$lockf") (pid $(_mnemon_lock_field pid "$lockf"), target $(_mnemon_lock_field target "$lockf")) — other commands exit 75 until $lockf is removed" ;;
+    2) _check warn engine-lock "stale lock $lockf (older than $((MNEMON_ENGINE_LOCK_MAX_AGE / 60)) min, ignored) — remove it if no release is running" ;;
+  esac
+
   if $have_config; then
     # writer
     if [[ -z "$WRITER_HOST" ]]; then
@@ -580,17 +592,105 @@ cmd_config() {
 # release — main → release → installed engine ($MNEMON_HOME)
 # ---------------------------------------------------------------------------
 
+RELEASE_LOCK=""
+_release_lock_release() {
+  if [[ -n "$RELEASE_LOCK" ]]; then
+    rm -f "$RELEASE_LOCK"
+    echo "release: lock removed ($RELEASE_LOCK)"
+    RELEASE_LOCK=""
+  fi
+}
+
+# Create the maintenance lock (refuse a fresh one, take over a stale one) and
+# arrange for its removal on every exit path.
+_release_lock_acquire() {
+  local f="$1" target="$2" state=0
+  mnemon_engine_lock_state || state=$?
+  if [[ $state -eq 1 ]]; then
+    echo "mnemon release: another engine update holds $f (pid $(_mnemon_lock_field pid "$f"), since $(_mnemon_lock_field date "$f")); retry later" >&2
+    exit 75
+  elif [[ $state -eq 2 ]]; then
+    echo "release: taking over a stale lock $f (older than $((MNEMON_ENGINE_LOCK_MAX_AGE / 60)) min)"
+  fi
+  mkdir -p "$(dirname "$f")"
+  printf 'pid=%s\ntimestamp=%s\ndate=%s\ntarget=%s\n' "$$" "$(date +%s)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$target" > "$f"
+  RELEASE_LOCK="$f"
+  export MNEMON_ENGINE_LOCK_OWNER="$$"
+  trap '_release_lock_release' EXIT
+  echo "release: lock $f (pid $$, target $target)"
+}
+
+# PIDs of engine processes running from $1/bin/ — pgrep -f over the command
+# line, same user and host only (documented limitation); never this process.
+_engine_pids() {
+  pgrep -f -- "$1/bin/" 2>/dev/null | grep -v -x -e "$$" -e "$PPID" | tr '\n' ' ' | sed 's/ *$//' || true
+}
+
+# Wait up to $2 seconds for engine processes under $1 to finish; 1 on timeout.
+_release_drain() {
+  local home="$1" timeout="$2" waited=0 pids
+  while :; do
+    pids="$(_engine_pids "$home")"
+    if [[ -z "$pids" ]]; then
+      echo "release: drain — no engine processes running from $home/bin/"
+      return 0
+    fi
+    if [[ $waited -ge $timeout ]]; then
+      echo "mnemon release: engine busy after ${timeout}s — still running from $home/bin/: $pids" >&2
+      echo "  nothing was changed; wait for them to finish or raise --drain-timeout <s>" >&2
+      return 1
+    fi
+    if [[ $waited -eq 0 ]]; then echo "release: drain — waiting up to ${timeout}s for engine processes to finish ($pids)"; fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+}
+
+# Smoke = engine health only: config resolves, version reports the new commit,
+# tests/test_config.sh passes, doctor has no fail line other than the
+# environmental deps/qmd/writer. MNEMON_SMOKE_CMD replaces the checks (tests only).
+_release_smoke() {
+  local home="$1" new_sha="$2" ok=true out log bad
+  if [[ -n "${MNEMON_SMOKE_CMD:-}" ]]; then
+    echo "release: smoke — MNEMON_SMOKE_CMD override: $MNEMON_SMOKE_CMD"
+    if bash -c "$MNEMON_SMOKE_CMD"; then return 0; else return 1; fi
+  fi
+  echo "release: smoke — $home/bin/mnemon config path"
+  if out="$("$home/bin/mnemon" config path 2>&1)"; then echo "  $out"; else printf '%s\n' "$out" | sed 's/^/  /'; ok=false; fi
+  echo "release: smoke — $home/bin/mnemon version"
+  if out="$("$home/bin/mnemon" version 2>&1)"; then echo "  $out"; else printf '%s\n' "$out" | sed 's/^/  /'; ok=false; fi
+  case "$out" in *"$new_sha"*) ;; *) echo "  ✗ version does not report $new_sha" >&2; ok=false ;; esac
+  echo "release: smoke — bash $home/tests/test_config.sh"
+  log="$(mktemp)"
+  if bash "$home/tests/test_config.sh" >"$log" 2>&1; then echo "  $(tail -1 "$log")"; else cat "$log"; ok=false; fi
+  rm -f "$log"
+  echo "release: smoke — $home/bin/mnemon doctor (fail lines other than deps/qmd/writer fail the release)"
+  out="$("$home/bin/mnemon" doctor 2>&1)" || true
+  printf '%s\n' "$out" | sed 's/^/  /'
+  bad="$(printf '%s\n' "$out" | grep '^fail ' | grep -v -e '^fail deps' -e '^fail qmd' -e '^fail writer' || true)"
+  if [[ -n "$bad" ]]; then
+    echo "  ✗ engine-health failures:" >&2
+    printf '%s\n' "$bad" | sed 's/^/    /' >&2
+    ok=false
+  fi
+  $ok
+}
+
 cmd_release() {
-  local dry=false now=false
+  local dry=false now=false rollback="" drain_timeout=120
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --dry-run) dry=true; shift ;;
-      --now)     now=true; shift ;;
-      -h|--help) usage; exit 0 ;;
-      *)         usage_error "release: unknown option $1" ;;
+      --dry-run)       dry=true; shift ;;
+      --now)           now=true; shift ;;
+      --rollback)      [[ $# -lt 2 ]] && usage_error "release: --rollback requires a ref"; rollback="$2"; shift 2 ;;
+      --drain-timeout) [[ $# -lt 2 ]] && usage_error "release: --drain-timeout requires a number of seconds"; drain_timeout="$2"; shift 2 ;;
+      -h|--help)       usage; exit 0 ;;
+      *)               usage_error "release: unknown option $1" ;;
     esac
   done
+  [[ "$drain_timeout" =~ ^[0-9]+$ ]] || usage_error "release: --drain-timeout must be a number of seconds"
 
+  # --- preflight: read-only checks ---
   local home="${MNEMON_HOME:-}"
   [[ -n "$home" ]] || die "release: MNEMON_HOME is not set (it must point at the installed engine worktree on branch release)"
   [[ -d "$home" ]] || die "release: MNEMON_HOME=$home does not exist"
@@ -603,70 +703,95 @@ cmd_release() {
   dev_common="$(_git_common_dir "$MNEMON_ROOT")" || die "release: cannot read git dir of $MNEMON_ROOT"
   home_common="$(_git_common_dir "$home")" || die "release: cannot read git dir of $home"
   [[ "$dev_common" == "$home_common" ]] || die "release: $home is not a worktree of this repo ($home_common != $dev_common)"
+  if [[ "$(_abs_dir "$MNEMON_ROOT")" == "$(_abs_dir "$home")" ]]; then
+    die "release: run it from the dev tree, not from the installed engine ($home) — files under a running script must not move"
+  fi
   git -C "$MNEMON_ROOT" rev-parse --verify -q main >/dev/null || die "release: no 'main' branch in $MNEMON_ROOT"
 
-  local prev main_sha dev_branch dev_sha dirty="clean" ancestor="yes"
+  local lock prev main_sha dev_branch dev_sha dirty="clean" ancestor="yes" target_sha
+  lock="$(mnemon_engine_lock_file)"
   prev="$(git -C "$home" rev-parse --short HEAD)"
   main_sha="$(git -C "$MNEMON_ROOT" rev-parse --short main)"
   dev_branch="$(git -C "$MNEMON_ROOT" rev-parse --abbrev-ref HEAD)"
   dev_sha="$(git -C "$MNEMON_ROOT" rev-parse --short HEAD)"
   if [[ -n "$(git -C "$MNEMON_ROOT" status --porcelain --untracked-files=no)" ]]; then dirty="DIRTY (uncommitted tracked changes)"; fi
   if ! git -C "$MNEMON_ROOT" merge-base --is-ancestor release main 2>/dev/null; then ancestor="NO — release has diverged from main"; fi
+  if [[ -n "$rollback" ]]; then
+    target_sha="$(git -C "$home" rev-parse --short --verify -q "$rollback^{commit}" 2>/dev/null)" || die "release: --rollback: unknown ref '$rollback'"
+  else
+    target_sha="$main_sha"
+  fi
+  local rollback_cmds="  mnemon release --rollback $prev
+    = git -C $home reset --hard $prev
+      git -C $home push --force-with-lease origin release   (only if origin/release had already moved)"
 
   if $dry; then
     echo "mnemon release — dry run (nothing changes)"
     echo "  dev tree:  $MNEMON_ROOT ($dev_branch @ $dev_sha, $dirty)"
     echo "  installed: $home (release @ $prev)"
     echo "  main:      $main_sha"
-    echo "  1. check:  git -C $MNEMON_ROOT status --porcelain --untracked-files=no   → $dirty"
-    echo "  2. fetch:  git -C $MNEMON_ROOT fetch origin"
-    echo "  3. check:  git -C $MNEMON_ROOT merge-base --is-ancestor release main   → $ancestor"
-    echo "  4. merge:  git -C $home merge --ff-only main   ($prev → $main_sha)"
-    echo "  5. push:   git -C $home push origin release"
-    echo "  6. smoke:  $home/bin/mnemon doctor && bash $home/tests/test_config.sh"
-    if $now; then echo "  7. ping:   node ping not implemented (program phase 4)"; fi
-    echo "  rollback:  git -C $home reset --hard $prev"
+    echo "  1. lock:   $lock (pid, timestamp, target $target_sha); removed last, also on failure"
+    echo "  2. drain:  wait up to ${drain_timeout}s for processes matching: pgrep -f $home/bin/"
+    if [[ -n "$rollback" ]]; then
+      echo "  3. reset:  git -C $home reset --hard $rollback   ($prev → $target_sha)"
+      echo "  4. print:  git -C $home push --force-with-lease origin release   (not run)"
+      echo "  5. unlock: rm $lock"
+    else
+      echo "  3. check:  git -C $MNEMON_ROOT status --porcelain --untracked-files=no   → $dirty"
+      echo "  4. fetch:  git -C $MNEMON_ROOT fetch origin"
+      echo "  5. check:  git -C $MNEMON_ROOT merge-base --is-ancestor release main   → $ancestor"
+      echo "  6. merge:  git -C $home merge --ff-only main   ($prev → $main_sha)"
+      echo "  7. smoke:  $home/bin/mnemon config path · $home/bin/mnemon version (reports $main_sha) · bash $home/tests/test_config.sh · $home/bin/mnemon doctor (no fail other than deps/qmd/writer)"
+      echo "  8. push:   git -C $home push origin release   (only after a green smoke)"
+      if $now; then echo "  9. ping:   node ping not implemented (program phase 4)"; fi
+      echo "  unlock:    rm $lock"
+      echo "  rollback:"
+      echo "$rollback_cmds"
+    fi
     exit 0
   fi
 
-  # 1. dev tree clean
+  # --- 1. lock (removed by trap on every exit) · 2. drain ---
+  _release_lock_acquire "$lock" "$target_sha"
+  _release_drain "$home" "$drain_timeout" || exit 1
+
+  # --- rollback: reset under the lock, print the push ---
+  if [[ -n "$rollback" ]]; then
+    echo "release: rollback $home  $prev → $target_sha"
+    git -C "$home" reset --hard "$rollback"
+    echo "rolled back $home to $(git -C "$home" rev-parse --short HEAD); origin/release was not touched — publish the rollback by hand if it had been pushed:"
+    echo "  git -C $home push --force-with-lease origin release"
+    exit 0
+  fi
+
+  # --- 3. dev tree clean ---
   if [[ "$dirty" != clean ]]; then
     die "release: dev tree $MNEMON_ROOT has uncommitted tracked changes — commit or stash first"
   fi
-  # 2. fetch (non-fatal)
+  # --- 4. fetch (non-fatal) ---
   if ! git -C "$MNEMON_ROOT" fetch origin >/dev/null 2>&1; then
     echo "mnemon release: warning — 'git fetch origin' failed (offline?); continuing with local refs" >&2
   fi
-  # 3. release must be an ancestor of main
+  # --- 5. release must be an ancestor of main ---
   if ! git -C "$MNEMON_ROOT" merge-base --is-ancestor release main 2>/dev/null; then
     die "release: release has diverged from main (release=$(git -C "$MNEMON_ROOT" rev-parse --short release), main=$main_sha) — reconcile manually"
   fi
-  # 4. ff-merge: moves the release branch and the installed worktree together
+  # --- 6. ff-merge: moves the release branch and the installed worktree together ---
   echo "release: $home  $prev → $main_sha (ff-only merge of main)"
   if ! git -C "$home" merge --ff-only main; then
     die "release: ff-merge failed — roll back with: git -C $home reset --hard $prev"
   fi
-  # 5. push (non-fatal)
+  # --- 7. smoke on the updated worktree; a failure never publishes ---
+  if ! _release_smoke "$home" "$main_sha"; then
+    {
+      echo "mnemon release: smoke failed on $home @ $main_sha. Nothing was pushed. Roll back with:"
+      echo "$rollback_cmds"
+    } >&2
+    exit 1
+  fi
+  # --- 8. push (non-fatal) ---
   if ! git -C "$home" push origin release >/dev/null 2>&1; then
     echo "mnemon release: warning — 'git push origin release' failed (offline?); push later with: git -C $home push origin release" >&2
-  fi
-  # 6. smoke
-  local smoke_ok=true log
-  log="$(mktemp)"
-  echo "release: smoke — $home/bin/mnemon doctor"
-  if ! "$home/bin/mnemon" doctor; then smoke_ok=false; fi
-  echo "release: smoke — bash $home/tests/test_config.sh"
-  if bash "$home/tests/test_config.sh" >"$log" 2>&1; then
-    tail -1 "$log"
-  else
-    cat "$log"
-    smoke_ok=false
-  fi
-  rm -f "$log"
-  if ! $smoke_ok; then
-    echo "mnemon release: smoke failed. Roll back with:" >&2
-    echo "  git -C $home reset --hard $prev" >&2
-    exit 1
   fi
   if $now; then echo "node ping not implemented (program phase 4)"; fi
   echo "released $(git -C "$home" rev-parse --short HEAD) → $home"
@@ -677,15 +802,17 @@ cmd_release() {
 # ---------------------------------------------------------------------------
 
 cmd_version() {
-  local desc branch
+  local desc branch sha
   if git -C "$MNEMON_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     desc="$(git -C "$MNEMON_ROOT" describe --tags --always --dirty 2>/dev/null || echo unknown)"
     branch="$(git -C "$MNEMON_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+    sha="$(git -C "$MNEMON_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   else
     desc="unknown"
     branch="no-git"
+    sha="unknown"
   fi
-  printf 'mnemon %s (%s) %s\n' "$desc" "$branch" "$MNEMON_ROOT"
+  printf 'mnemon %s (%s, %s) %s\n' "$desc" "$branch" "$sha" "$MNEMON_ROOT"
 }
 
 # ---------------------------------------------------------------------------
@@ -698,7 +825,7 @@ while [[ $# -gt 0 ]]; do
     --instance=*) _select_instance "${1#--instance=}"; shift ;;
     --config)     [[ $# -lt 2 ]] && usage_error "--config requires a value"; _select_config "$2"; shift 2 ;;
     --config=*)   _select_config "${1#--config=}"; shift ;;
-    -h|--help)    usage; exit 0 ;;
+    -h|--help)    set -- help; break ;;
     --)           shift; break ;;
     -*)           usage_error "unknown option: $1" ;;
     *)            break ;;
@@ -708,6 +835,13 @@ done
 cmd="$1"
 shift
 _apply_selectors
+
+# Engine maintenance lock (A3): everything but `release` (holds it) and `doctor`
+# (reports it) exits 75 while the installed engine is being updated.
+case "$cmd" in
+  release|doctor) ;;
+  *) mnemon_engine_lock_guard ;;
+esac
 
 case "$cmd" in
   add)      _reject_post_command_selectors "$@"; _resolve_or_die
