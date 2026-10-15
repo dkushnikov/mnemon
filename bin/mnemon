@@ -184,18 +184,25 @@ _copy_if_missing() {
   fi
 }
 
+# YAML double-quoted scalar: `\` and `"` escaped (the loader decodes exactly
+# these two), wrapped in quotes — a space or a ` #` in a path survives.
+_yaml_esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+_yaml_dq()  { printf '"%s"' "$(_yaml_esc "$1")"; }
+
 # Set `key: value` in a flat yaml file: replace an existing line, uncomment a
-# `# key:` template line, or append.
+# `# key:` template line, or append. The value is written double-quoted unless
+# $4 is `raw` (enum-like values such as search_provider stay bare and greppable).
 _yaml_set() {
-  local file="$1" key="$2" value="$3" tmp
+  local file="$1" key="$2" value="$3" mode="${4:-}" tmp rendered
+  if [[ "$mode" == raw ]]; then rendered="$value"; else rendered="$(_yaml_dq "$value")"; fi
   tmp="$(mktemp "$file.XXXXXX")"
   if grep -q "^$key:" "$file" 2>/dev/null; then
-    sed -e "s|^$key:.*|$key: $(_sed_esc "$value")|" "$file" > "$tmp"
+    sed -e "s|^$key:.*|$key: $(_sed_esc "$rendered")|" "$file" > "$tmp"
   elif grep -q "^# $key:" "$file" 2>/dev/null; then
-    sed -e "s|^# $key:.*|$key: $(_sed_esc "$value")|" "$file" > "$tmp"
+    sed -e "s|^# $key:.*|$key: $(_sed_esc "$rendered")|" "$file" > "$tmp"
   else
     cat "$file" > "$tmp"
-    printf '%s: %s\n' "$key" "$value" >> "$tmp"
+    printf '%s: %s\n' "$key" "$rendered" >> "$tmp"
   fi
   mv "$tmp" "$file"
 }
@@ -278,8 +285,9 @@ cmd_init() {
   mkdir -p "$inst_dir"
   local tmp
   tmp="$(mktemp "$inst_dir/.$name.XXXXXX")"
-  sed -e "s|{{instance}}|$(_sed_esc "$name")|g" \
-      -e "s|{{vault_path}}|$(_sed_esc "$vault")|g" \
+  # The template holds the placeholders inside double quotes: YAML-escape, then sed-escape.
+  sed -e "s|{{instance}}|$(_sed_esc "$(_yaml_esc "$name")")|g" \
+      -e "s|{{vault_path}}|$(_sed_esc "$(_yaml_esc "$vault")")|g" \
       "$template" > "$tmp"
   if [[ -n "$collection" ]];  then _yaml_set "$tmp" qmd_collection "$collection"; fi
   if [[ -n "$archive" ]]; then

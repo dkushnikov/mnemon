@@ -125,8 +125,10 @@ echo "3. Generating config..."
 CONFIG_PATH="${MNEMON_CONFIG:-$SCRIPT_DIR/mnemon.yaml}"
 mkdir -p "$(dirname "$CONFIG_PATH")"
 if [[ ! -f "$CONFIG_PATH" ]]; then
-  escaped_path="${VAULT_PATH//&/\\&}"
-  sed "s|{{vault_path}}|$escaped_path|g" "$SCRIPT_DIR/mnemon.yaml.template" > "$CONFIG_PATH"
+  # The template quotes the value: escape \ and " for YAML, then \ & | for sed.
+  yaml_path="$(printf '%s' "$VAULT_PATH" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+  sed_path="$(printf '%s' "$yaml_path" | sed -e 's/[\\&|]/\\&/g')"
+  sed "s|{{vault_path}}|$sed_path|g" "$SCRIPT_DIR/mnemon.yaml.template" > "$CONFIG_PATH"
   echo "   ✓ Created mnemon.yaml"
 else
   echo "   ○ Skipped mnemon.yaml (exists)"

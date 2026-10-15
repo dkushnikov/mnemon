@@ -115,10 +115,30 @@ mnemon_state_home() {
   printf '%s' "${XDG_STATE_HOME:-$HOME/.local/state}"
 }
 
-# Parse a single flat YAML key: `key: value`. A value in double or single
-# quotes is taken verbatim up to the closing quote (a `#` inside stays, text
-# after the quote is ignored); an unquoted value loses a trailing ` # comment`
-# and surrounding whitespace. A leading tilde is resolved against $HOME.
+# Body of a double-quoted scalar ($1 = the text after the opening quote): the
+# content up to the first unescaped `"`, with \" → " and \\ → \ (the two escapes
+# `mnemon init` writes); any other backslash sequence is kept as it is.
+_mnemon_unquote_dq() {
+  printf '%s' "$1" | awk 'BEGIN { q = "\"" }
+    { s = $0; out = ""; i = 1; n = length(s)
+      while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) {
+          d = substr(s, i + 1, 1)
+          if (d == "\\" || d == q) { out = out d } else { out = out c d }
+          i += 2; continue
+        }
+        if (c == q) break
+        out = out c; i++
+      }
+      printf "%s", out }'
+}
+
+# Parse a single flat YAML key: `key: value`. A double-quoted value is taken up
+# to the closing quote (a `#` inside stays, text after the quote is ignored) with
+# \" and \\ decoded — the form `mnemon init` writes; a single-quoted value is
+# taken verbatim up to the closing quote; an unquoted value loses a trailing
+# ` # comment` and surrounding whitespace. A leading tilde is resolved against $HOME.
 _parse_yaml_value() {
   local key="$1" file="$2"
   local val
@@ -126,7 +146,7 @@ _parse_yaml_value() {
   val=$(awk -v k="$key" 'BEGIN { prefix = k ": " } substr($0, 1, length(prefix)) == prefix { print substr($0, length(prefix) + 1); exit }' "$file" 2>/dev/null)
   val=$(printf '%s' "$val" | sed 's/^[[:space:]]*//')
   case "$val" in
-    \"*) val="${val#\"}"; val="${val%%\"*}" ;;
+    \"*) val="$(_mnemon_unquote_dq "${val#\"}")" ;;
     \'*) val="${val#\'}"; val="${val%%\'*}" ;;
     \#*) val="" ;;
     *)   val=$(printf '%s' "$val" | sed 's/[[:space:]]#.*$//; s/[[:space:]]*$//') ;;

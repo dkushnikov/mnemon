@@ -102,6 +102,17 @@ assert_eq "$WRITER_HOST" "host-a" "unquoted value loses the trailing comment"
 assert_eq "$DEFAULT_MODEL" "sonnet#x" "a # without preceding whitespace is part of an unquoted value"
 assert_eq "$DEFAULT_LANGUAGE" "en" "a value that is only a comment counts as unset (default applies)"
 
+# --- Test 6d: double-quoted values decode \" and \\ — the form `mnemon init` writes (F3) ---
+cat > "$TEST_TMPDIR/esc.yaml" << 'EOF'
+vault_path: "/tmp/we ird #1 \"q\" back\\slash"
+charter_path: "C:\temp\x"   # other backslash sequences stay as they are
+writer_host: "quoted \"host\""
+EOF
+load_config "$TEST_TMPDIR/esc.yaml"
+assert_eq "$VAULT_PATH" '/tmp/we ird #1 "q" back\slash' 'double-quoted value: \" → ", \\ → \, space and # kept'
+assert_eq "$CHARTER_PATH" 'C:\temp\x' "double-quoted value: unknown backslash sequences are kept verbatim"
+assert_eq "$WRITER_HOST" 'quoted "host"' "double-quoted value: an escaped quote does not end the value"
+
 # --- Test 6c: only a bare ~ or ~/ expands; ~user/... stays literal ---
 cat > "$TEST_TMPDIR/tilde.yaml" << 'EOF'
 vault_path: ~/tilde-vault

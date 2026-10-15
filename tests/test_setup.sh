@@ -33,6 +33,13 @@ assert_file_exists "$MNEMON_CONFIG" "mnemon.yaml created"
 config_vault=$(grep '^vault_path:' "$MNEMON_CONFIG" | head -1)
 assert_contains "$config_vault" "$VAULT" "config has correct vault_path"
 
+# --- Test 2b: a vault path with a space, a ' #' and a quote round-trips (F3) ---
+VAULT_ODD="$TEST_TMPDIR/we ird #7 \"q\""
+env MNEMON_CONFIG="$TEST_TMPDIR/mnemon-2b.yaml" bash "$MNEMON_ROOT/setup.sh" "$VAULT_ODD" --non-interactive --skip-qmd --skip-plugin >/dev/null 2>&1
+assert_dir_exists "$VAULT_ODD/Sources" "setup creates a vault whose path has a space, ' #' and a quote"
+rt=$(bash -c 'source "$1/bin/mnemon-config.sh" && load_config "$2" && printf "%s" "$VAULT_PATH"' _ "$MNEMON_ROOT" "$TEST_TMPDIR/mnemon-2b.yaml")
+assert_eq "$rt" "$VAULT_ODD" "the generated config quotes the path, so the loader reads it back unchanged"
+
 # --- Test 3: Idempotent — running again doesn't overwrite ---
 echo "# User customized this" >> "$VAULT/CLAUDE.md"
 bash "$MNEMON_ROOT/setup.sh" "$VAULT" --non-interactive --skip-qmd --skip-plugin

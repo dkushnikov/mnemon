@@ -65,9 +65,9 @@ assert_file_exists "$VAULT_A/_meta/Protocol.md" "init copies _meta/Protocol.md"
 assert_file_exists "$VAULT_A/reader-context.md" "init places the reader-context template"
 assert_file_exists "$VAULT_A/mnemon-seed.md" "init places mnemon-seed.md"
 cfg=$(cat "$CFG_DIR/instances/alpha.yaml")
-assert_contains "$cfg" "instance: alpha" "config has instance: <name>"
-assert_contains "$cfg" "vault_path: $VAULT_A" "config has the absolute vault path"
-assert_contains "$cfg" "reader_context_path: $VAULT_A/reader-context.md" "config has reader_context_path"
+assert_contains "$cfg" "instance: \"alpha\"" "config has instance: <name> (double-quoted)"
+assert_contains "$cfg" "vault_path: \"$VAULT_A\"" "config has the absolute vault path (double-quoted)"
+assert_contains "$cfg" "reader_context_path: \"$VAULT_A/reader-context.md\"" "config has reader_context_path (double-quoted)"
 assert_not_contains "$cfg" "{{" "no unrendered placeholders"
 assert_eq "$(printf '%s\n' "$cfg" | grep -E '^[a-z_]+:' | grep -c '~' || true)" "0" "no tilde in generated values (comments may show ~ examples)"
 assert_contains "$out" "mnemon doctor" "init prints the next step"
@@ -89,12 +89,12 @@ run "$MNEMON" init beta --vault "$VAULT_B" --collection kb-beta --archive "$TEST
 assert_eq "$rc" "0" "init beta exits 0"
 assert_eq "$(cat "$CFG_DIR/default")" "alpha" "second init leaves the default unchanged"
 cfgb=$(cat "$CFG_DIR/instances/beta.yaml")
-assert_contains "$cfgb" "qmd_collection: kb-beta" "--collection written"
-assert_contains "$cfgb" "archive_dir: $TEST_TMPDIR/archive-b" "--archive written (absolute)"
+assert_contains "$cfgb" "qmd_collection: \"kb-beta\"" "--collection written"
+assert_contains "$cfgb" "archive_dir: \"$TEST_TMPDIR/archive-b\"" "--archive written (absolute)"
 assert_dir_exists "$TEST_TMPDIR/archive-b" "init --archive creates the archive dir"
 assert_contains "$out" "created archive dir $TEST_TMPDIR/archive-b" "init reports the created archive dir"
-assert_contains "$cfgb" "writer_host: $THIS_HOST" "--writer-host written"
-assert_contains "$cfgb" "charter_path: $VAULT_B/_meta/charter.md" "--charter written"
+assert_contains "$cfgb" "writer_host: \"$THIS_HOST\"" "--writer-host written"
+assert_contains "$cfgb" "charter_path: \"$VAULT_B/_meta/charter.md\"" "--charter written"
 assert_contains "$out" "mnemon --instance beta doctor" "init hints the --instance form for a non-default instance"
 
 # --reader-context copies the given file into the vault
@@ -120,8 +120,30 @@ printf 'alpha\n' > "$CFG_DIR/default"
 # ~user/... is a literal relative path (only ~ and ~/ expand)
 run "$MNEMON" init tilde --vault "~someone/vault-t" --non-interactive
 assert_eq "$rc" "0" "init with a ~user path exits 0"
-assert_contains "$(cat "$CFG_DIR/instances/tilde.yaml")" "vault_path: $TEST_TMPDIR/cwd/~someone/vault-t" "~user/ is not expanded to HOME (literal path under the cwd)"
+assert_contains "$(cat "$CFG_DIR/instances/tilde.yaml")" "vault_path: \"$TEST_TMPDIR/cwd/~someone/vault-t\"" "~user/ is not expanded to HOME (literal path under the cwd)"
 rm -f "$CFG_DIR/instances/tilde.yaml"
+
+# F3: a vault path with a space, a ' #' and a quote round-trips — the config
+# values are double-quoted (an unquoted value would end at the ' #')
+VAULT_ODD="$TEST_TMPDIR/we ird #3 \"q\""
+run "$MNEMON" init odd --vault "$VAULT_ODD" --archive "$TEST_TMPDIR/arch #ive" --non-interactive
+assert_eq "$rc" "0" "init accepts a vault path with a space, ' #' and a quote"
+assert_contains "$(cat "$CFG_DIR/instances/odd.yaml")" 'vault_path: "'"$TEST_TMPDIR"'/we ird #3 \"q\""' "the odd path is written double-quoted, the quote escaped"
+run "$MNEMON" --instance odd config get vault_path
+assert_eq "$out" "$VAULT_ODD" "config get vault_path returns the odd path unchanged"
+run "$MNEMON" --instance odd config get archive_dir
+assert_eq "$out" "$TEST_TMPDIR/arch #ive" "config get archive_dir returns a path with ' #' unchanged"
+run "$MNEMON" --instance odd config get reader_context_path
+assert_eq "$out" "$VAULT_ODD/reader-context.md" "reader_context_path derives from the odd vault path"
+run "$MNEMON" --instance odd doctor
+assert_contains "$out" "ok vault — $VAULT_ODD" "doctor finds the odd vault"
+assert_contains "$out" "ok reader-context — $VAULT_ODD/reader-context.md" "doctor finds the reader context in the odd vault"
+assert_contains "$out" "ok archive — $TEST_TMPDIR/arch #ive (writable)" "doctor finds the odd archive dir"
+run "$MNEMON" --instance odd status
+assert_eq "$rc" "0" "status works on the odd vault"
+assert_contains "$out" "Vault: $VAULT_ODD" "status names the odd vault"
+run "$MNEMON" --instance odd audit
+assert_eq "$rc" "0" "audit (python, via lib_config) resolves the odd vault"
 
 # bad input
 run "$MNEMON" init adhoc --vault "$TEST_TMPDIR/vault-x" --non-interactive
