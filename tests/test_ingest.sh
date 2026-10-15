@@ -245,6 +245,8 @@ DISP="$SD_ALL/payloads/test-producer:text-plain/dispatch.json"
 assert_eq "$(jq_ "$DISP" 'd["schema"] + " " + d["stdin"] + " " + d["env"]["MNEMON_INSTANCE"] + " " + str(d["argv"][:2])')" "mnemon-dispatch/1 stdin t ['--origin', 'text']" "dispatch.json: schema, stdin name, env and argv"
 assert_eq "$(res all test-producer:text-plain 'd["dispatch_sha256"]')" "$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$DISP")" "the claim records sha256 of dispatch.json"
 assert_eq "$(res all test-producer:text-plain 'd["dispatch_mode"] + " " + d["capture_id"] + " " + d["writer"] + " " + d["source_sha256"]')" "request test-producer:text-plain $THIS_HOST 35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7" "a captured record: dispatch mode, capture_id, writer host, source_sha256 from RESULT"
+assert_eq "$(res all test-producer:text-plain 'str(d["receipt_bound"])') $(res all test-producer:text-with-url 'str(d["receipt_bound"])') $(res all test-producer:context-undeclared 'str(d["receipt_bound"])')" "True True False" "receipt_bound after exit 0 (extracted, duplicate); not after exit 2 (A2)"
+assert_eq "$(res all test-producer:text-with-url 'd["revision"] + " " + d["path"] + " " + d["source_sha256"]')" "2026-10-12_aaaaaaaa Sources/2026-10-12_aaaaaaaa/ 35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7" "a duplicate records the existing folder's revision, path and source hash (A6)"
 assert_eq "$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$SD_ALL/payloads/test-producer:text-plain/stdin")" "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7" "the text snapshot holds the exact UTF-8 bytes (CRLF and trailing newline kept)"
 # ~2: --recapture --supersedes <revision of text-plain>; ~10 stays deferred
 assert_eq "$(call_for all test-producer:text-plain~2 'd["argv"][-3:]')" "['--recapture', '--supersedes', '$REV1']" "~2 is dispatched with --recapture --supersedes <revision of text-plain>"
@@ -410,10 +412,43 @@ MNEMON_TEST_CRASH_AT=after-claim ingest crash3
 mkdir -p "$VSTATE/captures"
 printf '{"schema":"mnemon-capture-receipt/1","capture_id":"test-producer:text-plain","state":"source-published","revision":"%s"}\n' "$REV1" > "$VSTATE/captures/test-producer:text-plain.json"
 ingest crash3
-assert_eq "$(call crash3 1 'd["argv"]')" "['--capture-id', 'test-producer:text-plain']" "a started result with a gateway receipt is replayed with --capture-id alone"
-assert_eq "$(call crash3 1 'd["stdin_bytes"]')" "0" "...and no stdin"
-assert_eq "$(res crash3 test-producer:text-plain 'd["state"] + " " + str(d["attempts"]) + " " + d["dispatch_mode"]')" "captured 2 replay" "...attempts 2, dispatch mode replay"
+assert_eq "$(call crash3 1 'd["argv"]')" "$(jq_ "$(state_dir crash3)/payloads/test-producer:text-plain/dispatch.json" 'd["argv"]')" "A2: a started result is recovered with the full saved request even when the ledger already holds a receipt for the id (never a silent acknowledgement)"
+assert_eq "$(call crash3 1 'd["stdin_bytes"]')" "14" "...with the snapshot on stdin"
+assert_eq "$(res crash3 test-producer:text-plain 'd["state"] + " " + str(d["attempts"]) + " " + d["dispatch_mode"] + " bound=" + str(d["receipt_bound"])')" "captured 2 request bound=True" "...attempts 2, dispatch mode request; exit 0 with RESULT:capture_id=<envelope_id> binds the record"
 rm -rf "$VSTATE/captures"
+# A2: once a dispatch of the full request came back exit 0 or 4 with RESULT:capture_id=<envelope_id>
+# (receipt_bound), later dispatches replay by id alone — retries and crash recoveries alike
+materialize crash5 text-plain
+scenarios crash5 '{"test-producer:text-plain": "exit4-transient"}'
+ingest crash5
+assert_eq "$(res crash5 test-producer:text-plain 'd["state"] + "/" + d["error_class"] + " bound=" + str(d["receipt_bound"]) + " " + d["dispatch_mode"]')" "failed/transient bound=True request" "exit 4 with RESULT:capture_id=<envelope_id> binds the record (the dispatch was the full request)"
+set_field crash5 test-producer:text-plain next_attempt_at "\"$PAST\""
+scenarios crash5 '{"test-producer:text-plain": "extracted"}'
+ingest crash5
+assert_eq "$(call crash5 2 'd["argv"]')" "['--capture-id', 'test-producer:text-plain']" "a bound record is retried by id alone"
+assert_eq "$(call crash5 2 'd["stdin_bytes"]')" "0" "...and no stdin"
+assert_eq "$(res crash5 test-producer:text-plain 'd["state"] + " " + str(d["attempts"]) + " " + d["dispatch_mode"]')" "captured 2 replay" "...attempts 2, dispatch mode replay"
+materialize crash6 text-plain
+scenarios crash6 '{"test-producer:text-plain": "exit4-transient"}'
+ingest crash6
+set_field crash6 test-producer:text-plain next_attempt_at "\"$PAST\""
+MNEMON_TEST_CRASH_AT=after-claim ingest crash6
+assert_eq "$(res crash6 test-producer:text-plain 'd["state"] + " " + str(d["attempts"]) + " bound=" + str(d["receipt_bound"])')" "started 2 bound=True" "fixture: a bound record claimed again, then a crash"
+scenarios crash6 '{"test-producer:text-plain": "extracted"}'
+ingest crash6
+assert_eq "$(call crash6 2 'd["argv"]')" "['--capture-id', 'test-producer:text-plain']" "a started record that was bound before its crash is recovered by id"
+assert_eq "$(res crash6 test-producer:text-plain 'd["state"] + " " + str(d["attempts"]) + " " + d["dispatch_mode"]')" "captured 3 replay" "...attempts 3, dispatch mode replay"
+unset STUB_SCENARIOS
+materialize crash7 text-plain
+scenarios crash7 '{"test-producer:text-plain": "exit1-fetch"}'
+ingest crash7
+assert_eq "$(res crash7 test-producer:text-plain 'd["state"] + "/" + d["error_class"] + " bound=" + str(d["receipt_bound"])')" "failed/fetch bound=False" "exit 1 never binds the record"
+set_field crash7 test-producer:text-plain next_attempt_at "\"$PAST\""
+scenarios crash7 '{"test-producer:text-plain": "extracted"}'
+ingest crash7
+assert_eq "$(call crash7 2 'd["argv"][:2]')" "['--origin', 'text']" "...so its retry sends the full saved request again"
+assert_eq "$(res crash7 test-producer:text-plain 'd["state"] + " " + d["dispatch_mode"] + " bound=" + str(d["receipt_bound"])')" "captured request bound=True" "...which then binds it"
+unset STUB_SCENARIOS
 
 materialize crash4 file-pdf
 MNEMON_TEST_CRASH_AT=after-snapshot ingest crash4
@@ -454,6 +489,8 @@ assert_eq "$(mx m-exit1-integrity)" "failed/integrity-error retryable=False atte
 assert_eq "$(mx m-exit3-environment)" "deferred/environment retryable=True attempts=0 revision=None" "exit 3 → deferred/environment, attempt refunded"
 assert_eq "$(mx m-exit75-locked)" "deferred/locked retryable=True attempts=0 revision=None" "exit 75 → deferred/locked, attempt refunded"
 assert_eq "$(mx m-other-exit)" "failed/unknown-exit retryable=True attempts=1 revision=None" "an unknown exit → failed/unknown-exit, retryable once"
+bound() { res matrix "test-producer:$1" 'str(d["receipt_bound"])'; }
+assert_eq "$(bound m-exit4-permanent) $(bound m-exit4-malformed) $(bound m-exit0-malformed) $(bound m-exit1-fetch) $(bound m-exit1-integrity) $(bound m-exit3-environment) $(bound m-exit75-locked) $(bound m-other-exit)" "True False False False False False False False" "A2: only exit 0 or 4 with RESULT:capture_id=<envelope_id> binds the record"
 assert_eq "$(future "$(res matrix test-producer:m-exit3-environment 'd["deadline_at"]')")" "future" "exit 3 → deadline_at in the future"
 assert_eq "$(future "$(res matrix test-producer:m-exit75-locked 'd["deadline_at"]')")" "future" "exit 75 → deadline_at in the future"
 assert_eq "$(res matrix test-producer:m-exit4-permanent 'd["next_attempt_at"]')" "None" "a permanent failure schedules no next attempt"

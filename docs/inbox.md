@@ -53,7 +53,7 @@ Every rule below is checked by the consumer; a violation quarantines the envelop
 |---|---|
 | `schema` | exactly `mnemon-envelope/1` |
 | `envelope_id` | `<producer.id>:<item_id>`, matching `^[A-Za-z0-9][A-Za-z0-9._:~-]{0,199}$`; **equals the file stem**. A re-capture of the same item is `<id>~2`, `<id>~3`, … with `supersedes` naming the previous `envelope_id`. The numeric suffix orders processing: `~2` before `~10` |
-| `producer.id` | stable per producer **and account**, `^[a-z0-9][a-z0-9._-]{0,63}$`; with `instance` it is the idempotency scope. `kind`, `host`, `version`: single-line strings or `null` |
+| `producer.id` | stable per producer **and account**, `^[a-z0-9][a-z0-9._-]{0,63}$`; with the **vault** it is the idempotency scope — envelope IDs are vault-wide: the same `envelope_id` arriving for two instances of one vault is the same item (the second is a duplicate by the gateway's rules). `kind`, `host`, `version`: single-line strings or `null` |
 | `instance` | the target instance name; a consumer processes only envelopes whose `instance` equals its resolved `MNEMON_INSTANCE` — everything else is reported `other-instance` and left untouched (no record, nothing read beyond the file) |
 | `created_at` | an ISO-8601 timestamp (`2026-10-15T12:00:00+00:00`; a trailing `Z` is accepted) |
 | `supersedes` | `null`, or the `envelope_id` of the item this one re-captures (never itself) |
@@ -178,7 +178,7 @@ The dispatcher resolves the instance once (global `--instance` / `--config`, or 
 7. **Predecessor** (`supersedes`): resolved from the superseded envelope's result (§5); unresolved predecessors defer the envelope.
 8. **`dispatch.json`** — the exact request about to be dispatched — is persisted **before** the claim, so a crash between the claim and the gateway's answer can be recovered without reconstructing anything.
 9. **Claim** = one atomic rewrite of the result record: `state: started`, `attempts + 1`, `envelope_sha256`, `dispatch_sha256`, `started_at`. It is the only place an attempt is spent; a first attempt, a retry and a crash recovery all go through it.
-10. **Dispatch.** When the vault ledger already holds a receipt for the envelope (`<vault state>/captures/<envelope_id>.json`) the gateway is replayed with `mnemon add --capture-id <envelope_id>` alone (`dispatch_mode: replay`); otherwise the saved argv runs with stdin from the snapshot (`dispatch_mode: request`). The consumer waits — it has **no timeout of its own**; timeouts live in the extractor's process group.
+10. **Dispatch.** The saved argv runs with stdin from the snapshot (`dispatch_mode: request`) until this inbox's result record is `receipt_bound` — set once a dispatch of the full saved request came back exit 0 or 4 with `RESULT:capture_id=<envelope_id>`, i.e. the gateway bound the request to its receipt. From then on the gateway is replayed with `mnemon add --capture-id <envelope_id>` alone (`dispatch_mode: replay`), for retries and crash recoveries alike. A receipt that already exists in the vault ledger for the id without `receipt_bound` here (another inbox, an operator's own capture) gets the full request and the gateway's binding check — never a silent acknowledgement; a conflicting request is exit 2 → `failed`/`contract`. The consumer waits — it has **no timeout of its own**; timeouts live in the extractor's process group.
 11. **Outcome** (§4) → `last_exit`, `last_result` (the `RESULT:` map), `last_error` (the stderr tail), written atomically.
 12. **Backoff** for a retryable failure: `next_attempt_at = now + min(15 min × 2^(attempts − 1), 24 h)`; when that failure brought `attempts` to `attempts_allowed` the state is `exhausted`. Exit 3 and exit 75 → `deferred` for 15 minutes with the attempt **refunded**.
 13. `--retry` (§7).
@@ -239,10 +239,10 @@ Stored states: `started` · `incomplete` · `deferred` · `failed` · `exhausted
 | Stored state | On the next pass (after the replacement check) |
 |---|---|
 | (none) | validate → `needs_input` / `unsupported` / `quarantined` / `invalid-request`, else snapshot, dispatch request, claim |
-| `started` | recover: `dispatch.json` present → claim again (`attempts + 1`) and dispatch per step 10 (replay when the ledger has a receipt, else the saved request); `dispatch.json` absent (a crash before step 8) → as (none) |
+| `started` | recover: `dispatch.json` present → claim again (`attempts + 1`) and dispatch per step 10 (by id when the record is `receipt_bound`, else the saved request); `dispatch.json` absent (a crash before step 8) → as (none) |
 | `incomplete` | before `deadline_at` → `waiting`; after → re-check the payload; still missing → `incomplete` again until 24 h after `first_seen` → `quarantined`/`incomplete-expired` |
 | `deferred` (`environment`, `locked`, `predecessor-pending`) | before `deadline_at` → `waiting`; after → `environment`/`locked`: claim and dispatch; `predecessor-pending`: resolve the predecessor again; 24 h after `first_seen` → `quarantined`/`supersedes-unknown` |
-| `failed`, `retryable: true` | before `next_attempt_at` → `waiting`; after → claim and dispatch (replay when a receipt exists) |
+| `failed`, `retryable: true` | before `next_attempt_at` → `waiting`; after → claim and dispatch (by id when `receipt_bound`, else the saved request) |
 | `failed`, `retryable: false` | terminal (`done-before`) unless `--retry` |
 | `exhausted` | terminal unless `--retry` |
 | `captured`, `needs_input`, `unsupported`, `quarantined` | terminal (`done-before`) |
@@ -294,7 +294,8 @@ Records are `0600`, directories `0700`, every write is `<name>.tmp` + fsync + re
 | `history` | previous records of this id (set by `envelope-replaced`), oldest first |
 | `first_seen`, `started_at`, `updated_at`, `retry_requested_at` | timestamps (UTC, ISO-8601) |
 | `writer` | the host that wrote the record |
-| `dispatch_mode` | `request` (the saved argv) or `replay` (`--capture-id` alone against an existing receipt) |
+| `dispatch_mode` | `request` (the saved argv) or `replay` (`--capture-id` alone, once `receipt_bound`) |
+| `receipt_bound` | `true` once a dispatch of the full saved request came back exit 0 or 4 with `RESULT:capture_id=<envelope_id>` — the gateway bound the request to its receipt; from then on dispatches replay by id (step 10) |
 
 ### `dispatch.json` (`mnemon-dispatch/1`)
 
@@ -325,7 +326,7 @@ Records are `0600`, directories `0700`, every write is `<name>.tmp` + fsync + re
 
 Allowed for `exhausted`, and for a permanent `failed` whose class is not `contract` or `invalid-request` (those need a corrected `~2` envelope, not a retry). Never for `quarantined`, `needs_input`, `unsupported`, `captured`, nor for a retryable `failed` that is merely waiting for its `next_attempt_at`, nor for `started` / `incomplete` / `deferred`. An ineligible `--retry` is a usage error (exit 2) and changes nothing.
 
-It sets `retries + 1` (raising `attempts_allowed`), state `failed` with `retryable: true`, `next_attempt_at: now` and `retry_requested_at`; lifetime `attempts` are kept, and the same pass dispatches the envelope (replaying by id when the ledger holds a receipt).
+It sets `retries + 1` (raising `attempts_allowed`), state `failed` with `retryable: true`, `next_attempt_at: now` and `retry_requested_at`; lifetime `attempts` are kept, and the same pass dispatches the envelope (by id when the record is `receipt_bound`, else the saved request).
 
 ## 8. `mnemon doctor`
 

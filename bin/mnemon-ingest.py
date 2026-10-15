@@ -10,11 +10,15 @@ the transition table §5.5); the operator's guide is docs/inbox.md.
 
 One pass reads every `<envelope_id>.json` in the inbox, validates it, snapshots its
 payload under the vault state dir, persists the exact dispatch request, claims the
-envelope (the only place an attempt is spent) and runs `mnemon add` for it. The
-result record `<vault state>/ingest/<inbox-key>/results/<envelope_id>.json` is the
-only authority; envelopes are never moved, edited or deleted. The whole pass runs
-under the vault lock (`fcntl.flock` on `<vault state>/lock`, inherited by every
-dispatched child); a held lock exits 75. The consumer has no timeout of its own.
+envelope (the only place an attempt is spent) and runs `mnemon add` for it — the full
+saved request until the record is `receipt_bound` (a dispatch came back exit 0 or 4
+with `RESULT:capture_id=<envelope_id>`), `--capture-id <envelope_id>` alone after
+that (§12 A2). The result record
+`<vault state>/ingest/<inbox-key>/results/<envelope_id>.json` is the only authority;
+envelopes are never moved, edited or deleted. The whole pass runs under the vault
+lock (`fcntl.flock` on `<vault state>/lock`, inherited by every dispatched child; an
+inherited descriptor counts only when it proves this vault's lock, §12 A1); a held
+lock exits 75. The consumer has no timeout of its own.
 
 Stdlib only, python 3.9. The configuration comes from bin/mnemon-config.sh through
 lib_config; the engine root is this file's own checkout, never the environment.
@@ -504,7 +508,6 @@ class Ingest:
         self.results_dir = os.path.join(self.state_dir, "results")
         self.payloads_dir = os.path.join(self.state_dir, "payloads")
         self.quarantine_dir = os.path.join(self.state_dir, "quarantine")
-        self.captures_dir = os.path.join(self.vault_state, "captures")
         self.lock_path = os.path.join(self.vault_state, "lock")
         self.lock_fd = None
         self.counts = dict((k, 0) for k in COUNT_KEYS)
@@ -581,6 +584,7 @@ class Ingest:
             "writer": self.host,
             "retry_requested_at": prev.get("retry_requested_at"),
             "dispatch_mode": prev.get("dispatch_mode"),
+            "receipt_bound": bool(prev.get("receipt_bound")),
         }
 
     def write_record(self, rec: dict) -> None:
@@ -757,7 +761,7 @@ class Ingest:
                               data=data, extra={"history": history, "attempts": 0, "retries": 0, "revision": None,
                                                 "path": None, "source_sha256": None, "duplicate": False,
                                                 "supersedes_unresolved": False, "capture_id": None,
-                                                "dispatch_sha256": None, "dispatch_mode": None,
+                                                "dispatch_sha256": None, "dispatch_mode": None, "receipt_bound": False,
                                                 "last_exit": None, "last_result": None, "last_error": None})
             self.report(stem, file_name, "quarantined", "envelope-replaced (was %s)" % prev.get("state"), rec)
             return
@@ -1065,8 +1069,13 @@ class Ingest:
         return [str(MNEMON_BIN), "add"]
 
     def dispatch(self, stem, file_name, rec, dispatch, prev) -> None:
-        receipt = os.path.join(self.captures_dir, stem + ".json")
-        if os.path.isfile(receipt):
+        # §12 A2: the ID-only replay is allowed only once THIS inbox's record is receipt_bound — a
+        # dispatch of the full saved request came back exit 0 or 4 with RESULT:capture_id=<id>, so
+        # the gateway bound the request to its receipt. Until then every dispatch (first attempt,
+        # crash recovery, retry) sends the complete dispatch.json argv with stdin from the snapshot;
+        # a receipt that already exists in the vault ledger gets the gateway's binding check, never
+        # a silent acknowledgement (a conflicting request is exit 2 → failed/contract).
+        if rec.get("receipt_bound") is True:
             argv = ["--capture-id", stem]
             stdin_path = None
             rec["dispatch_mode"] = "replay"
@@ -1104,6 +1113,8 @@ class Ingest:
         rec["last_error"] = stderr_tail(err_text) or None
         if result.get("capture_id"):
             rec["capture_id"] = result["capture_id"]
+        if code in (0, 4) and result.get("capture_id") == stem:
+            rec["receipt_bound"] = True   # the gateway bound the request to its receipt (§12 A2)
         status = result.get("status")
         well_formed = status in RESULT_STATUSES
         retryable_text = result.get("retryable")
