@@ -30,6 +30,30 @@ extract.md frontmatter; the model's strings never reach a file unvalidated.
     extract-publish.py body-headings --template <template.md>
         print the `### ` headings the template's Body section declares (one per line).
 
+    extract-publish.py schema --part
+        print the `extract-part/1` schema of a chunked extraction (capture layer §3.8, D13).
+
+    extract-publish.py split --in <capture.md> --max-bytes N --max-parts M --out-dir <dir>
+        byte-preserving split of an oversized capture-text: the parts concatenate to the input;
+        cuts only at line boundaries outside fenced blocks (``` and ~~~ tracked), preferring
+        `^#{1,3} ` lines, else blank lines, packed greedily; writes part-<n>.md and parts.json
+        ([{n, bytes, first_line}]); exit 1 `unsupported-size` when one unsplittable span exceeds
+        N or the count exceeds M.
+
+    extract-publish.py validate-part --result <result.json> --out <part.json>
+        validate a part call's `structured_output` against extract-part/1 with the same
+        normalization and serialization rules as `publish` (scalar limits, control characters,
+        the list-element rules; each key_ideas[].domain must match the extract/1 domain regex),
+        write the validated object and print its sha256; on failure print the diagnostics and
+        exit 1.
+
+    extract-publish.py render-parts <part.json>…
+        render validated part extracts for the merge prompt: `## Part n — <title>`, the summary,
+        the claims as `- claim #domain`, the quotes as `> …`.
+
+    `publish --meta` also reads `extraction` (single | chunked) and `parts` (N) and writes them
+    into the frontmatter.
+
 The serialization subset (shared by source.md, extract.md and RESULT:): scalars are single-line
 (no control characters, no leading/trailing whitespace), written double-quoted with exactly two
 escapes; list elements are unquoted flow-list items that are safe unquoted (no `, [ ] { } " ' #
@@ -65,6 +89,32 @@ SCHEMA = {
     },
     "required": ["title", "author", "language", "tags", "people", "domains", "rating", "body"],
 }
+
+PART_SCHEMA_ID = "extract-part/1"
+PART_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "summary": {"type": "string", "minLength": 50, "maxLength": 1500},
+        "key_ideas": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "domain": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_/-]*$"},
+                },
+                "required": ["claim", "domain"],
+                "additionalProperties": False,
+            },
+        },
+        "quotes": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 400}},
+    },
+    "required": ["title", "summary", "key_ideas", "quotes"],
+    "additionalProperties": False,
+}
+PART_TEMPLATE_MARKER = "<!-- mnemon:part-template -->"
 
 LIMITS = {"title": 300, "author": 200, "session": 300, "intent": 2000, "import_source": 200, "import_batch": 200}
 LIST_RULES = {"tags": (64, 12, 0), "people": (120, 30, 0), "domains": (64, 3, 1)}
@@ -297,6 +347,10 @@ def render(fields: dict, meta: dict) -> str:
               f"rating: {fields['rating']}"]
     if "pages" in fields:
         lines.append(f"pages: {fields['pages']}")
+    extraction = m("extraction", "single")
+    lines.append(f"extraction: {plain_or_quoted(extraction)}")
+    if extraction == "chunked":
+        lines.append(f"parts: {int(meta.get('parts') or 0)}")
     lines += [f"capture_id: {quote(m('capture_id'))}",
               f"revision: {quote(m('revision'))}",
               "capture_context:",
@@ -372,6 +426,212 @@ def cmd_publish(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Chunked extraction (capture layer §3.8, D13): the part schema, split, validate-part, render
+# ---------------------------------------------------------------------------
+
+_DOMAIN = re.compile(r"^[a-z0-9][a-z0-9_/-]*$")
+
+
+def validate_part(data):
+    """Return the validated part object; raise Rejected with gateway-authored diagnostics."""
+    problems = []
+    if not isinstance(data, dict):
+        raise Rejected(["structured_output: must be a JSON object"])
+    for key in PART_SCHEMA["required"]:
+        if key not in data:
+            problems.append(f"{key}: required")
+    if problems:
+        raise Rejected(problems)
+    out = {}
+    if not isinstance(data["title"], str):
+        problems.append("title: must be a string")
+    else:
+        out["title"] = _scalar(data["title"], "title", 300, 1, problems)
+    if not isinstance(data["summary"], str):
+        problems.append("summary: must be a string")
+    else:
+        summary = _scalar(_WS.sub(" ", data["summary"]), "summary", 1500, 1, problems)
+        if summary is not None and len(summary) < 50:
+            problems.append("summary: at least 50 characters")
+        out["summary"] = summary
+    ideas = data["key_ideas"]
+    if not isinstance(ideas, list):
+        problems.append("key_ideas: must be a list of {claim, domain} objects")
+    else:
+        if len(ideas) > 20:
+            problems.append("key_ideas: at most 20 items")
+        kept = []
+        for i, item in enumerate(ideas):
+            if not isinstance(item, dict) or not isinstance(item.get("claim"), str) or not isinstance(item.get("domain"), str):
+                problems.append(f"key_ideas[{i}]: must be an object with string claim and domain")
+                continue
+            claim = _scalar(item["claim"], f"key_ideas[{i}].claim", 200, 1, problems)
+            domain = _WS.sub(" ", item["domain"]).strip().lower()
+            if not _DOMAIN.match(domain):
+                problems.append(f"key_ideas[{i}].domain: must match ^[a-z0-9][a-z0-9_/-]*$")
+            if claim is not None:
+                kept.append({"claim": claim, "domain": domain})
+        out["key_ideas"] = kept
+    quotes = data["quotes"]
+    if not isinstance(quotes, list):
+        problems.append("quotes: must be a list of strings")
+    else:
+        if len(quotes) > 8:
+            problems.append("quotes: at most 8 items")
+        kept = []
+        for i, q in enumerate(quotes):
+            if not isinstance(q, str):
+                problems.append(f"quotes[{i}]: must be a string")
+                continue
+            v = _scalar(_WS.sub(" ", q), f"quotes[{i}]", 400, 0, problems)
+            if v:
+                kept.append(v)
+        out["quotes"] = kept
+    if problems:
+        raise Rejected(problems)
+    return out
+
+
+def cmd_validate_part(args) -> int:
+    with open(args.result, "r", encoding="utf-8") as fh:
+        try:
+            doc = json.load(fh)
+        except ValueError:
+            print("structured_output: the result is not a JSON document")
+            return 1
+    if not isinstance(doc, dict) or doc.get("structured_output") is None:
+        print("structured_output: missing")
+        return 1
+    try:
+        fields = validate_part(doc["structured_output"])
+    except Rejected as exc:
+        for p in exc.problems:
+            print(p)
+        return 1
+    data = (json.dumps(fields, ensure_ascii=False, sort_keys=True, indent=1) + "\n").encode("utf-8")
+    tmp = args.out + ".tmp"
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.rename(tmp, args.out)
+    print(hashlib.sha256(data).hexdigest())
+    return 0
+
+
+_HEADING = re.compile(rb"^#{1,3} ")
+
+
+def split_text(data: bytes, max_bytes: int, max_parts: int):
+    """Split at line boundaries outside fences — a heading cut when one fits, else a blank-line
+    cut — packing greedily; parts concatenate to the input. Returns the list of byte strings or
+    raises ValueError('unsupported-size: …')."""
+    lines = data.splitlines(keepends=True)
+    # cut points: byte offset → "heading" | "blank" (the cut goes before that offset's line)
+    offsets = []
+    pos = 0
+    fence = None
+    prev_blank = False
+    for line in lines:
+        stripped = line.lstrip(b" ")
+        if fence is None and (stripped.startswith(b"```") or stripped.startswith(b"~~~")):
+            fence = stripped[:3]
+            kind = None
+        elif fence is not None and stripped.startswith(fence):
+            fence = None
+            kind = None
+        elif fence is None and _HEADING.match(line):
+            kind = "heading"
+        elif fence is None and prev_blank and line.strip():
+            kind = "blank"
+        else:
+            kind = None
+        if kind and pos > 0:
+            offsets.append((pos, kind))
+        prev_blank = (line.strip() == b"") and fence is None
+        pos += len(line)
+    total = len(data)
+    parts = []
+    start = 0
+    while start < total:
+        if total - start <= max_bytes:
+            parts.append(data[start:total])
+            break
+        limit = start + max_bytes
+        best_heading = None
+        best_blank = None
+        for off, kind in offsets:
+            if off <= start:
+                continue
+            if off > limit:
+                break
+            if kind == "heading":
+                best_heading = off
+            else:
+                best_blank = off
+        cut = best_heading if best_heading is not None else best_blank
+        if cut is None:
+            raise ValueError(f"unsupported-size: a span of more than {max_bytes} bytes cannot be split at a heading or a blank line outside fences (offset {start})")
+        parts.append(data[start:cut])
+        start = cut
+        if len(parts) > max_parts:
+            raise ValueError(f"unsupported-size: more than {max_parts} parts needed (extract_max_parts)")
+    if len(parts) > max_parts:
+        raise ValueError(f"unsupported-size: more than {max_parts} parts needed (extract_max_parts)")
+    return parts
+
+
+def cmd_split(args) -> int:
+    with open(args.infile, "rb") as fh:
+        data = fh.read()
+    try:
+        parts = split_text(data, args.max_bytes, args.max_parts)
+    except ValueError as exc:
+        print(str(exc))
+        return 1
+    os.makedirs(args.out_dir, exist_ok=True)
+    index = []
+    for n, chunk in enumerate(parts, 1):
+        path = os.path.join(args.out_dir, f"part-{n}.md")
+        with open(path, "wb") as fh:
+            fh.write(chunk)
+            fh.flush()
+            os.fsync(fh.fileno())
+        first = chunk.split(b"\n", 1)[0].decode("utf-8", errors="replace")
+        index.append({"n": n, "bytes": len(chunk), "first_line": normalize(first, 120)})
+    with open(os.path.join(args.out_dir, "parts.json"), "w", encoding="utf-8") as fh:
+        json.dump(index, fh, ensure_ascii=False, indent=1)
+        fh.write("\n")
+    print(f"parts={len(parts)}")
+    return 0
+
+
+def render_parts(files: list) -> str:
+    out = []
+    for n, path in enumerate(files, 1):
+        with open(path, "r", encoding="utf-8") as fh:
+            part = json.load(fh)
+        out.append(f"## Part {n} — {part.get('title', '')}")
+        out.append("")
+        out.append(part.get("summary", ""))
+        out.append("")
+        for idea in part.get("key_ideas", []):
+            out.append(f"- {idea['claim']} #{idea['domain']}")
+        if part.get("key_ideas"):
+            out.append("")
+        for q in part.get("quotes", []):
+            out.append(f"> {q}")
+        if part.get("quotes"):
+            out.append("")
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def cmd_render_parts(args) -> int:
+    sys.stdout.write(render_parts(args.files))
+    return 0
+
+
 def cmd_normalize(args) -> int:
     value = sys.stdin.read() if args.value == "-" else args.value
     sys.stdout.write(normalize(value, args.max) + "\n")
@@ -393,7 +653,8 @@ def cmd_body_headings(args) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Validate and publish extract.md")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("schema")
+    sc = sub.add_parser("schema")
+    sc.add_argument("--part", action="store_true", help="print the extract-part/1 schema")
     p = sub.add_parser("publish")
     p.add_argument("--result", required=True)
     p.add_argument("--template", required=True)
@@ -408,10 +669,26 @@ def main() -> int:
     q.add_argument("value")
     b = sub.add_parser("body-headings")
     b.add_argument("--template", required=True)
+    vp = sub.add_parser("validate-part")
+    vp.add_argument("--result", required=True)
+    vp.add_argument("--out", required=True)
+    sp = sub.add_parser("split")
+    sp.add_argument("--in", dest="infile", required=True)
+    sp.add_argument("--max-bytes", type=int, required=True)
+    sp.add_argument("--max-parts", type=int, required=True)
+    sp.add_argument("--out-dir", required=True)
+    rp = sub.add_parser("render-parts")
+    rp.add_argument("files", nargs="+")
     args = ap.parse_args()
     if args.cmd == "schema":
-        print(json.dumps(SCHEMA, indent=1))
+        print(json.dumps(PART_SCHEMA if args.part else SCHEMA, indent=1))
         return 0
+    if args.cmd == "validate-part":
+        return cmd_validate_part(args)
+    if args.cmd == "split":
+        return cmd_split(args)
+    if args.cmd == "render-parts":
+        return cmd_render_parts(args)
     if args.cmd == "publish":
         return cmd_publish(args)
     if args.cmd == "normalize":
