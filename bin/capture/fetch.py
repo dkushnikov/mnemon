@@ -253,6 +253,11 @@ class Chain:
         acq = acq or self.last_acq
         if acq is not None:
             self.report["acquisition"] = acq.as_report()
+        if self.report["http_status"] is None:       # the last HTTP status the chain saw, when any
+            for st in reversed(self.report["stages"]):
+                if st.get("status") is not None:
+                    self.report["http_status"] = st["status"]
+                    break
         if error_class == "timeout":
             return self.finish(EXIT_TIMEOUT)
         if error_class == "environment":

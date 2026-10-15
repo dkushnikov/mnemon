@@ -1,0 +1,448 @@
+"""§7.10 (the halves that need no gateway): map against a stub site (robots groups, anchored roles, discovery
+sources, include/exclude), fetch-bundle (dispositions, members, the stdout line, a 500 page, the site
+timeout, --no-render precedence, the A9 teardown), verify (modified, missing, symlinked, extra members),
+assemble (the composite, the mnemon-site/1 report, a convert-failed page, a landing without text)."""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import time
+import unittest
+
+from _helpers import BIN, LocalServer, PY, assert_same_keys, clean_env, expected_shapes, run_cli, tmpdir, wait_gone, \
+    write_stub
+
+from capture import proc, site
+from capture import policy as policymod
+from capture import report as reportmod
+
+CS = os.path.join(BIN, "capture-site.py")
+WORDS = " ".join("word%d" % i for i in range(120))
+
+
+def page(title: str, extra: str = "") -> str:
+    return "<html><head><title>%s</title></head><body><h1>%s</h1><p>%s</p>%s</body></html>" % (title, title, WORDS, extra)
+
+
+def build_site(srv: LocalServer) -> None:
+    b = srv.base
+    links = "\n".join('<a href="%s">%s</a>' % (h, h) for h in [
+        "/product", "/docs/intro", "/blog/post-1", "/pricing", "/privacy", "/de-de/x", "/private/x", "/jobs/42", "/jobs",
+        "https://other.example/x", "/brochure.pdf", "https://github.com/owner/repo", "/product#intro", "/goes-away",
+        "/empty", "/faq"])
+    srv.add("/", page("Landing", "<nav>%s</nav>" % links))
+    srv.add("/robots.txt", "User-agent: *\nDisallow: /private\nAllow: /private/open\nSitemap: %s/sitemap.xml\n" % b,
+            content_type="text/plain")
+    srv.add("/sitemap.xml", "<urlset><url><loc>%s/docs/guide</loc></url><url><loc>%s/careers</loc></url>"
+            "<url><loc>%s/private/open</loc></url></urlset>" % (b, b, b), content_type="application/xml")
+    srv.add("/llms.txt", "# Example\n\n- one\n- two\n- three\n", content_type="text/plain")
+    for p, t in [("/product", "Product"), ("/docs/intro", "Docs intro"), ("/blog/post-1", "Post"), ("/pricing", "Pricing"),
+                 ("/privacy", "Privacy"), ("/de-de/x", "German"), ("/private/x", "Private"), ("/private/open", "Open"),
+                 ("/jobs/42", "Job"), ("/jobs", "Jobs"), ("/careers", "Careers"), ("/faq", "FAQ")]:
+        srv.add(p, page(t))
+    srv.add("/docs/guide", "<html><body>down</body></html>", status=500)
+    srv.add("/brochure.pdf", b"%PDF-1.4\n", content_type="application/pdf")
+    srv.add("/goes-away", "", status=302, headers=[("Location", "https://other.example/moved")])
+    srv.add("/empty", "<html><head><title>Empty</title></head><body></body></html>")
+    srv.add("/gh/owner/repo/HEAD/README.md", "# Repo\n\nA readme with more than six words in it.\n", content_type="text/plain")
+
+
+class SiteBase(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server = LocalServer()
+        build_site(cls.server)
+        cls.work = tmpdir("mnemon-site-")
+        cls.stubs = os.path.join(cls.work, "stubs")
+        os.makedirs(cls.stubs)
+        cls.render_fail = write_stub(cls.stubs, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
+        cls.env = clean_env({"MNEMON_FETCH_URL_REWRITE": "https://raw.githubusercontent.com=%s/gh" % cls.server.base})
+        cls.env["RENDER_URL_CMD"] = cls.render_fail
+        cls.plan_path = os.path.join(cls.work, "plan.json")
+        rc, so, se = run_cli([CS, "map", cls.server.base + "/", "--out", cls.plan_path, "--max-pages", "13",
+                              "--include", "privacy", "--exclude", "blog"], env=cls.env, timeout=300)
+        assert rc == 0, se
+        cls.small_plan_path = os.path.join(cls.work, "plan-small.json")
+        rc, so, se = run_cli([CS, "map", cls.server.base + "/", "--out", cls.small_plan_path, "--max-pages", "4"], env=cls.env, timeout=300)
+        assert rc == 0, se
+        with open(cls.small_plan_path, encoding="utf-8") as fh:
+            cls.small_plan = json.load(fh)
+        with open(cls.plan_path, encoding="utf-8") as fh:
+            cls.plan = json.load(fh)
+        cls.bundle = os.path.join(cls.work, "bundle")
+        cls.bundle_report = os.path.join(cls.work, "bundle.json")
+        cls.server.reset()
+        rc, so, se = run_cli([CS, "fetch-bundle", cls.plan_path, "--out", cls.bundle, "--report", cls.bundle_report,
+                              "--site-timeout", "120"], env=cls.env, timeout=300)
+        assert rc == 0, se
+        cls.bundle_stdout = so.strip()
+        with open(os.path.join(cls.bundle, "manifest.json"), "rb") as fh:
+            cls.manifest_bytes = fh.read()
+        cls.manifest = json.loads(cls.manifest_bytes.decode("utf-8"))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.close()
+        shutil.rmtree(cls.work, ignore_errors=True)
+
+    def pages_by_path(self):
+        return {p["url"].replace(self.server.base, "") or "/": p for p in self.plan["pages"]}
+
+
+class Map(SiteBase):
+    def test_plan_shape(self):
+        fixture = expected_shapes("site-plan.json")
+        assert_same_keys(self, self.plan, fixture, "mnemon-site-plan/1")
+        assert_same_keys(self, self.plan["pages"][0], fixture["pages"][0], "pages[0]", nullable=("title",))
+        assert_same_keys(self, self.plan["discovery"], fixture["discovery"], "discovery")
+        assert_same_keys(self, self.plan["discovery"]["robots"], fixture["discovery"]["robots"], "robots")
+        assert_same_keys(self, self.plan["discovery"]["sources"][0], fixture["discovery"]["sources"][0], "sources[0]", nullable=("note",))
+        self.assertEqual(self.plan["landing"], self.server.base + "/")
+        self.assertEqual(self.plan["caps"], {"max_pages": 13})
+        self.assertEqual([p["n"] for p in self.plan["pages"]], list(range(1, len(self.plan["pages"]) + 1)))
+
+    def test_roles_anchored_and_exclusions(self):
+        by = self.pages_by_path()
+        self.assertEqual((by["/"]["role"], by["/"]["include"], by["/"]["title"]), ("landing", True, "Landing"))
+        self.assertEqual((by["/jobs/42"]["role"], by["/jobs"]["role"], by["/careers"]["role"]), ("job", "careers", "careers"))
+        self.assertEqual((by["/privacy"]["role"], by["/privacy"]["include"], by["/privacy"]["reason"]), ("legal", True, "legal (--include)"))
+        self.assertEqual((by["/de-de/x"]["role"], by["/de-de/x"]["reason"]), ("localized", "excluded: localized"))
+        self.assertEqual(by["/private/x"]["reason"], "excluded: robots")
+        self.assertEqual((by["/private/open"]["include"], by["/private/open"]["role"]), (True, "product"))
+        self.assertEqual(by["/brochure.pdf"]["reason"], "excluded: content-type")
+        self.assertEqual((by["/blog/post-1"]["role"], by["/blog/post-1"]["reason"]), ("blog", "excluded: exclude-regex"))
+        self.assertEqual((by["/faq"]["role"], by["/faq"]["reason"]), ("howto", "excluded: howto"))
+        self.assertEqual(by["/goes-away"]["reason"], "excluded: redirect-off-site")
+        self.assertEqual((by["/docs/intro"]["role"], by["/docs/intro"]["title"]), ("docs", "Docs intro"))
+        self.assertEqual((by["/llms.txt"]["role"], by["/llms.txt"]["include"], by["/llms.txt"]["discovered_by"]), ("llms_txt", True, "llms.txt"))
+        self.assertNotIn("https://other.example/x", [p["url"] for p in self.plan["pages"]], "an off-site link is not a page")
+        self.assertNotIn("/product#intro", [p["url"] for p in self.plan["pages"]], "an anchor is the same page")
+        readme = [p for p in self.plan["pages"] if p["role"] == "github_readme"]
+        self.assertEqual(len(readme), 1)
+        self.assertEqual(readme[0]["url"], "https://raw.githubusercontent.com/owner/repo/HEAD/README.md")
+        self.assertIn("raw.githubusercontent.com", self.plan["hosts"])
+        self.assertEqual(self.plan["hosts"][0], "127.0.0.1")
+        self.assertTrue(all(p["render"] is None for p in self.plan["pages"]))
+
+    def test_discovery_sources_and_robots_recorded(self):
+        sources = {s["name"]: s for s in self.plan["discovery"]["sources"]}
+        self.assertEqual(sorted(sources), ["docs-toc", "github-readme", "landing-links", "llms.txt", "sitemap"])
+        self.assertGreaterEqual(sources["landing-links"]["yield"], 10)
+        self.assertEqual(sources["sitemap"]["yield"], 3)
+        self.assertEqual(sources["llms.txt"]["yield"], 1)
+        self.assertEqual(sources["github-readme"]["yield"], 1)
+        robots = self.plan["discovery"]["robots"]
+        self.assertEqual((robots["fetched"], robots["status"], robots["groups"]), (True, 200, ["*"]))
+        self.assertEqual(robots["rules_applied"], ["Disallow: /private", "Allow: /private/open"])
+
+    def test_cap_keeps_pages_by_role_priority(self):
+        included = [p for p in self.plan["pages"] if p["include"]]
+        self.assertEqual(len(included), 13, "nothing capped at 13")
+        self.assertEqual([p for p in self.plan["pages"] if p["reason"] == "excluded: cap"], [])
+        small = [p for p in self.small_plan["pages"] if p["include"]]
+        self.assertEqual(len(small), 4)
+        self.assertEqual([p["role"] for p in small], ["landing", "product", "product", "product"], "kept by role priority")
+        capped = [p["role"] for p in self.small_plan["pages"] if p["reason"] == "excluded: cap"]
+        self.assertIn("github_readme", capped)
+        self.assertIn("careers", capped)
+        self.assertIn("docs", capped)
+        self.assertNotIn("product", capped)
+        self.assertEqual(self.small_plan["caps"], {"max_pages": 4})
+
+
+class RobotsRules(unittest.TestCase):
+    def test_rfc_9309_groups_and_longest_match(self):
+        r = site.Robots.parse("User-agent: other\nDisallow: /\n\nUser-agent: Mnemon\nUser-agent: Mnemon-bot\nDisallow: /secret\n"
+                              "Allow: /secret/open\n\nUser-agent: *\nDisallow: /private\n")
+        self.assertEqual(r.applied()[0], ["mnemon", "mnemon-bot"])
+        self.assertTrue(r.allowed("/private/x"), "the * group is not used when a product-token group exists")
+        self.assertFalse(r.allowed("/secret/x"))
+        self.assertTrue(r.allowed("/secret/open/y"), "Allow wins by longest match")
+        self.assertTrue(r.allowed("/"))
+        r = site.Robots.parse("User-agent: *\nDisallow: /a*b$\nDisallow: /c\nAllow: /c/d\n")
+        self.assertFalse(r.allowed("/axxb"))
+        self.assertTrue(r.allowed("/axxbc"))
+        self.assertFalse(r.allowed("/c/x"))
+        self.assertTrue(r.allowed("/c/d/e"))
+        r = site.Robots.parse("User-agent: *\nDisallow:\n")
+        self.assertTrue(r.allowed("/anything"), "an empty Disallow allows everything")
+        self.assertFalse(site.Robots.unreachable().allowed("/"))
+        self.assertTrue(site.Robots.no_rules(403).allowed("/private"))
+
+    def test_fetch_robots_states(self):
+        srv = LocalServer()
+        try:
+            env = clean_env()
+            old = dict(os.environ)
+            os.environ.update(env)
+            try:
+                policy = policymod.Policy(connect_timeout=5, read_timeout=5)
+                srv.add("/robots.txt", "down", status=500)
+                self.assertEqual(site.fetch_robots(policy, srv.base + "/", proc.Deadline(10)).state, "unreachable")
+                srv.add("/robots.txt", "forbidden", status=403)
+                r = site.fetch_robots(policy, srv.base + "/", proc.Deadline(10))
+                self.assertEqual((r.state, r.status), ("none", 403))
+                srv.add("/robots.txt", "User-agent: *\nDisallow: /x\n", content_type="text/plain")
+                r = site.fetch_robots(policy, srv.base + "/", proc.Deadline(10))
+                self.assertEqual((r.state, r.fetched, r.allowed("/x/y")), ("ok", True, False))
+            finally:
+                os.environ.clear()
+                os.environ.update(old)
+        finally:
+            srv.close()
+
+    def test_host_eligibility_without_suffix_guessing(self):
+        self.assertTrue(site.host_eligible("www.example.com", "example.com"))
+        self.assertTrue(site.host_eligible("docs.example.com", "www.example.com"))
+        self.assertTrue(site.host_eligible("api.example.com", "example.com"))
+        self.assertFalse(site.host_eligible("cdn.example.com", "example.com"))
+        self.assertFalse(site.host_eligible("example.co", "example.com"))
+        self.assertFalse(site.host_eligible("other.github.io", "project.github.io"))
+        self.assertTrue(site.host_eligible("raw.githubusercontent.com", "example.com", ["raw.githubusercontent.com"]))
+
+    def test_role_rules(self):
+        L = "https://example.com/"
+        self.assertEqual(site.role_for("https://example.com/jobs/42", None, L), "job")
+        self.assertEqual(site.role_for("https://example.com/jobs/", None, L), "careers")
+        self.assertEqual(site.role_for("https://example.com/legal/terms", None, L), "legal")
+        self.assertEqual(site.role_for("https://example.com/fr/produit", None, L), "localized")
+        self.assertEqual(site.role_for("https://de.example.com/x", None, L), "localized")
+        self.assertEqual(site.role_for("https://example.com/go/x", None, L), "product", "`go` is not a locale")
+        self.assertEqual(site.role_for("https://example.com/changelog", None, L), "howto")
+        self.assertEqual(site.role_for("https://example.com/guides/x", "How to install", L), "howto")
+        self.assertEqual(site.role_for("https://example.com/news/2026/x", None, L), "blog")
+        self.assertEqual(site.role_for("https://docs.example.com/intro", None, L), "docs")
+        self.assertEqual(site.role_for("https://example.com/reference/api", None, L), "docs")
+        self.assertEqual(site.role_for("https://example.com/pricing", None, L), "pricing")
+        self.assertEqual(site.role_for("https://example.com/a/b/c", None, L), "other")
+        self.assertEqual(site.role_for("https://example.com/en/x", None, "https://example.com/en/"), "product",
+                         "the landing's own locale prefix is not localized")
+
+
+class Bundle(SiteBase):
+    def test_members_dispositions_and_the_stdout_line(self):
+        fixture = expected_shapes("site-manifest.json")
+        assert_same_keys(self, self.manifest, fixture, "mnemon-site-bundle/1")
+        assert_same_keys(self, self.manifest["pages"][0], fixture["pages"][0], "pages[0]")
+        assert_same_keys(self, self.manifest["members"][0], fixture["members"][0], "members[0]")
+        files = sorted(os.listdir(self.bundle))
+        members = sorted(m["path"] for m in self.manifest["members"])
+        self.assertEqual(members, [f for f in files if f != "manifest.json"], "members cover every file but the manifest")
+        self.assertIn("plan.json", members)
+        with open(os.path.join(self.bundle, "plan.json"), "rb") as fh, open(self.plan_path, "rb") as fh2:
+            self.assertEqual(fh.read(), fh2.read(), "plan.json is a byte copy of the input plan")
+        stdout = json.loads(self.bundle_stdout)
+        assert_same_keys(self, stdout, expected_shapes("site-bundle-stdout.json"), "stdout line")
+        self.assertEqual(self.bundle_stdout.count("\n"), 0)
+        self.assertEqual(stdout["raw_sha256"], reportmod.sha256_bytes(self.manifest_bytes))
+        self.assertEqual(stdout["raw_bytes"], sum(m["bytes"] for m in self.manifest["members"]))
+        self.assertEqual(self.manifest_bytes, reportmod.canonical_bytes(self.manifest), "canonical JSON bytes")
+        by = {p["url"].replace(self.server.base, "") or "/": p for p in self.manifest["pages"]}
+        self.assertEqual(by["/"]["disposition"], "captured")
+        self.assertEqual(by["/"]["n"], 1)
+        self.assertEqual([p["role"] for p in self.manifest["pages"]][0], "landing")
+        self.assertEqual((by["/docs/guide"]["disposition"], by["/docs/guide"]["error_class"], by["/docs/guide"]["http_status"]),
+                         ("fetch-failed", "server-error", 500))
+        self.assertIsNone(by["/docs/guide"]["file"])
+        self.assertTrue(by["/docs/guide"]["fetch_report"].endswith(".fetch.json"))
+        self.assertIn(by["/docs/guide"]["fetch_report"], members, "a failed page's fetch report is a member")
+        for p in self.manifest["pages"]:
+            if p["disposition"] == "captured":
+                with open(os.path.join(self.bundle, p["file"]), "rb") as fh:
+                    data = fh.read()
+                self.assertEqual((reportmod.sha256_bytes(data), len(data)), (p["sha256"], p["bytes"]))
+                self.assertEqual(p["raw_kind"], "response")
+        self.assertEqual(sum(1 for p in self.manifest["pages"]), sum(1 for p in self.plan["pages"] if p["include"]))
+        self.assertTrue(all(p["disposition"] in ("captured", "fetch-failed", "skipped-timeout") for p in self.manifest["pages"]))
+
+    def test_requests_paced_per_host(self):
+        reqs = self.server.requests()
+        self.assertGreaterEqual(len(reqs), 8)
+
+    def test_verify(self):
+        sha = reportmod.sha256_bytes(self.manifest_bytes)
+        rc, so, se = run_cli([CS, "verify", self.bundle, "--sha256", sha])
+        self.assertEqual(rc, 0, se)
+        rc, so, se = run_cli([CS, "verify", self.bundle, "--sha256", "0" * 64])
+        self.assertEqual((rc, se.strip()), (1, "evidence-mismatch manifest"))
+        copy = os.path.join(self.work, "copy")
+        shutil.rmtree(copy, ignore_errors=True)
+        shutil.copytree(self.bundle, copy)
+        with open(os.path.join(copy, "02.html"), "ab") as fh:
+            fh.write(b"<!-- edited -->")
+        self.assertEqual(site.verify_bundle(copy, sha), (False, "evidence-mismatch 02.html"))
+        os.unlink(os.path.join(copy, "02.html"))
+        self.assertEqual(site.verify_bundle(copy, sha), (False, "evidence-missing 02.html"))
+        shutil.copy(os.path.join(self.bundle, "02.html"), os.path.join(copy, "02.html"))
+        self.assertEqual(site.verify_bundle(copy, sha), (True, None))
+        with open(os.path.join(copy, "plan.json"), "ab") as fh:
+            fh.write(b"\n")
+        self.assertEqual(site.verify_bundle(copy, sha), (False, "evidence-mismatch plan.json"), "a changed plan.json is a mismatch")
+        shutil.copy(self.plan_path, os.path.join(copy, "plan.json"))
+        with open(os.path.join(copy, "stray.txt"), "w") as fh:
+            fh.write("x")
+        self.assertEqual(site.verify_bundle(copy, sha), (False, "evidence-mismatch stray.txt"))
+        os.unlink(os.path.join(copy, "stray.txt"))
+        os.unlink(os.path.join(copy, "03.html"))
+        os.symlink(os.path.join(self.bundle, "03.html"), os.path.join(copy, "03.html"))
+        self.assertEqual(site.verify_bundle(copy, sha), (False, "evidence-mismatch 03.html"))
+
+    def test_assemble(self):
+        out = os.path.join(self.work, "capture.md")
+        rep = os.path.join(self.work, "site.json")
+        rc, so, se = run_cli([CS, "assemble", self.bundle, "--out", out, "--report", rep], env=self.env, timeout=300)
+        self.assertEqual(rc, 0, se)
+        with open(rep, encoding="utf-8") as fh:
+            report = json.load(fh)
+        fixture = expected_shapes("site-report.json")
+        assert_same_keys(self, report, fixture, "mnemon-site/1")
+        assert_same_keys(self, report["pages"][0], fixture["pages"][0], "pages[0]")
+        by = {p["url"].replace(self.server.base, "") or "/": p for p in report["pages"]}
+        self.assertEqual(by["/"]["disposition"], "converted")
+        self.assertEqual(by["/docs/guide"]["disposition"], "fetch-failed")
+        self.assertEqual((by["/empty"]["disposition"], by["/empty"]["error_class"]), ("convert-failed", "convert"))
+        readme = [p for p in report["pages"] if p["role"] == "github_readme"][0]
+        self.assertEqual((readme["converter"], readme["completeness"], readme["disposition"]), ("text", "unknown", "converted"))
+        llms = by["/llms.txt"]
+        self.assertEqual(llms["converter"], "text")
+        self.assertEqual(report["included"], len(self.manifest["pages"]))
+        self.assertEqual(report["captured"], sum(1 for p in self.manifest["pages"] if p["disposition"] == "captured"))
+        self.assertEqual(report["converted"], sum(1 for p in report["pages"] if p["disposition"] == "converted"))
+        self.assertEqual(report["completeness"], "partial")
+        with open(out, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertTrue(text.startswith("# Landing — site capture\n\n## Part 1 — %s/\n" % self.server.base))
+        parts = [l for l in text.split("\n") if l.startswith("## Part ")]
+        self.assertEqual(len(parts), report["converted"])
+        self.assertNotIn("/empty", "\n".join(parts), "a convert-failed page is omitted from the composite")
+        self.assertIn("(github_readme)", text)
+        self.assertIn("A readme with more than six words in it.", text)
+        order = [p["n"] for p in self.manifest["pages"] if by[p["url"].replace(self.server.base, "") or "/"]["disposition"] == "converted"]
+        self.assertEqual(order, sorted(order), "parts in plan order")
+        self.assertEqual(sum(p["words"] for p in report["pages"]), report["words"])
+
+    def test_assemble_fails_when_the_landing_has_no_text(self):
+        copy = os.path.join(self.work, "nolanding")
+        shutil.rmtree(copy, ignore_errors=True)
+        shutil.copytree(self.bundle, copy)
+        with open(os.path.join(copy, "01.html"), "w") as fh:
+            fh.write("<html><body></body></html>")
+        code, report = site.assemble(copy, os.path.join(self.work, "x.md"))
+        self.assertEqual((code, report["error_class"]), (1, "convert"))
+        self.assertFalse(os.path.exists(os.path.join(self.work, "x.md")))
+
+
+class BundleLoop(unittest.TestCase):
+    def setUp(self):
+        self.server = LocalServer()
+        self.work = tmpdir("mnemon-loop-")
+        self.env = clean_env()
+        self.env["RENDER_URL_CMD"] = write_stub(self.work, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
+
+    def tearDown(self):
+        self.server.close()
+        shutil.rmtree(self.work, ignore_errors=True)
+
+    def plan(self, pages, landing=None):
+        landing = landing or self.server.base + "/"
+        plan = {"schema": "mnemon-site-plan/1", "landing": landing, "created": "2026-10-15T12:00:00Z",
+                "discovery": {"sources": [], "robots": {"fetched": False, "status": None, "groups": [], "rules_applied": []}},
+                "hosts": ["127.0.0.1"], "pages": [], "caps": {"max_pages": 40}}
+        for i, (path, role, render) in enumerate(pages, start=1):
+            url = self.server.base + path
+            plan["pages"].append({"n": i, "url": url, "canonical_url": url, "role": role, "include": True, "reason": role,
+                                  "title": None, "discovered_by": "landing", "render": render})
+        path = os.path.join(self.work, "plan.json")
+        with open(path, "w") as fh:
+            json.dump(plan, fh)
+        return path
+
+    def run_bundle(self, plan_path, extra=(), timeout=120):
+        out = os.path.join(self.work, "bundle")
+        shutil.rmtree(out, ignore_errors=True)
+        rep = os.path.join(self.work, "bundle.json")
+        rc, so, se = run_cli([CS, "fetch-bundle", plan_path, "--out", out, "--report", rep] + list(extra), env=self.env, timeout=timeout)
+        manifest = None
+        if os.path.exists(os.path.join(out, "manifest.json")):
+            with open(os.path.join(out, "manifest.json")) as fh:
+                manifest = json.load(fh)
+        report = None
+        if os.path.exists(rep):
+            with open(rep) as fh:
+                report = json.load(fh)
+        return rc, so, se, manifest, report, out
+
+    def test_site_timeout_marks_the_rest_skipped(self):
+        self.server.add("/", page("Landing"))
+        self.server.add("/slow", page("Slow"), delay=3.0)
+        self.server.add("/after", page("After"))
+        plan = self.plan([("/", "landing", None), ("/slow", "product", None), ("/after", "product", None)])
+        rc, so, se, manifest, report, out = self.run_bundle(plan, ["--site-timeout", "3"])
+        self.assertEqual(rc, 0, se)
+        disp = [p["disposition"] for p in manifest["pages"]]
+        self.assertEqual(disp[0], "captured")
+        self.assertEqual(disp[2], "skipped-timeout")
+        self.assertIn(disp[1], ("skipped-timeout", "fetch-failed"))
+        self.assertTrue(os.path.exists(os.path.join(out, "manifest.json")))
+
+    def test_landing_failure_is_fatal(self):
+        self.server.add("/", "<html><body>down</body></html>", status=503)
+        plan = self.plan([("/", "landing", None)])
+        rc, so, se, manifest, report, out = self.run_bundle(plan)
+        self.assertEqual(rc, 1, se)
+        self.assertIsNone(manifest)
+        self.assertEqual((report["error_class"], report["stage"]), ("unavailable", "landing"))
+        self.assertEqual(so.strip(), "")
+
+    def test_no_render_prohibits_a_plan_forced_render(self):
+        marker = os.path.join(self.work, "rendered")
+        self.env["RENDER_URL_CMD"] = write_stub(self.work, "render-mark.sh", "#!/usr/bin/env bash\ntouch %s\nprintf '%s'\n" % (marker, page("Rendered").replace("'", "")))
+        self.server.add("/", page("Landing"))
+        self.server.add("/p", page("Page"))
+        plan = self.plan([("/", "landing", None), ("/p", "product", True)])
+        rc, so, se, manifest, report, out = self.run_bundle(plan)
+        self.assertEqual(rc, 0, se)
+        self.assertTrue(os.path.exists(marker), "pages[].render: true forces a render")
+        self.assertEqual(manifest["pages"][1]["raw_kind"], "rendered")
+        os.unlink(marker)
+        rc, so, se, manifest, report, out = self.run_bundle(plan, ["--no-render"])
+        self.assertEqual(rc, 0, se)
+        self.assertFalse(os.path.exists(marker), "a global --no-render wins over the plan")
+        self.assertEqual(manifest["pages"][1]["raw_kind"], "response")
+
+    def test_hop_rejections_off_site_and_robots(self):
+        self.server.add("/", page("Landing"))
+        self.server.add("/robots.txt", "User-agent: *\nDisallow: /private\n", content_type="text/plain")
+        self.server.add("/away", "", status=302, headers=[("Location", "https://other.example/x")])
+        self.server.add("/to-private", "", status=302, headers=[("Location", "/private/x")])
+        self.server.add("/private/x", page("Private"))
+        plan = self.plan([("/", "landing", None), ("/away", "product", None), ("/to-private", "product", None)])
+        rc, so, se, manifest, report, out = self.run_bundle(plan)
+        self.assertEqual(rc, 0, se)
+        by = {p["url"].replace(self.server.base, ""): p for p in manifest["pages"]}
+        self.assertEqual(by["/away"]["disposition"], "fetch-failed")
+        self.assertIn("redirect-off-site", by["/away"]["error"])
+        self.assertEqual(by["/to-private"]["disposition"], "fetch-failed")
+        self.assertIn("robots", by["/to-private"]["error"])
+        self.assertEqual(self.server.count("/private/x"), 0, "a disallowed destination is never fetched")
+
+    def test_site_timeout_tears_down_the_renderer(self):
+        pidfile = os.path.join(self.work, "pids")
+        self.env["RENDER_URL_CMD"] = write_stub(self.work, "render-sleep.sh", "#!/usr/bin/env bash\nsleep 60 &\necho \"$$ $!\" > %s\nwait\n" % pidfile)
+        self.server.add("/", '<html><body><div id="root"></div><script src="/a.js"></script></body></html>')
+        plan = self.plan([("/", "landing", None)])
+        t0 = time.monotonic()
+        rc, so, se, manifest, report, out = self.run_bundle(plan, ["--site-timeout", "2", "--render-timeout", "30"], timeout=60)
+        self.assertEqual(rc, 124, se)
+        self.assertEqual(report["error_class"], "timeout")
+        self.assertLess(time.monotonic() - t0, 20)
+        with open(pidfile) as fh:
+            pids = [int(p) for p in fh.read().split()]
+        for pid in pids:
+            self.assertTrue(wait_gone(pid, 5), "pid %d survived the site timeout" % pid)
+
+
+if __name__ == "__main__":
+    unittest.main()

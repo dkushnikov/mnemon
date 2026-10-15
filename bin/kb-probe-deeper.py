@@ -1,105 +1,42 @@
 #!/usr/bin/env python3
 """kb-probe-deeper — deterministic depth discovery for Mnemon capture.
 
-Given a posted URL, decide whether the captured landing is thin/SPA and, if so,
-discover same-entity deeper targets (llms.txt / GitHub repo / docs) one hop away,
-classify each by same-entity confidence + evidence, and emit JSON. NO LLM, NO
-content folding — discovery + classification only. The gateway preflight consumes
-this JSON to fetch high-confidence targets and build the composite source.md.
+Given a posted URL, decide whether the captured landing is thin/SPA and, if so, discover same-entity deeper
+targets (llms.txt / GitHub repo / docs) one hop away, classify each by same-entity confidence + evidence,
+and emit JSON. NO LLM, NO content folding — discovery + classification only. The gateway's depth fold
+consumes this JSON to fetch high-confidence targets.
 
-Design: docs/specs/2026-06-01-depth-aware-capture.md (D1/D2/D3/D6b).
-- SPA landings are rendered (render-url.sh --html) before link-scan, so JS-injected
-  repo/docs links are visible (the openviking case).
-- Probe targets are content-verified, not just HEAD-200: a SPA that returns 200 for
-  every path would otherwise yield false llms.txt/docs candidates.
-- SSRF policy: refuses private/loopback/link-local/reserved hosts; redirect + byte
-  + timeout caps. Best-effort: every probe failure is recorded, never fatal.
+Design: docs/specs/2026-06-01-depth-aware-capture.md (D1/D2/D3/D6b); capture layer §3.2, §12 A8:
+- every request goes through the capture policy (kb_fetch over capture.policy): SSRF checks per hop, caps,
+  no proxies, no credentials; the probe never writes anything;
+- with --landing-file the landing is never fetched or rendered (A8): `rendered` and `final_url` come from
+  --context; without a landing file the landing is fetched through the policy and an SPA landing is
+  rendered (render-url.sh --html) unless the context says render: off;
+- the page-declared canonical (<link rel=canonical>, og:url) is `declared_canonical_url` — `canonical_url`
+  is reserved for the computed identity (D5);
+- --budget-s bounds every probe request; what the budget does not cover is recorded in `errors`.
 
-Usage:  kb-probe-deeper.py <url> [--landing-file PATH] [--thin-words N]
-Output: JSON to stdout.
+Usage:  kb-probe-deeper.py <url> [--landing-file PATH] [--thin-words N] [--budget-s S] [--context JSON]
+                           [--policy JSON]
+Output: JSON to stdout: {posted_url, final_url, declared_canonical_url, thin, spa, word_count, rendered,
+        candidates: [{url, type, same_entity_confidence, evidence}], errors}.
 """
 from __future__ import annotations
-import sys
+
+import argparse
+import json
 import os
 import re
-import json
-import socket
-import ipaddress
-import argparse
-import subprocess
+import sys
 from urllib.parse import urlsplit
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import kb_fetch  # noqa: E402
 import lib_url  # noqa: E402
+from capture import proc  # noqa: E402
 
-try:
-    import requests
-except ImportError:
-    requests = None
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-UA = "Mnemon-depth-probe/1.0 (+https://github.com/dkushnikov/mnemon)"
-TIMEOUT = 8
-MAX_BYTES = 2_000_000
 THIN_WORDS_DEFAULT = 400
 TAG = re.compile(r"<[^>]+>")
-
-
-# ---------- SSRF guard + fetch ----------
-def _host_is_safe(host: str) -> bool:
-    if not host:
-        return False
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except Exception:
-        return False
-    for _, _, _, _, sockaddr in infos:
-        try:
-            addr = ipaddress.ip_address(sockaddr[0])
-        except ValueError:
-            return False
-        if (addr.is_private or addr.is_loopback or addr.is_link_local
-                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
-            return False
-    return True
-
-
-def fetch(url: str, cap: int = MAX_BYTES):
-    """SSRF-guarded GET. Returns (final_url, status:int|str, text)."""
-    if requests is None:
-        return (None, "no-requests", "")
-    if not _host_is_safe(urlsplit(url).hostname or ""):
-        return (None, "ssrf-blocked", "")
-    try:
-        s = requests.Session()
-        s.max_redirects = 5
-        r = s.get(url, timeout=TIMEOUT, headers={"User-Agent": UA},
-                  stream=True, allow_redirects=True)
-        if not _host_is_safe(urlsplit(r.url).hostname or ""):
-            return (None, "ssrf-redirect", "")
-        chunks, total = [], 0
-        for c in r.iter_content(8192):
-            chunks.append(c)
-            total += len(c)
-            if total >= cap:
-                break
-        return (r.url, r.status_code,
-                b"".join(chunks).decode(r.encoding or "utf-8", errors="ignore"))
-    except Exception as e:
-        return (None, f"fetch-error:{type(e).__name__}", "")
-
-
-def render_html(url: str):
-    """Post-JS rendered HTML via render-url.sh --html, or None."""
-    rs = os.path.join(HERE, "render-url.sh")
-    if not os.path.exists(rs):
-        return None
-    try:
-        r = subprocess.run([rs, url, "--html", "--timeout", "12000"],
-                           capture_output=True, text=True, timeout=45)
-        return r.stdout if r.returncode == 0 and r.stdout.strip() else None
-    except Exception:
-        return None
 
 
 def _is_html(text: str) -> bool:
@@ -112,7 +49,6 @@ def _visible(html: str) -> str:
     return re.sub(r"\s+", " ", TAG.sub(" ", body)).strip()
 
 
-# ---------- landing analysis ----------
 def meta(html: str, *keys: str):
     for k in keys:
         m = (re.search(r'<meta[^>]+(?:property|name)=["\']' + re.escape(k)
@@ -125,7 +61,7 @@ def meta(html: str, *keys: str):
 
 
 def looks_spa(html: str, words: int) -> bool:
-    has_root = bool(re.search(r'<div[^>]+id=["\'](root|app|__next)["\']', html, re.I))
+    has_root = bool(re.search(r'<div[^>]+id=["\'](root|app|__next|__nuxt)["\']', html, re.I))
     bundles = len(re.findall(r'<script[^>]+src=', html, re.I))
     return words < 200 and (has_root or bundles >= 1)
 
@@ -135,16 +71,15 @@ def links(html: str):
             + re.findall(r'<link[^>]+href=["\']([^"\']+)["\']', html, re.I))
 
 
-# ---------- main probe ----------
-def probe(posted_url: str, landing_html, thin_words: int) -> dict:
-    out = {"posted_url": posted_url, "final_url": posted_url, "canonical_url": "",
-           "thin": False, "spa": False, "word_count": None,
-           "rendered": False, "candidates": [], "errors": []}
-
-    if landing_html is None:
-        final, status, html = fetch(posted_url)
-        if final is None:
-            out["errors"].append(f"landing fetch failed: {status}")
+def probe(posted_url: str, landing_html, thin_words: int, context: dict, deadline: proc.Deadline) -> dict:
+    out = {"posted_url": posted_url, "final_url": context.get("final_url") or posted_url, "declared_canonical_url": "",
+           "thin": False, "spa": False, "word_count": None, "rendered": bool(context.get("rendered", False)),
+           "candidates": [], "errors": []}
+    supplied = landing_html is not None
+    if not supplied:
+        final, status, html = kb_fetch.fetch(posted_url, deadline=deadline)
+        if final is None or not isinstance(status, int) or status >= 400:
+            out["errors"].append("landing fetch failed: %s" % status)
             return out
         out["final_url"] = final
     else:
@@ -154,14 +89,14 @@ def probe(posted_url: str, landing_html, thin_words: int) -> dict:
     out["word_count"] = words
     out["thin"] = words < thin_words
     out["spa"] = looks_spa(html, words)
-    out["canonical_url"] = (meta(html, "og:url") or (re.search(
+    out["declared_canonical_url"] = (meta(html, "og:url") or (re.search(
         r'<link[^>]+rel=["\']canonical["\'][^>]*href=["\']([^"\']+)', html, re.I)
         or [None, ""])[1])
 
-    # SPA landing → render to expose JS-injected links (else github link is hidden)
+    # an SPA landing is rendered to expose JS-injected links — never under a supplied landing (A8)
     scan_html = html
-    if out["spa"]:
-        rendered = render_html(out["final_url"])
+    if out["spa"] and not supplied and context.get("render", "auto") != "off":
+        rendered = kb_fetch.render_html(out["final_url"], deadline=deadline)
         if rendered:
             out["rendered"] = True
             scan_html = rendered
@@ -181,14 +116,23 @@ def probe(posted_url: str, landing_html, thin_words: int) -> dict:
         out["candidates"].append({"url": url, "type": ctype,
                                   "same_entity_confidence": conf, "evidence": evidence})
 
+    def budget_left() -> bool:
+        if deadline.expired():
+            if "budget exhausted" not in out["errors"]:
+                out["errors"].append("budget exhausted")
+            return False
+        return True
+
     # 1. GitHub repos linked from the (rendered) page — no search in v1 (D3)
     repos = {}
     for href in links(scan_html):
         if "://" in href and lib_url.github_repo(href):
             repos.setdefault(lib_url.github_repo(href), href)
     for repo in list(repos)[:4]:
+        if not budget_left():
+            break
         conf, ev = "medium", ["linked_from_landing"]
-        api = fetch(f"https://api.github.com/repos/{repo}", cap=200_000)
+        api = kb_fetch.fetch("https://api.github.com/repos/%s" % repo, cap=200_000, deadline=deadline)
         homepage = ""
         if api[0] is not None and api[1] == 200:
             try:
@@ -196,24 +140,28 @@ def probe(posted_url: str, landing_html, thin_words: int) -> dict:
             except Exception:
                 pass
         elif api[1] != 200:
-            out["errors"].append(f"github api {repo}: {api[1]}")
+            out["errors"].append("github api %s: %s" % (repo, api[1]))
         if homepage and lib_url.same_site(homepage, out["final_url"]):
             conf, ev = "high", ["linked_from_landing", "repo_homepage_matches_domain"]
         elif landing_dom and repo.split("/")[-1].lower() in landing_dom.split(".")[0]:
             conf, ev = "high", ["linked_from_landing", "repo_name_matches_domain"]
-        add(f"https://github.com/{repo}", "github", conf, ev)
+        add("https://github.com/%s" % repo, "github", conf, ev)
 
     # 2. llms.txt — content-verified (must be text, not the SPA HTML shell)
-    for base in {f"https://{landing_dom}", f"https://{landing_host}"}:
-        url = f"{base}/llms.txt"
-        ok, status, text = fetch(url, cap=300_000)
+    for base in sorted({"https://%s" % landing_dom, "https://%s" % landing_host}):
+        if not budget_left():
+            break
+        url = "%s/llms.txt" % base
+        ok, status, text = kb_fetch.fetch(url, cap=300_000, deadline=deadline)
         if ok is not None and status == 200 and not _is_html(text) \
                 and len([ln for ln in text.splitlines() if ln.strip()]) >= 3:
             add(url, "llms.txt", "high", ["same_domain", "llms_txt_verified"])
 
     # 3. docs — content-verified (reject SPA catch-all that echoes the landing shell)
-    for url in (f"https://docs.{landing_dom}/", f"https://{landing_host}/docs"):
-        ok, status, text = fetch(url, cap=500_000)
+    for url in ("https://docs.%s/" % landing_dom, "https://%s/docs" % landing_host):
+        if not budget_left():
+            break
+        ok, status, text = kb_fetch.fetch(url, cap=500_000, deadline=deadline)
         if ok is None or status != 200:
             continue
         if _visible(text)[:300] == landing_sig:   # same SPA shell, not real docs
@@ -234,13 +182,34 @@ def main():
     ap.add_argument("url")
     ap.add_argument("--landing-file", default=None)
     ap.add_argument("--thin-words", type=int, default=THIN_WORDS_DEFAULT)
+    ap.add_argument("--budget-s", type=float, default=None, help="the probe's whole budget in seconds")
+    ap.add_argument("--context", default=None, help="JSON: final_url, http_status, acquisition, render, external, budget_s")
+    ap.add_argument("--policy", default=None, help="JSON: fetch_user_agent, fetch_timeout, fetch_max_bytes")
     a = ap.parse_args()
+    proc.close_lock_fd()
+    proc.install_term_handler()
+    context = {}
+    if a.context:
+        try:
+            context = json.loads(a.context)
+        except ValueError as exc:
+            print("kb-probe-deeper: --context is not valid JSON: %s" % exc, file=sys.stderr)
+            return 2
+    if a.policy:
+        try:
+            kb_fetch.configure(json.loads(a.policy))
+        except ValueError as exc:
+            print("kb-probe-deeper: --policy is not valid JSON: %s" % exc, file=sys.stderr)
+            return 2
+    budget = a.budget_s if a.budget_s is not None else context.get("budget_s")
+    deadline = proc.Deadline(budget) if budget is not None else proc.Deadline.never()
     landing = None
     if a.landing_file:
         with open(a.landing_file, encoding="utf-8", errors="ignore") as f:
             landing = f.read()
-    print(json.dumps(probe(a.url, landing, a.thin_words), ensure_ascii=False, indent=2))
+    print(json.dumps(probe(a.url, landing, a.thin_words, context, deadline), ensure_ascii=False, indent=2))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

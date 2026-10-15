@@ -1,0 +1,17 @@
+# tests/live/corpus.txt — the manual gate corpus (spec D16, §7.17). Never read by an automated suite.
+#
+# One item per line:  <url> | <kind: page|site|paper> | <min words> | <artifacts that must be absent, comma-separated>
+# The maintainer fills in the public URLs; placeholders stay until then. Expectations per §7.17:
+#   every capture converts without manual repair, completeness ∈ {complete, partial},
+#   missing_lines + glued_lines ≤ 3 per page, the absent list holds for the capture-text, the word floor holds.
+#
+# five sites
+<site-1: a GitHub Pages project page with 13 sections>              | page  | 1500 | data:,[TABLE],\iow_now,_next/image
+<site-2: a docs site with tabbed pages>                             | site  | 3000 | data:,[TABLE],\iow_now,_next/image
+<site-3: an SPA product site behind a bot checkpoint>               | site  | 800  | data:,[TABLE],\iow_now,_next/image
+<site-4: a marketing site with Next.js images and SVG diagrams>     | site  | 1200 | data:,[TABLE],\iow_now,_next/image
+<site-5: a Substack article with comments>                          | page  | 1500 | data:,[TABLE],\iow_now,_next/image
+# three arXiv papers pinned by version
+<paper-1: https://arxiv.org/abs/<id>vN with 67 base64 figures>      | paper | 6000 | data:,[TABLE],\iow_now,_next/image
+<paper-2: https://arxiv.org/abs/<id>vN with 19 listing download buttons and merged-cell tables> | paper | 6000 | data:,[TABLE],\iow_now,⬇
+<paper-3: https://arxiv.org/abs/<id>vN with tcolorbox listings>     | paper | 6000 | data:,[TABLE],\iow_now,_next/image
