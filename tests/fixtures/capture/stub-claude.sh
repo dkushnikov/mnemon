@@ -22,6 +22,8 @@
 #                     fixture instead (the gateway's one validation re-run)
 #   STUB_FAIL_CALLS   "n,m": call numbers that exit 1 (a failing part)
 #   STUB_COST         total_cost_usd of every answer (default 0.012); STUB_COST_NULL=1 omits it
+#   STUB_BODY_FROM_TEMPLATE=1  rebuild the fixture's `body` from the `### ` headings of the prompt's
+#                     EXTRACTION TEMPLATE Body section (any source type's template validates)
 set -uo pipefail
 
 case "${1:-}" in
@@ -83,6 +85,26 @@ emit() {  # <structured_output file or empty> <extra jq filter>
   fi
 }
 
+if [[ "${STUB_BODY_FROM_TEMPLATE:-}" == "1" && "$mode" == "ok" && -n "$fixture" && "$(cat "$STUB_DIR/call-$n.kind")" == "main" ]]; then
+  python3 - "$fixture" "$STUB_DIR/call-$n.stdin" > "$STUB_DIR/so-$n.json" <<'PYB'
+import json, sys
+so = json.load(open(sys.argv[1], encoding="utf-8"))
+prompt = open(sys.argv[2], encoding="utf-8", errors="replace").read()
+template = prompt.split("=== EXTRACTION TEMPLATE ===", 1)[-1].split("=== CONTENT ===", 1)[0].split("=== PART EXTRACTS", 1)[0]
+parts = template.split("\n## Body", 1)
+headings = []
+if len(parts) == 2:
+    for line in parts[1].split("\n")[1:]:
+        if line.startswith("## "):
+            break
+        if line.startswith("### "):
+            headings.append(line[4:].strip())
+if headings:
+    so["body"] = "".join("### %s\n\nStub text for %s.\n\n" % (h, h.lower()) for h in headings)
+print(json.dumps(so, ensure_ascii=False))
+PYB
+  fixture="$STUB_DIR/so-$n.json"
+fi
 case "$mode" in
   ok)            emit "${fixture:?STUB_FIXTURE must be set for ok}" <<< '{}' ;;
   exit1)         echo "stub claude: simulated failure" >&2; exit 1 ;;
