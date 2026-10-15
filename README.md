@@ -31,7 +31,7 @@ URL / file / text → mnemon add → knowledge-gateway.sh → claude -p → <you
 - **Gateway** (`bin/knowledge-gateway.sh`) — behind `mnemon add`: captures a source, assembles a prompt from the extraction template + your reader context, and invokes `claude -p`. Handles articles, PDFs, YouTube, podcasts, ideas, SPAs. Pass `--render` for JS-heavy sites (Chrome headless pre-rendering).
 - **Instances** — one per vault: `~/.config/mnemon/instances/<name>.yaml` holds the vault path, archive directory, search provider and model; `mnemon init` writes it. Several libraries (say, personal and work) coexist on one machine and are selected with `--instance <name>` or `MNEMON_INSTANCE`.
 - **Library** (`archive_dir` in the instance config) — saves original source files before extraction. Any directory — iCloud, NAS, local folder. Omit to disable.
-- **Brain** (`Sources/` in vault) — `source.md` (immutable metadata) + `extract.md` (AI-generated, re-generable). Searchable via `mnemon search`, Obsidian, or [QMD](https://github.com/tobi/qmd) hybrid search.
+- **Brain** (`Sources/` in vault) — `source.md` (immutable metadata) + `extract.md` (AI-generated, re-generable). Searchable via `mnemon search` (a grep-style token scan over extracts — see below), Obsidian, or the [QMD](https://github.com/tobi/qmd) CLI if you index the vault with it.
 - **Reader context** — a markdown profile of you that personalizes every extract's framing, key ideas, and rating. The same article produces different outputs for different readers.
 - **Templates** — Fabric-inspired extraction prompts per source type (article, video, podcast, paper, book, idea, conversation).
 
@@ -50,7 +50,7 @@ Same source. Same extraction template. Different reader context → different kn
 Extracts live in your Obsidian vault — searchable, linkable, always available:
 
 - **In Claude Code sessions:** `/source-search "agent orchestration"` finds relevant extracts instantly. Your past reading informs current work.
-- **In the shell:** `mnemon search --query "agent orchestration"` returns the same results as JSON — pipe it into whatever you like.
+- **In the shell:** `mnemon search --query "agent orchestration"` returns the same results as JSON — pipe it into whatever you like. The search is a grep-style scan (all query tokens must appear in a file; ranked by rating, then date). It does not use qmd: the JSON reports `provider: "grep"` (what ran) and `configured_provider` (the instance's `search_provider`, which today only drives the post-capture `qmd update && qmd embed` hook and `mnemon doctor`'s qmd check).
 - **In Obsidian:** graph view connects sources to your notes. Wikilinks from projects to evidence.
 - **On mobile:** Obsidian Sync gives you your full knowledge base offline.
 - **For re-extraction:** models improve every few months. Re-run extraction from archived originals — your Library doesn't decay, your Brain gets sharper.
@@ -162,7 +162,7 @@ Remove the wrapper once qmd v2.0.2+ is published — the released launcher will 
 
 ### QMD index can go stale between sessions
 
-`qmd update` and `qmd embed` have to run for newly added sources to be searchable via the semantic provider. Mnemon's gateway fires a background `qmd update && qmd embed` after every successful `mnemon add` when `search_provider: qmd` is active, so the index stays fresh during normal use. But cron jobs, manual `source.md` edits, or external tools that touch the vault without going through the gateway won't trigger reindexing. If semantic search starts missing obvious content, run `mnemon reindex` (or `qmd update && qmd embed`) manually.
+`qmd update` and `qmd embed` have to run for newly added sources to be searchable through the qmd CLI. Mnemon's gateway fires a background `qmd update && qmd embed` after every successful `mnemon add` when `search_provider: qmd` is active, so the index stays fresh during normal use. But cron jobs, manual `source.md` edits, or external tools that touch the vault without going through the gateway won't trigger reindexing. If qmd starts missing obvious content, run `qmd update && qmd embed` manually. (`mnemon reindex` rebuilds the vault's `index.md` from `Sources/`; it never touches the qmd index, and `mnemon search` does not read it.)
 
 ## Works with Obsidian Seed
 

@@ -49,7 +49,7 @@ Time from clone to first extract: **under 15 minutes.** See [install.md](install
 | **Immutable sources** | source.md never changes. Re-extract with new context anytime |
 | **Local & yours** | Markdown files + git. No cloud, no lock-in |
 | **Multiple instances** | One instance per vault — personal and work libraries side by side |
-| **Pluggable search** | grep (zero deps) or QMD (semantic + keyword) |
+| **Search** | `mnemon search`: grep-style token scan over extracts, ranked by rating; a qmd collection can be kept alongside for the qmd CLI (not used by `mnemon search` yet) |
 | **Fabric-inspired** | Two-pass extraction, 16-word discipline, anti-sycophancy |
 
 ## How It Works
@@ -65,7 +65,7 @@ You → /source-add URL → mnemon add → knowledge-gateway.sh → claude -p �
 1. **Capture**: the dispatcher resolves the instance and hands the request to the gateway, which fetches the content (defuddle / WebFetch for URLs, yt-dlp for YouTube, whisper for audio)
 2. **Extract**: Claude applies a source-type-specific template with your reader context embedded
 3. **Store**: Structured source.md + extract.md in `Sources/YYYY-MM-DD_{hash8}/`
-4. **Search**: `/source-search` (= `mnemon search`) queries your library via grep or QMD
+4. **Search**: `/source-search` (= `mnemon search`) scans your library — a grep-style token match over `extract.md` (optionally `source.md` and `Synthesis/`), ranked by rating then date. The JSON reports `provider: "grep"` (the method that ran) and `configured_provider` (the instance's `search_provider`); no qmd-backed search exists yet
 
 ## Requirements
 
@@ -92,9 +92,9 @@ Each skill runs the installed engine's dispatcher. From the shell, the same and 
 | Command | Description |
 |---------|-------------|
 | `mnemon add --url <url> \| --file <path>` (text on stdin) | Capture and extract a source. Flags: `--origin --title --author --source-type --context --intent --render --depth --dry-run` |
-| `mnemon search --query <q> [--domain <d>] [--limit <n>] [--include-source] [--include-synthesis]` | Search the library; JSON on stdout |
+| `mnemon search --query <q> [--domain <d>] [--limit <n>] [--include-source] [--include-synthesis] [--human]` | Grep-style scan of the library; JSON on stdout (`provider: "grep"`, `configured_provider: <search_provider>`) |
 | `mnemon status` | Library dashboard |
-| `mnemon reindex` | Rebuild the search index |
+| `mnemon reindex` | Rebuild the vault's `index.md` from `Sources/` (not the qmd index) |
 | `mnemon triage` | Content-aware URL triage |
 | `mnemon audit` | Archive audit |
 | `mnemon init <name> --vault <path> [--archive <dir>] [--collection <name>] [--reader-context <path>] [--charter <path>] [--writer-host <host>] [--default]` | Create an instance |

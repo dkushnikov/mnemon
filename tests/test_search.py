@@ -491,6 +491,23 @@ class JsonOutputTests(TempVaultMixin, unittest.TestCase):
         self.assertIsInstance(created, str)
         self.assertEqual(created, "2026-04-04")
         self.assertEqual(data["provider"], "grep")
+        self.assertEqual(data["configured_provider"], "grep")
+
+    def test_provider_is_what_ran_not_what_is_configured(self):
+        # A7: no qmd-backed search exists; the label must not claim otherwise.
+        self.config.write_text(f"vault_path: {self.vault}\nsearch_provider: qmd\n")
+        data = self._run("--query", "marker-token-here")
+        self.assertEqual(data["provider"], "grep")
+        self.assertEqual(data["configured_provider"], "qmd")
+        human = self._proc("--query", "marker-token-here", "--human")
+        self.assertIn("search_provider is 'qmd'", human.stdout)
+        self.assertIn("not implemented", human.stdout)
+
+    def test_vault_override_reports_no_configured_provider(self):
+        data = self._run("--query", "marker-token-here", "--vault", str(self.vault),
+                         env=clean_env(self.tmpdir))
+        self.assertEqual(data["provider"], "grep")
+        self.assertIsNone(data["configured_provider"])
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,10 @@ Design notes
   strings ("YYYY-MM-DD"), which is also what the JSON output needs. No PyYAML.
 - Output: JSON to stdout by default (consumed by the plugin skill); `--human`
   prints a readable list for ad-hoc CLI use.
+- Provider: this script always performs the grep-style scan above — there is
+  no qmd-backed search yet. The JSON says so honestly: `provider` is the
+  method that ran ("grep"), `configured_provider` is the instance's
+  `search_provider` (null when `--vault` bypasses the config).
 """
 
 from __future__ import annotations
@@ -332,10 +336,17 @@ def dedupe_by_folder(results: list[dict]) -> list[dict]:
 # Vault resolution
 # ---------------------------------------------------------------------------
 
-def resolve_vault(vault_override: str | None) -> tuple[Path, str]:
-    """Return (vault path, search provider) from --vault or the engine config."""
+SEARCH_METHOD = "grep"  # the only implemented provider
+
+
+def resolve_vault(vault_override: str | None) -> tuple[Path, str | None]:
+    """Return (vault path, configured search_provider) from --vault or the engine config.
+
+    The configured provider is reported, not dispatched on: the scan is always
+    grep-style (see the module docstring). None when --vault bypasses the config.
+    """
     if vault_override:
-        return Path(vault_override).expanduser(), "grep"
+        return Path(vault_override).expanduser(), None
     cfg = lib_config.load_config()
     return Path(cfg["VAULT_PATH"]), cfg.get("SEARCH_PROVIDER") or "grep"
 
@@ -359,7 +370,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        vault, provider = resolve_vault(args.vault)
+        vault, configured_provider = resolve_vault(args.vault)
     except lib_config.ConfigError as e:
         print(f"{e}", file=sys.stderr)
         return 2
@@ -417,7 +428,8 @@ def main() -> int:
     output = {
         "query": args.query,
         "tokens": tokens,
-        "provider": provider,
+        "provider": SEARCH_METHOD,
+        "configured_provider": configured_provider,
         "fallback_applied": fallback_applied,
         "fallback_token": fallback_token,
         "count": len(results),
@@ -440,6 +452,10 @@ def _print_human(output: dict) -> None:
         note = f" (fallback: no file matched all tokens; relaxed to '{output['fallback_token']}')"
     else:
         note = ""
+    configured = output.get("configured_provider")
+    if configured not in (None, SEARCH_METHOD):
+        print(f"note: search_provider is '{configured}' in the instance config, but mnemon search "
+              f"scans with {SEARCH_METHOD} — a {configured}-backed search is not implemented.")
     print(f"Found {output['count']} result(s) for '{output['query']}'{note}:\n")
     for i, r in enumerate(output["results"], 1):
         rating = f"rating {r['rating']}" if r["rating"] is not None else "unrated"

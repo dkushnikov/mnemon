@@ -63,7 +63,13 @@ assert_eq "$(printf '%s' "$out" | jget 'd["results"][0]["title"]')" "Karpathy on
 assert_eq "$(printf '%s' "$out" | jget 'd["results"][0]["created"]')" "2026-04-04" "created kept as a YYYY-MM-DD string"
 assert_eq "$(printf '%s' "$out" | jget 'd["results"][0]["tags"]')" "['alpha-tag', 'beta-tag']" "block-list tags parsed"
 assert_eq "$(printf '%s' "$out" | jget 'd["results"][0]["path"]')" "Sources/2026-04-04_aaa11111/" "path is vault-relative"
-assert_eq "$(printf '%s' "$out" | jget 'd["provider"]')" "grep" "provider reported from the instance config"
+assert_eq "$(printf '%s' "$out" | jget 'd["provider"]')" "grep" "provider is the method that ran (grep)"
+assert_eq "$(printf '%s' "$out" | jget 'd["configured_provider"]')" "grep" "configured_provider comes from the instance config"
+sed -i '' 's/^search_provider: grep/search_provider: qmd/' "$XDG_CONFIG_HOME/mnemon/instances/searchtest.yaml"
+out=$("$MNEMON" --instance searchtest search --query karpathy)
+assert_eq "$(printf '%s' "$out" | jget 'd["provider"]')" "grep" "provider stays grep when the config says qmd (no qmd search exists)"
+assert_eq "$(printf '%s' "$out" | jget 'd["configured_provider"]')" "qmd" "configured_provider reports the config's qmd"
+sed -i '' 's/^search_provider: qmd/search_provider: grep/' "$XDG_CONFIG_HOME/mnemon/instances/searchtest.yaml"
 assert_eq "$(printf '%s' "$out" | jget 'd["fallback_applied"]')" "False" "no fallback on a direct hit"
 
 out=$("$MNEMON" --instance searchtest search --query karpathy --domain career)

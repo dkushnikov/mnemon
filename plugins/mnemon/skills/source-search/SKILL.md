@@ -7,6 +7,8 @@ description: Search the Mnemon knowledge library for sources, extracts, and synt
 
 Searches the library of the selected Mnemon instance for sources matching a query. Results are ranked by rating (higher is more useful to the reader) then recency.
 
+The engine performs a grep-style token scan — every token must appear in the file. It does **not** run a semantic (qmd) search, whatever the instance's `search_provider` says: the JSON reports `provider: "grep"` (the method that ran) and `configured_provider` (the config value, `null` when `--vault` was given). Never tell the user that semantic search was used.
+
 ## How to run
 
 All the logic lives in the engine. Call the dispatcher via Bash — this is the only path form to use:
@@ -64,6 +66,8 @@ The command returns JSON shaped like:
 {
   "query": "karpathy knowledge bases",
   "tokens": ["karpathy", "knowledge", "bases"],
+  "provider": "grep",
+  "configured_provider": "grep",
   "fallback_applied": false,
   "fallback_token": null,
   "count": 2,

@@ -10,7 +10,11 @@ instance: {{instance}}
 vault_path: {{vault_path}}
 reader_context_path: {{vault_path}}/reader-context.md
 
-# Search: grep (zero deps) or qmd (hybrid BM25 + vector, needs qmd installed)
+# Search backend declared for this vault: grep (zero deps) or qmd (hybrid BM25 +
+# vector index for the qmd CLI, needs qmd installed). `mnemon search` always runs
+# its grep-style scan and reports both values (provider: grep, configured_provider:
+# this). With qmd, `mnemon add` refreshes the qmd index after a capture and
+# `mnemon doctor` requires qmd.
 search_provider: grep
 # qmd collection name — one collection per vault. Convention: obsidian-<vault-purpose>
 # (matches the pattern used for other Obsidian-vault collections). Change it with
