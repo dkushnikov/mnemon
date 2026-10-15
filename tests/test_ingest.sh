@@ -282,6 +282,7 @@ assert_eq "$(res all test-producer:text-plain 'd["first_seen"]')" "$FIRST_SEEN" 
 ingest all --json
 assert_eq "$rc" "0" "--json exits 0"
 assert_eq "$(printf '%s' "$out" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["schema"], d["counts"]["done-before"], len(d["items"]), d["instance"], d["state_dir"] == sys.argv[1], d["exit"])' "$SD_ALL")" "mnemon-ingest-pass/1 15 18 t True 0" "--json: schema, counts, items, instance, state_dir, exit"
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json, sys; print(json.load(sys.stdin)["vault_state_dir"])')" "$VSTATE" "--json: vault_state_dir is the loader's MNEMON_VAULT_STATE_DIR (one derivation for bash and python)"
 assert_eq "$(printf '%s' "$out" | head -c 1)" "{" "--json prints only the JSON document on stdout"
 
 # --- 4. --retry eligibility (step 13) ------------------------------------------

@@ -282,6 +282,10 @@ assert_contains "$out" "MNEMON_CONFIG_FILE=$CFG_DIR/instances/alpha.yaml" "confi
 assert_contains "$out" "MNEMON_STATE_DIR=$XDG_STATE_HOME/mnemon/alpha" "config dump has MNEMON_STATE_DIR"
 assert_contains "$out" "CHARTER_PATH=" "config dump has CHARTER_PATH"
 assert_contains "$out" "WRITER_HOST=" "config dump has WRITER_HOST"
+assert_contains "$out" "MNEMON_VAULT_STATE_DIR=$XDG_STATE_HOME/mnemon/vaults/" "config dump has MNEMON_VAULT_STATE_DIR (the vault's capture ledger, D6)"
+assert_contains "$out" "EXTRACT_TIMEOUT=900" "config dump has the extract_* keys with their defaults"
+assert_contains "$out" "EXTRACT_INLINE_MAX_BYTES=400000" "...extract_inline_max_bytes"
+assert_contains "$out" "EXTRACT_MAX_USD=" "...extract_max_usd (unset)"
 run "$MNEMON" --instance nosuch config path
 assert_eq "$rc" "2" "missing instance fails config path with exit 2"
 assert_contains "$out" "instances/nosuch.yaml" "missing instance error names the path"
