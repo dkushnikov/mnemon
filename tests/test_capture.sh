@@ -186,6 +186,56 @@ assert_eq "$rc" "0" "retry converts the retained raw"
 assert_eq "$(curl_calls)" "$c1" "...without calling curl"
 assert_contains "$(cat "$VAULT/Sources/$(rget conv-1 '.revision')/source.md")" "from defuddle" "...body from the conversion of the retained raw"
 
+# a staged raw that cannot be renamed into place (the archive dir turns read-only after the
+# download) is a loud fetch failure: the receipt never claims raw_published, the staged copy and
+# its hash are kept, and the replay finishes the rename without a refetch
+stub_reset
+STUB_CURL_HOOK="chmod 555 '$ARCHIVE'" run_gw --url "https://example.com/ro-archive" --capture-id ro-1
+chmod 755 "$ARCHIVE"
+assert_eq "$rc" "1" "a raw rename that fails → exit 1 (never a silent traceback)"
+assert_eq "$(result error_class)" "fetch" "...error_class fetch"
+assert_eq "$(result retryable)" "true" "...retryable"
+assert_eq "$(rget ro-1 '.raw_published')" "false" "...the receipt does not claim raw_published"
+ro_staged="$(rget ro-1 '.raw_staged_path')"
+assert_file_exists "$ro_staged" "...the staged copy is retained"
+assert_eq "$(rget ro-1 '.raw_sha256')" "$(shasum -a 256 "$ro_staged" | cut -c1-64)" "...with its hash recorded"
+[[ -e "$ARCHIVE/$(rget ro-1 '.revision').html" ]] && fail "no final raw after the failed rename" "exists" || pass "...no final raw yet"
+c1="$(curl_calls)"
+run_gw --capture-id ro-1
+assert_eq "$rc" "0" "the replay finishes the rename and extracts"
+assert_eq "$(curl_calls)" "$c1" "...without a refetch"
+assert_file_exists "$ARCHIVE/$(rget ro-1 '.revision').html" "...raw renamed into place"
+assert_eq "$(rget ro-1 '.raw_published')" "true" "...raw_published reconciled"
+assert_eq "$(staging_left)" "0" "...no staging left"
+# a revision directory that cannot be published (Sources/ turns read-only after the download):
+# exit 1 convert with the raw published, and the replay re-converts the retained raw
+stub_reset
+n_ro="$(nfolders)"
+STUB_CURL_HOOK="chmod 555 '$VAULT/Sources'" run_gw --url "https://example.com/ro-sources" --capture-id ro-2
+chmod 755 "$VAULT/Sources"
+assert_eq "$rc" "1" "a source publication that fails → exit 1"
+assert_eq "$(result error_class)" "convert" "...error_class convert"
+assert_eq "$(result revision)" "" "...nothing published"
+assert_eq "$(nfolders)" "$n_ro" "...no folder"
+assert_eq "$(rget ro-2 '.raw_published')" "true" "...the raw is published"
+assert_eq "$(rget ro-2 '.source_published')" "false" "...the source is not"
+c1="$(curl_calls)"
+run_gw --capture-id ro-2
+assert_eq "$rc" "0" "the replay publishes the source from the retained raw"
+assert_eq "$(curl_calls)" "$c1" "...without a refetch"
+assert_eq "$(rget ro-2 '.state')" "extracted" "...extracted"
+# raw_kind is recorded before the raw is published: a --render capture that crashed right after
+# its raw publication is reconverted as rendered text, never pushed through the HTML converter
+stub_reset
+export MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-raw-published
+STUB_RENDER=ok run_gw --url "https://example.com/rendered-crash" --render --capture-id rk-1
+unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT
+assert_eq "$(rget rk-1 '.raw_kind')" "rendered" "crash after-raw-published on a --render capture: the receipt already records raw_kind rendered"
+STUB_RENDER=ok run_gw --capture-id rk-1
+assert_eq "$rc" "0" "...the replay exits 0"
+assert_contains "$(cat "$VAULT/Sources/$(rget rk-1 '.revision')/source.md")" '  method: "render-text"' "...reconverted as rendered text (method render-text)"
+assert_contains "$(cat "$VAULT/Sources/$(rget rk-1 '.revision')/source.md")" 'rendered text content' "...with the rendered text as the body"
+
 # ---------------------------------------------------------------------------------------------
 echo "--- 3. publication ---"
 ex="$VAULT/Sources/$rev0/extract.md"

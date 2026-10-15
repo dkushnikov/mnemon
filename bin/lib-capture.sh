@@ -575,19 +575,39 @@ cap_raw_prepare() {   # <ext> → RAW_DIR RAW_STORE RAW_PATH RAW_STAGED (uses RE
   RAW_STAGED="$RAW_DIR/.$REVISION.$ext.staging-$$"
 }
 
-cap_raw_record_intent() {   # receipt: raw_store / raw_path / raw_staged_path
-  cap_receipt_update "$CAPTURE_ID" '.raw_store=$s | .raw_path=$p | .raw_staged_path=$t' \
-    --arg s "$RAW_STORE" --arg p "$RAW_PATH" --arg t "$RAW_STAGED"
+cap_raw_record_intent() {   # receipt: raw_store / raw_path / raw_staged_path / raw_kind
+  cap_receipt_update "$CAPTURE_ID" '.raw_store=$s | .raw_path=$p | .raw_staged_path=$t | .raw_kind=$k' \
+    --arg s "$RAW_STORE" --arg p "$RAW_PATH" --arg t "$RAW_STAGED" --arg k "${RAW_KIND:-none}"
 }
 
-# RAW_STAGED holds the bytes: fsync → hash → receipt (raw_published false) → rename → receipt.
-# Returns 1 with FAIL_CLASS=archive-exists when a different file already sits at RAW_PATH.
+# Byte copies into a staging or attempt location. Every helper below runs inside `… || return 1`
+# chains where bash suspends errexit, so each status is checked here: a failed copy, fsync or
+# rename is an acquisition failure (FAIL_CLASS set, return 1), never a receipt that claims a
+# publication that did not happen (§3.4 step 2, D8).
+cap_copy_raw() {   # <src> <dst>: a raw staging copy (fetch step)
+  cap_py copy "$1" "$2" && return 0
+  rm -f "$2"
+  FAIL_CLASS=fetch; FAIL_MSG="could not stage $1 as $2 (disk full or unwritable?)"; return 1
+}
+cap_copy_text() {   # <src> <dst>: a capture-text copy into the attempt dir (convert step)
+  cap_py copy "$1" "$2" && return 0
+  rm -f "$2"
+  FAIL_CLASS=convert; FAIL_MSG="could not write $2 (disk full or unwritable?)"; return 1
+}
+
+# RAW_STAGED holds the bytes: fsync → hash → receipt (raw_published false, raw_kind) → rename →
+# receipt. RAW_KIND is set by the caller before this runs so the staged checkpoint already
+# records what the raw is. Returns 1 with FAIL_CLASS=archive-exists when a different file already
+# sits at RAW_PATH, and FAIL_CLASS=fetch when the staged file cannot be fsynced or renamed (the
+# staged copy and its recorded hash stay; a replay finishes the rename, nothing is refetched).
 cap_raw_commit() {
-  cap_py fsync-file "$RAW_STAGED"
+  if ! cap_py fsync-file "$RAW_STAGED"; then
+    FAIL_CLASS=fetch; FAIL_MSG="could not fsync the staged raw $RAW_STAGED (disk full or unwritable?)"; return 1
+  fi
   RAW_SHA256="$(cap_sha256 "$RAW_STAGED")"
   RAW_BYTES="$(cap_bytes "$RAW_STAGED")"
-  cap_receipt_update "$CAPTURE_ID" '.raw_sha256=$h | .raw_bytes=$b | .raw_published=false | .raw_staged_path=$t | .raw_path=$p | .raw_store=$s' \
-    --arg h "$RAW_SHA256" --argjson b "$RAW_BYTES" --arg t "$RAW_STAGED" --arg p "$RAW_PATH" --arg s "$RAW_STORE"
+  cap_receipt_update "$CAPTURE_ID" '.raw_sha256=$h | .raw_bytes=$b | .raw_published=false | .raw_staged_path=$t | .raw_path=$p | .raw_store=$s | .raw_kind=$k' \
+    --arg h "$RAW_SHA256" --argjson b "$RAW_BYTES" --arg t "$RAW_STAGED" --arg p "$RAW_PATH" --arg s "$RAW_STORE" --arg k "${RAW_KIND:-none}"
   cap_crash_at after-raw-staged
   if [[ -e "$RAW_PATH" ]]; then
     if [[ "$(cap_sha256 "$RAW_PATH")" == "$RAW_SHA256" ]]; then
@@ -598,7 +618,11 @@ cap_raw_commit() {
       return 1
     fi
   else
-    cap_py fsync-rename "$RAW_STAGED" "$RAW_PATH"
+    if ! cap_py fsync-rename "$RAW_STAGED" "$RAW_PATH"; then
+      FAIL_CLASS=fetch
+      FAIL_MSG="could not publish the staged raw into $RAW_PATH (the staged copy and its hash are retained; a replay finishes the rename)"
+      return 1
+    fi
   fi
   cap_receipt_update "$CAPTURE_ID" '.raw_published=true | .raw_staged_path=null | .raw_kind=$k' --arg k "${RAW_KIND:-none}"
   cap_crash_at after-raw-published
@@ -611,7 +635,7 @@ cap_raw_commit() {
 # ---------------------------------------------------------------------------------------------
 cap_text_from_file() {   # <file> → capture.md (UTF-8 checked)
   if ! cap_py utf8-check "$1"; then FAIL_CLASS=invalid-utf8; FAIL_MSG="input is not valid UTF-8"; return 1; fi
-  if [[ "$1" != "$ATTEMPT_DIR/capture.md" ]]; then cap_py copy "$1" "$ATTEMPT_DIR/capture.md"; fi
+  if [[ "$1" != "$ATTEMPT_DIR/capture.md" ]]; then cap_copy_text "$1" "$ATTEMPT_DIR/capture.md" || return 1; fi
   return 0
 }
 
@@ -642,14 +666,14 @@ cap_acquire_url() {   # curl → raw html (or pdf by content type) → capture-t
     if [[ "$mime" == "application/pdf" ]]; then
       local old="$RAW_STAGED"
       cap_raw_prepare pdf
-      mv "$old" "$RAW_STAGED"
-      cap_raw_commit || return 1
+      mv "$old" "$RAW_STAGED" || { FAIL_CLASS=fetch; FAIL_MSG="could not rename the staged download to $RAW_STAGED"; return 1; }
       RAW_KIND=file
+      cap_raw_commit || return 1
       cap_convert_pdf || return 1
       return 0
     fi
-    cap_raw_commit || return 1
     RAW_KIND=response
+    cap_raw_commit || return 1
     cap_convert_html || return 1
     return 0
   fi
@@ -658,10 +682,10 @@ cap_acquire_url() {   # curl → raw html (or pdf by content type) → capture-t
   rendered_tmp="$ATTEMPT_DIR/rendered.txt"
   if "$RENDER_URL_CMD" "$URL" > "$rendered_tmp" 2>/dev/null && [[ -s "$rendered_tmp" ]]; then
     cap_raw_prepare txt
-    cap_raw_record_intent
-    cap_py copy "$rendered_tmp" "$RAW_STAGED"
-    cap_raw_commit || return 1
     RAW_KIND=rendered
+    cap_raw_record_intent
+    cap_copy_raw "$rendered_tmp" "$RAW_STAGED" || return 1
+    cap_raw_commit || return 1
     cap_convert_rendered || return 1
     return 0
   fi
@@ -673,23 +697,23 @@ cap_acquire_url() {   # curl → raw html (or pdf by content type) → capture-t
 cap_acquire_render() {   # --render: the rendered text is the raw (<revision>.txt) and the capture-text
   local rendered_tmp="$ATTEMPT_DIR/rendered.txt"
   cap_raw_prepare txt
+  RAW_KIND=rendered
   cap_raw_record_intent
   if ! "$RENDER_URL_CMD" "$URL" > "$rendered_tmp" 2>/dev/null || [[ ! -s "$rendered_tmp" ]]; then
     rm -f "$rendered_tmp"
     FAIL_CLASS=fetch; FAIL_MSG="render-url.sh failed for $URL"; return 1
   fi
-  cap_py copy "$rendered_tmp" "$RAW_STAGED"
+  cap_copy_raw "$rendered_tmp" "$RAW_STAGED" || return 1
   cap_raw_commit || return 1
-  RAW_KIND=rendered
   cap_convert_rendered
 }
 
 cap_acquire_composite() {   # depth-aware composite body already at $ATTEMPT_DIR/composite.txt
   cap_raw_prepare txt
-  cap_raw_record_intent
-  cap_py copy "$ATTEMPT_DIR/composite.txt" "$RAW_STAGED"
-  cap_raw_commit || return 1
   RAW_KIND=composite
+  cap_raw_record_intent
+  cap_copy_raw "$ATTEMPT_DIR/composite.txt" "$RAW_STAGED" || return 1
+  cap_raw_commit || return 1
   cap_text_from_file "$RAW_PATH" || return 1
   CAPTURE_METHOD="depth-composite"; FIDELITY=converted; CONTENT_FORMAT=text
   return 0
@@ -742,18 +766,19 @@ cap_acquire_pdf() {   # --file or --url
     [[ -f "$FILE_PATH" ]] || { FAIL_CLASS=input-missing; FAIL_MSG="PDF not found: $FILE_PATH"; return 1; }
     command -v pdftotext >/dev/null 2>&1 || { FAIL_CLASS=environment; FAIL_MSG="pdftotext (Poppler) is not installed"; return 1; }
     cap_raw_prepare pdf
+    RAW_KIND=file
     cap_raw_record_intent
-    cap_py copy "$FILE_PATH" "$RAW_STAGED"
+    cap_copy_raw "$FILE_PATH" "$RAW_STAGED" || return 1
   else
     command -v pdftotext >/dev/null 2>&1 || { FAIL_CLASS=environment; FAIL_MSG="pdftotext (Poppler) is not installed"; return 1; }
     cap_raw_prepare pdf
+    RAW_KIND=file
     cap_raw_record_intent
     if ! curl -fsSL -A "Mozilla/5.0" --max-time 120 -o "$RAW_STAGED" "$URL" 2>/dev/null || [[ ! -s "$RAW_STAGED" ]]; then
       rm -f "$RAW_STAGED"; FAIL_CLASS=fetch; FAIL_MSG="could not download $URL"; return 1
     fi
   fi
   cap_raw_commit || return 1
-  RAW_KIND=file
   cap_convert_pdf
 }
 
@@ -806,10 +831,10 @@ cap_acquire_file() {   # other local files: pandoc when it converts the type
   [[ -f "$FILE_PATH" ]] || { FAIL_CLASS=input-missing; FAIL_MSG="file not found: $FILE_PATH"; return 1; }
   ext="$(cap_ext_of "$FILE_PATH" bin)"
   cap_raw_prepare "$ext"
-  cap_raw_record_intent
-  cap_py copy "$FILE_PATH" "$RAW_STAGED"
-  cap_raw_commit || return 1
   RAW_KIND=file
+  cap_raw_record_intent
+  cap_copy_raw "$FILE_PATH" "$RAW_STAGED" || return 1
+  cap_raw_commit || return 1
   cap_convert_file
 }
 
@@ -823,10 +848,10 @@ cap_acquire_youtube() {
     FAIL_CLASS=fetch; FAIL_MSG="media-extract.py failed for $URL"; return 1
   fi
   cap_raw_prepare txt
-  cap_raw_record_intent
-  cap_py copy "$ATTEMPT_DIR/transcript.txt" "$RAW_STAGED"
-  cap_raw_commit || return 1
   RAW_KIND=transcript
+  cap_raw_record_intent
+  cap_copy_raw "$ATTEMPT_DIR/transcript.txt" "$RAW_STAGED" || return 1
+  cap_raw_commit || return 1
   cap_text_from_file "$RAW_PATH" || return 1
   cap_media_meta
   CAPTURE_METHOD="$(jq -r '.method // "captions"' "$ATTEMPT_DIR/media.json" 2>/dev/null || echo captions)"
@@ -848,10 +873,10 @@ cap_acquire_audio() {
   [[ -n "$audio" && -f "$audio" ]] || { FAIL_CLASS=fetch; FAIL_MSG="media.json names no audio_path to archive"; return 1; }
   ext="$(cap_ext_of "$audio" audio)"
   cap_raw_prepare "$ext"
-  cap_raw_record_intent
-  cap_py copy "$audio" "$RAW_STAGED"
-  cap_raw_commit || return 1
   RAW_KIND=file
+  cap_raw_record_intent
+  cap_copy_raw "$audio" "$RAW_STAGED" || return 1
+  cap_raw_commit || return 1
   cap_text_from_file "$ATTEMPT_DIR/transcript.txt" || return 1
   cap_media_meta
   CAPTURE_METHOD="$(jq -r '.method // "whisper"' "$ATTEMPT_DIR/media.json" 2>/dev/null || echo whisper)"
@@ -985,15 +1010,24 @@ cap_source_frontmatter() {   # > stdout
   return 0
 }
 
+# Returns 1 with FAIL_CLASS=convert when the staged directory cannot be written or published:
+# the raw (when any) stays published and a replay re-converts and publishes again; the staged
+# source.md must reproduce the capture-text byte for byte before the rename (a short write is a
+# failure here, never a published revision that fails verification later).
 cap_publish_source() {
   local staged="$VAULT_PATH/Sources/.$REVISION.staging-$$" final="$VAULT_PATH/Sources/$REVISION"
-  mkdir -p "$VAULT_PATH/Sources"
-  rm -rf "$staged"
-  mkdir -p "$staged"
-  cap_source_frontmatter > "$staged/source.md"
-  cat "$ATTEMPT_DIR/capture.md" >> "$staged/source.md"
+  if ! mkdir -p "$VAULT_PATH/Sources" || ! { rm -rf "$staged" && mkdir -p "$staged"; }; then
+    FAIL_CLASS=convert; FAIL_MSG="could not create the staging directory $staged (unwritable Sources/?)"; return 1
+  fi
+  if ! { cap_source_frontmatter && cat "$ATTEMPT_DIR/capture.md"; } > "$staged/source.md" \
+     || [[ "$(cap_py body-sha256 "$staged/source.md" 2>/dev/null)" != "$TEXT_SHA256" ]]; then
+    rm -rf "$staged"
+    FAIL_CLASS=convert; FAIL_MSG="the staged source.md does not reproduce the capture-text (disk full or unwritable?)"; return 1
+  fi
   cap_crash_at after-source-staged
-  cap_py publish-dir "$staged" "$final"
+  if ! cap_py publish-dir "$staged" "$final"; then
+    FAIL_CLASS=convert; FAIL_MSG="could not publish Sources/$REVISION/ (the rename of $staged failed)"; return 1
+  fi
   cap_crash_at after-source-published
   cap_receipt_update "$CAPTURE_ID" '.state="source-published" | .source_published=true'
   return 0

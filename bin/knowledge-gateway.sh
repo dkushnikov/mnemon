@@ -478,7 +478,10 @@ cap_recover_acquire() {
           if [[ -e "$RAW_PATH" && "$(cap_sha256 "$RAW_PATH")" != "$RAW_SHA256" ]]; then
             cap_fail_exit archive-exists "a different file sits at $RAW_PATH (no receipt accounts for it)"
           fi
-          [[ -e "$RAW_PATH" ]] && rm -f "$RAW_STAGED" || cap_py fsync-rename "$RAW_STAGED" "$RAW_PATH"
+          if [[ -e "$RAW_PATH" ]]; then rm -f "$RAW_STAGED"
+          elif ! cap_py fsync-rename "$RAW_STAGED" "$RAW_PATH"; then
+            cap_fail_exit fetch "could not publish the staged raw into $RAW_PATH (the staged copy and its hash are retained)"
+          fi
           staged_match=true
         else
           cap_fail_exit archive-exists "the staged raw $RAW_STAGED does not match the recorded hash (no receipt accounts for it)"
@@ -500,7 +503,7 @@ cap_recover_acquire() {
   else
     cap_acquire_fresh
   fi
-  cap_publish_source
+  cap_publish_source || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
   if cap_extract; then cap_finish_extracted true "$KEEP_LOCATOR"; else cap_finish_extract_failed true; fi
 }
 
@@ -620,7 +623,7 @@ cap_fresh() {
   CAP_INIT_ATTEMPTS=1 cap_receipt_create started
   if ! cap_preflight_extractor; then cap_fail_exit "$PREFLIGHT_CLASS" "$PREFLIGHT_MSG"; fi
   cap_acquire_fresh
-  cap_publish_source
+  cap_publish_source || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
   if cap_extract; then cap_finish_extracted false "$KEEP_LOCATOR"; else cap_finish_extract_failed false; fi
 }
 
