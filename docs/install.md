@@ -134,11 +134,24 @@ for t in ~/Code/mnemon/tests/test_*.sh; do bash "$t" || break; done
 
 ## Releasing
 
-Branch model: `feat/p<N>-<slug>` → PR → `main` → `mnemon release`.
+Branch model: `feat/p<N>-<slug>` → PR → `main` → `mnemon release`. Run it from the dev tree (`~/Code/mnemon/bin/mnemon release`, or `mnemon release` when `~/.local/bin/mnemon` points at a dev checkout) with `MNEMON_HOME` set to the installed engine worktree on branch `release`; it refuses to run from the installed engine itself.
 
 ```bash
-mnemon release --dry-run    # show what would move from main to release
-mnemon release              # fast-forward main → release; the engine worktree at $MNEMON_HOME follows; smoke check
+mnemon release --dry-run                 # print every step with real paths and shas; nothing changes
+mnemon release [--drain-timeout <s>]     # lock → drain → ff-merge main into release → smoke → push origin release
+mnemon release --rollback <ref>          # reset the engine worktree to <ref> under the same lock + drain
 ```
 
-The release is a fast-forward only — `release` never carries commits that are not on `main`. After the fast-forward the engine worktree is updated (`pull --ff-only`) and a smoke check (`mnemon doctor`, `mnemon version`) confirms the installed engine answers from the new commit. For `--now`, see `mnemon release --help`. Headless nodes pick the release up with `git -C ~/.local/share/mnemon/engine pull --ff-only`, by hand or from a job.
+What a release does, in order:
+
+1. **Lock** — writes `${XDG_STATE_HOME:-~/.local/state}/mnemon/engine-release.lock` (pid, timestamp, target sha). While the lock is younger than 30 minutes every other engine command — `mnemon …`, the gateway, hence the skills and jobs — exits **75** (`engine is being updated, retry later`); `mnemon doctor` keeps working and reports `warn engine-lock`. The lock is removed last, also on failure. A stale lock (older than 30 minutes) is reported and ignored by other commands and taken over by the next release.
+2. **Drain** — waits up to `--drain-timeout` seconds (default 120) for processes still running from `$MNEMON_HOME/bin/` (`pgrep -f`; same user and host only). On timeout the release fails without touching a file.
+3. **Checks** — the dev tree has no uncommitted tracked changes; `git fetch origin` (a warning when offline); `release` is an ancestor of `main` (otherwise `release has diverged from main`).
+4. **Fast-forward** — `git -C "$MNEMON_HOME" merge --ff-only main`: the `release` branch and the engine worktree move together; `release` never carries commits that are not on `main`.
+5. **Smoke on the updated worktree** — engine health only: `mnemon config path` resolves, `mnemon version` reports the new commit, `tests/test_config.sh` passes, and `mnemon doctor` has no `fail` line other than `deps`, `qmd` or `writer` (a maintainer laptop that is a reader of the default instance, or lacks an optional tool, can still release). A failing smoke never publishes: the release exits 1, nothing is pushed, and it prints the rollback — `mnemon release --rollback <previous sha>`, which is `git -C "$MNEMON_HOME" reset --hard <previous sha>` plus, only if `origin/release` had already moved, `git -C "$MNEMON_HOME" push --force-with-lease origin release`.
+6. **Push** — `git -C "$MNEMON_HOME" push origin release`, only after a green smoke (a warning when offline; push later by hand).
+7. `--now` prints `node ping not implemented (program phase 4)` — nodes still pull by hand or from a job: `git -C ~/.local/share/mnemon/engine pull --ff-only`.
+
+`--rollback <ref>` runs steps 1–2, then `git -C "$MNEMON_HOME" reset --hard <ref>` and prints (does not run) the `push --force-with-lease` that publishes the rollback.
+
+**First release ever.** The worktree recipes above assume `origin` already has a `release` branch. Create it once from the dev tree: `git -C ~/Code/mnemon branch release main && git -C ~/Code/mnemon push -u origin release`, then add the worktree.

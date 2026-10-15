@@ -100,8 +100,8 @@ Each skill runs the installed engine's dispatcher. From the shell, the same and 
 | `mnemon init <name> --vault <path> [--archive <dir>] [--collection <name>] [--reader-context <path>] [--charter <path>] [--writer-host <host>] [--default]` | Create an instance |
 | `mnemon doctor [--json]` | Check dependencies and instance health |
 | `mnemon config get <key> \| path \| list \| dump` | Inspect configuration |
-| `mnemon release [--dry-run] [--now]` | Maintainers: fast-forward `main` → `release` |
-| `mnemon version` | Engine version |
+| `mnemon release [--dry-run] [--now] [--drain-timeout <s>] [--rollback <ref>]` | Maintainers: lock → drain → fast-forward `main` → `release` → smoke → push; `--rollback` resets the engine under the same lock |
+| `mnemon version` | Engine version, branch, commit and root |
 | `mnemon ingest \| scan \| monitor` | Stubs until phase 4 |
 
 ## Configuration

@@ -49,7 +49,7 @@ for t in tests/test_*.sh; do bash "$t" || break; done
 
 1. Branch from `main`: `feat/p<N>-<slug>` (phase N of the program), or `fix/…`, `docs/…`.
 2. Open a PR, review, merge into `main`.
-3. `mnemon release` fast-forwards `main` → `release`; the engine worktree at `$MNEMON_HOME` follows; smoke check.
+3. `mnemon release` (from the dev tree) takes the engine maintenance lock — other engine commands exit 75 meanwhile — drains running engine processes, fast-forwards `main` → `release` so the engine worktree at `$MNEMON_HOME` follows, smokes the updated worktree (engine health only) and pushes `origin/release` only when the smoke is green; `mnemon release --rollback <ref>` is the way back.
 
 Never commit to `release` directly; never force-push either branch. Conventional commit prefixes (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`) — `git log --oneline` is the audit trail.
 

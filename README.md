@@ -114,7 +114,7 @@ git -C ~/.local/share/mnemon/engine pull --ff-only                              
 claude plugin marketplace update mnemon && claude plugin update mnemon@mnemon   # plugin catalog
 ```
 
-Maintainers publish with `mnemon release`: it fast-forwards `main` → `release`, the engine worktree follows, and a smoke check confirms the installed engine answers from the new commit (see [`docs/install.md`](docs/install.md)).
+Maintainers publish with `mnemon release`: under an engine-wide maintenance lock (other engine commands exit 75 with `engine is being updated, retry later` for its duration) it waits for running engine processes to finish, fast-forwards `main` → `release` so the engine worktree follows, runs an engine-health smoke on the updated worktree, and only then pushes `origin/release`; a failing smoke publishes nothing and prints the `mnemon release --rollback <sha>` command (see [`docs/install.md`](docs/install.md)).
 
 ### Plugin moved in-tree
 
