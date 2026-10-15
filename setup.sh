@@ -267,9 +267,34 @@ echo "6. Installing Claude Code plugin..."
 # ideally the installed engine ($MNEMON_HOME), not a development checkout.
 MARKETPLACE_DIR="$SCRIPT_DIR"
 PLUGIN_ID="mnemon@mnemon"
+# The skills run "${MNEMON_HOME:-$HOME/.local/share/mnemon/engine}/bin/mnemon".
+# A legacy clone has no installed engine, so without this the plugin would be
+# installed against a path that does not exist: point the default location at
+# this checkout unless MNEMON_HOME or the default location already serves.
+ENGINE_DEFAULT="$HOME/.local/share/mnemon/engine"
+ensure_engine_for_skills() {
+  if [[ -n "${MNEMON_HOME:-}" ]]; then
+    if [[ -x "$MNEMON_HOME/bin/mnemon" ]]; then
+      echo "   ✓ Engine for the skills: \$MNEMON_HOME = $MNEMON_HOME"
+    else
+      echo "   ⚠  MNEMON_HOME=$MNEMON_HOME has no bin/mnemon — the skills fail until it does (see docs/install.md)" >&2
+    fi
+  elif [[ -e "$ENGINE_DEFAULT" || -L "$ENGINE_DEFAULT" ]]; then
+    if [[ -x "$ENGINE_DEFAULT/bin/mnemon" ]]; then
+      echo "   ✓ Engine for the skills: $ENGINE_DEFAULT"
+    else
+      echo "   ⚠  $ENGINE_DEFAULT exists but has no bin/mnemon — the skills fail until it does (see docs/install.md)" >&2
+    fi
+  else
+    mkdir -p "$(dirname "$ENGINE_DEFAULT")"
+    ln -s "$SCRIPT_DIR" "$ENGINE_DEFAULT"
+    echo "   ✓ Engine for the skills: $ENGINE_DEFAULT → $SCRIPT_DIR (symlink to this checkout;"
+    echo "     replace it with a release worktree when you move to \`mnemon init\` — docs/install.md)"
+  fi
+}
 if $SKIP_PLUGIN; then
   echo "   ○ Skipped (--skip-plugin)"
-elif command -v claude >/dev/null 2>&1; then
+elif ensure_engine_for_skills && command -v claude >/dev/null 2>&1; then
   claude plugin marketplace add "$MARKETPLACE_DIR" 2>/dev/null || true
   if claude plugin install "$PLUGIN_ID" 2>/dev/null; then
     echo "   ✓ Plugin installed (/source-add, /source-search, /source-status)"
