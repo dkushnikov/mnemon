@@ -55,25 +55,26 @@ Time from clone to first extract: **under 15 minutes.** See [install.md](install
 ## How It Works
 
 ```
-You → /source-add URL → mnemon add → knowledge-gateway.sh → claude -p → Sources/
-                                            ↓                              ├── source.md
-                          ~/.config/mnemon/instances/<name>.yaml           └── extract.md
-                          reader-context.md
+You → /source-add URL → mnemon add → knowledge-gateway.sh ─ acquire ─▶ Sources/<revision>/source.md
+                                            │              └ extract ─▶ Sources/<revision>/extract.md
+                          ~/.config/mnemon/instances/<name>.yaml   claude -p --restricted --tools "" … (structured fields only)
+                          reader-context.md                        ~/.local/state/mnemon/vaults/<id>/ (receipts, lock)
                           templates/core/*.md
 ```
 
-1. **Capture**: the dispatcher resolves the instance and hands the request to the gateway, which fetches the content (WebFetch through `claude -p` for URLs — `--render` pre-renders SPAs, `--depth` probes with `defuddle` — yt-dlp for YouTube, whisper for audio)
-2. **Extract**: Claude applies a source-type-specific template with your reader context embedded
-3. **Store**: Structured source.md + extract.md in `Sources/YYYY-MM-DD_{hash8}/`
+1. **Capture**: the dispatcher resolves the instance and hands the request to the gateway, which fetches the content itself — `curl`, then capture-text through `defuddle` (or `pandoc`); `pdftotext` for PDFs; `yt-dlp` / `whisper` for media; `--render` pre-renders SPAs, `--depth` folds thin landings with `defuddle` — and publishes `source.md` with that text byte for byte, before any model runs
+2. **Extract**: the fenced extractor (`claude -p --restricted --tools "" --no-session-persistence --json-schema …`, prompt on stdin, no tools) applies the source type's template with your reader context and returns structured fields; the gateway validates them and publishes `extract.md`. The model never writes a file, and `RESULT:` lines and exit codes come from the files
+3. **Store**: `source.md` + `extract.md` in `Sources/YYYY-MM-DD_{hash8}/` (`-2`, `-3`… for further revisions of a resource); a receipt per capture in the vault's ledger under `~/.local/state/mnemon/vaults/<id>/`, every write under the vault lock (one writer per vault). Automated feeders go through `mnemon ingest <dir>` ([inbox.md](inbox.md))
 4. **Search**: `/source-search` (= `mnemon search`) scans your library — a grep-style token match over `extract.md` (optionally `source.md` and `Synthesis/`), ranked by rating then date. The JSON reports `provider: "grep"` (the method that ran) and `configured_provider` (the instance's `search_provider`); no qmd-backed search exists yet
 
 ## Requirements
 
-- **Claude Code** (required) — any subscription (Pro, Max, API key)
+- **Claude Code** 2.1.296+ (required) — any subscription (Pro, Max, API key); `mnemon fence-probe` once per version records that its `--restricted` fence holds (extraction refuses to run without the record)
 - **git**, **bash**, **python3**, **jq**, **shasum** (required) — the engine
 - **pyyaml**, **requests** (Python packages, optional) — depth-aware capture (`--depth auto`); without them it degrades to a plain capture
-- **defuddle** (optional) — URL triage (`mnemon triage`) and depth probing
-- **pandoc** (optional) — document conversion on import
+- **defuddle** (optional) — page-to-markdown conversion of URL captures (pandoc is the fallback), URL triage (`mnemon triage`) and depth probing
+- **Poppler** (`pdftotext`, `pdfinfo`; optional) — PDF captures; without it a PDF is refused before anything is published
+- **pandoc** (optional) — document conversion on import and the HTML fallback
 - **yt-dlp** (optional) — for YouTube transcript extraction
 - **ffmpeg** / **whisper** (optional) — for audio detection and transcription
 - **QMD** (optional) — a hybrid semantic + keyword index for the qmd CLI; required by `mnemon doctor` only when `search_provider: qmd`
@@ -105,7 +106,9 @@ Each skill runs the installed engine's dispatcher. From the shell, the same and 
 | `mnemon config get <key> \| path \| list \| dump` | Inspect configuration |
 | `mnemon release [--dry-run] [--now] [--drain-timeout <s>] [--rollback <ref>]` | Maintainers: lock → drain → fast-forward `main` → `release` → smoke → push; `--rollback` resets the engine under the same lock |
 | `mnemon version` | Engine version, branch, commit and root |
-| `mnemon ingest \| scan \| monitor` | Stubs until phase 4 |
+| `mnemon ingest <inbox-dir> [--dry-run] [--only <id>] [--limit N] [--max-attempts N] [--retry <id>] [--json]` | Capture the `mnemon-envelope/1` files of a directory, one result record per envelope ([inbox.md](inbox.md)) |
+| `mnemon fence-probe` | Probe the extractor fence of the installed Claude Code (five real runs, ≈ $0.20) and record a pass for its version — once per version |
+| `mnemon scan \| monitor` | Reserved (program phase 4) |
 
 ## Configuration
 
@@ -140,14 +143,15 @@ Mnemon ships 7 extraction templates in `templates/core/`:
 
 All templates follow the Fabric-inspired format: IDENTITY → STEPS → OUTPUT INSTRUCTIONS → INPUT.
 
-## Known gotchas (capture)
+## The capture contract (phase 1)
 
-Learned while running Mnemon in production (2026-06 → 2026-09); the model must never be the copy path for content the gateway already holds verbatim.
+Until 2026-09 the model was the copy path: it fetched URLs with WebFetch, wrote `source.md` and reported `RESULT:` lines in its own words — paraphrased, truncated and summarized sources shipped with `status=extracted`. The capture contracts of [`specs/2026-10-15-capture-contracts.md`](specs/2026-10-15-capture-contracts.md) replace that. What holds now:
 
-- **WebFetch is unreliable for faithful capture.** A soft prompt returns a summary; a hard «reproduce verbatim» prompt can hit a copyright refusal. The `url` origin uses WebFetch internally and inherits both. For verbatim web or Telegram capture, fetch deterministically (Telegram: `https://t.me/<channel>/<id>?embed=1` HTML; a plain HTTP fetch or `defuddle` for pages) and pass the result as a text origin.
-- **Verify a capture by reading the files, never by the exit code or `RESULT:status`.** `wc -c Sources/<folder>/source.md` and open it: a stub body such as `[Full transcript as provided…]` can ship with `status=extracted`. A batch once reported 6/7 passed while the key docx had failed and a YouTube source was gutted — both invisible at the status layer.
-- **Repair a gutted `source.md` from the archive, not by re-running.** The gateway writes the full raw to `archive_dir` before `claude -p` runs; rebuild `source.md` as the frontmatter head plus the archived body. Re-running the gateway on the same input truncates again.
-- **Large text and transcripts.** The spec [2026-09-08 extractor fence](specs/2026-09-08-extractor-fence.md) closes the truncation defect: for text-like origins the gateway writes `source.md` itself and the model writes only `extract.md`; oversized content is handed to the extractor as a file to read, not inlined in the prompt.
+- **The gateway acquires and publishes; the model only extracts.** `curl` fetches, `defuddle` / `pandoc` / `pdftotext` / `whisper` produce the capture-text, and `source.md` is published with that text byte for byte (`capture.text_sha256` in its frontmatter, the raw retained in `archive_dir` or the vault's state raw store) before the extractor runs. The extractor is `claude -p --restricted --tools "" --permission-prompts none --strict-mcp-config --no-session-persistence --json-schema …` with the prompt on stdin: no tools, no file writes, no session transcript; it returns structured fields that the gateway validates and publishes as `extract.md`.
+- **`RESULT:` lines and exit codes come from the files.** `status=extracted` means `source.md` and `extract.md` are in place; `captured` means the source is published and the extract is not (exit 4, `mnemon add --resume <revision>` finishes it); `failed` means nothing was published (exit 1); `integrity-error` means a published `source.md` is missing or was edited (exit 1, operator). Content above `extract_inline_max_bytes` (400,000 bytes) is captured and refused for extraction (`unsupported-size`) — there is no file-reading mode.
+- **Captures are idempotent and resumable.** Every capture gets a receipt in the vault's ledger (`~/.local/state/mnemon/vaults/<id>/captures/`); a feeder replays with `--capture-id`, a resource already captured answers `skipped-duplicate`, a crash resumes from the receipt. Every write happens under the vault lock (one writer per vault); `mnemon doctor` shows the lock, the ledger and the fence.
+- **Automated feeders use the inbox.** They never call the gateway: `mnemon ingest <dir>` consumes `mnemon-envelope/1` files with one result record per envelope — [inbox.md](inbox.md).
+- **The fence is gated per Claude Code version.** `mnemon fence-probe` records that `--restricted` holds for the installed version; without a record extraction exits 3 before publication (exit 4 after). Run it after every Claude Code update.
 
 ## Project Structure
 
@@ -157,14 +161,17 @@ mnemon/
 │   └── marketplace.json       # marketplace "mnemon" → plugins/mnemon
 ├── bin/
 │   ├── mnemon                 # dispatcher — the single entry point
-│   ├── knowledge-gateway.sh   # capture + extraction behind `mnemon add`
+│   ├── knowledge-gateway.sh   # capture + extraction behind `mnemon add` (lib-capture.sh: receipts, raw store, source.md)
+│   ├── extract-run.py, extract-publish.py   # the fenced extractor run and the validating publisher of extract.md
+│   ├── mnemon-ingest.py       # the inbox consumer behind `mnemon ingest`
+│   ├── vault-lock.py, fence-probe.sh, capture-text.py
 │   ├── mnemon-config.sh       # config loader
 │   └── media-extract.py, kb-*.py, triage-urls.py, archive-audit.py, importers/
 ├── plugins/mnemon/            # Claude Code plugin: /source-add, /source-search, /source-status
 ├── templates/core/            # 7 extraction templates
 ├── protocols/                 # Schema and convention docs
 ├── vault-template/            # Scaffold copied into a new vault
-├── docs/                      # Documentation (install.md, specs/)
+├── docs/                      # Documentation (install.md, inbox.md, specs/)
 ├── tests/                     # test_*.sh
 └── setup.sh                   # Deprecated one-shot installer — use `mnemon init`
 ```

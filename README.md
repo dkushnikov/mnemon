@@ -19,16 +19,18 @@ Everything stays in plain Markdown in your Obsidian vault. Not a SaaS, not a loc
 ## How it works
 
 ```
-URL / file / text → mnemon add → knowledge-gateway.sh → claude -p → <your vault>/Sources/
-                                        ↓                    ↓             ├── source.md   (metadata)
-                          ~/.config/mnemon/              archive_dir/      └── extract.md  (AI extract)
-                            instances/<name>.yaml         (originals,
-                          reader-context.md                optional)
+URL / file / text → mnemon add → knowledge-gateway.sh ─ acquire ──▶ Sources/<revision>/source.md   (the captured text, byte for byte)
+                                        │               └ extract ─▶ Sources/<revision>/extract.md  (validated model output)
+                          ~/.config/mnemon/                 claude -p --restricted --tools "" … (no tools, structured fields only)
+                            instances/<name>.yaml       archive_dir/ (originals, optional)
+                          reader-context.md             ~/.local/state/mnemon/vaults/<id>/ (receipts, lock)
                           templates/core/
+envelopes in a directory → mnemon ingest <dir> → the same gateway, one result record per envelope
 ```
 
-- **Dispatcher** (`bin/mnemon`) — the single entry point: `mnemon add | search | status | init | doctor | …`. The Claude Code skills, your shell and any automation all call it from the installed engine (`$MNEMON_HOME`).
-- **Gateway** (`bin/knowledge-gateway.sh`) — behind `mnemon add`: captures a source, assembles a prompt from the extraction template + your reader context, and invokes `claude -p`. Handles articles, PDFs, YouTube, podcasts, ideas, SPAs. Pass `--render` for JS-heavy sites (Chrome headless pre-rendering).
+- **Dispatcher** (`bin/mnemon`) — the single entry point: `mnemon add | ingest | search | status | init | doctor | fence-probe | …`. The Claude Code skills, your shell and any automation all call it from the installed engine (`$MNEMON_HOME`).
+- **Gateway** (`bin/knowledge-gateway.sh`) — behind `mnemon add`: fetches the content itself (`curl` → capture-text through `defuddle` or `pandoc`; `pdftotext` for PDFs; `yt-dlp` / `whisper` for media; `--render` pre-renders JS-heavy sites with Chrome headless), publishes `source.md` with that text byte for byte, then runs the fenced extractor — `claude -p --restricted --tools "" --no-session-persistence --json-schema …`, prompt on stdin, no tools — which returns structured fields that the gateway validates and publishes as `extract.md`. The model never writes a file. Every capture gets a receipt in the vault's ledger under `~/.local/state/mnemon/vaults/`, and every write happens under the vault lock (one writer per vault). Contract: [`docs/specs/2026-10-15-capture-contracts.md`](docs/specs/2026-10-15-capture-contracts.md).
+- **Inbox** — automated feeders (a bot, a scanner, an import script) drop one JSON envelope per item into a directory; `mnemon ingest <dir>` captures them through the same gateway with one result record per envelope — see [`docs/inbox.md`](docs/inbox.md).
 - **Instances** — one per vault: `~/.config/mnemon/instances/<name>.yaml` holds the vault path, archive directory, search provider and model; `mnemon init` writes it. Several libraries (say, personal and work) coexist on one machine and are selected with `--instance <name>` or `MNEMON_INSTANCE`.
 - **Library** (`archive_dir` in the instance config) — saves original source files before extraction. Any directory — iCloud, NAS, local folder. Omit to disable.
 - **Brain** (`Sources/` in vault) — `source.md` (immutable metadata) + `extract.md` (AI-generated, re-generable). Searchable via `mnemon search` (a grep-style token scan over extracts — see below), Obsidian, or the [QMD](https://github.com/tobi/qmd) CLI if you index the vault with it.
@@ -57,7 +59,7 @@ Extracts live in your Obsidian vault — searchable, linkable, always available:
 
 ## Install
 
-Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (Mnemon uses `claude` internally for extraction), `git`, `bash`, `python3`, `jq` and `shasum`. Optional: the Python packages `pyyaml` and `requests` (depth-aware capture), [`defuddle`](https://github.com/kepano/defuddle) (URL triage and depth probing), `pandoc`, `yt-dlp`, `ffmpeg`, `whisper`, [QMD](https://github.com/tobi/qmd). `mnemon doctor` checks all of them — required ones fail, optional ones warn.
+Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 2.1.296 or later (Mnemon runs `claude -p --restricted` as a fenced extractor), `git`, `bash`, `python3`, `jq` and `shasum`. Optional: the Python packages `pyyaml` and `requests` (depth-aware capture), [`defuddle`](https://github.com/kepano/defuddle) (page-to-markdown conversion, URL triage, depth probing — `pandoc` is the fallback), Poppler (`pdftotext` / `pdfinfo`, required for PDF captures), `pandoc`, `yt-dlp`, `ffmpeg`, `whisper`, [QMD](https://github.com/tobi/qmd). `mnemon doctor` checks all of them — required ones fail, optional ones warn.
 
 Mnemon runs from an **installed engine** — a checkout of the `release` branch at `$MNEMON_HOME` (default `~/.local/share/mnemon/engine`) — while development happens in a separate clone (`~/Code/mnemon` by convention; any path works). Sessions, skills and jobs always call the installed engine, never the dev tree. The full recipes — laptop, headless node, a second instance — are in [`docs/install.md`](docs/install.md).
 
@@ -76,6 +78,8 @@ export PATH="$HOME/.local/bin:$PATH"
 # 3. Create an instance for your vault and check the install
 mnemon init personal --vault ~/path/to/your/vault --default
 mnemon doctor
+mnemon fence-probe        # once per Claude Code version (five real claude runs, ≈ $0.20):
+                          # records that the extractor fence holds; extraction refuses to run without it
 
 # 4. Install the Claude Code plugin from the engine directory
 claude plugin marketplace add ~/.local/share/mnemon/engine
@@ -114,6 +118,7 @@ Or from the shell: `mnemon add --url https://example.com/article`, `mnemon searc
 ```bash
 git -C ~/.local/share/mnemon/engine pull --ff-only                              # engine (release branch)
 claude plugin marketplace update mnemon && claude plugin update mnemon@mnemon   # plugin catalog
+mnemon fence-probe                                                              # after a Claude Code update: the gate is per version
 ```
 
 Maintainers publish with `mnemon release`: under an engine-wide maintenance lock (other engine commands exit 75 with `engine is being updated, retry later` for its duration) it waits for running engine processes to finish, fast-forwards `main` → `release` so the engine worktree follows, runs an engine-health smoke on the updated worktree, and only then pushes `origin/release`; a failing smoke publishes nothing and prints the `mnemon release --rollback <sha>` command (see [`docs/install.md`](docs/install.md)).
@@ -133,6 +138,8 @@ claude plugin marketplace add ~/.local/share/mnemon/engine && claude plugin inst
 
 - [`docs/install.md`](docs/install.md) — install recipes: laptop (dev + installed engine), headless node, second instance; dev vs installed; releasing
 - [`docs/README.md`](docs/README.md) — full reference (commands, configuration, templates, conventions)
+- [`docs/inbox.md`](docs/inbox.md) — the inbox: the envelope schema and `mnemon ingest`
+- [`docs/specs/2026-10-15-capture-contracts.md`](docs/specs/2026-10-15-capture-contracts.md) — the capture contracts: persistence, the extractor fence, the inbox
 - [`CLAUDE.md`](CLAUDE.md) — developer notes for working on Mnemon itself
 - [`protocols/`](protocols/) — schema and convention docs
 

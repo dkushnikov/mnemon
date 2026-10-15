@@ -18,18 +18,21 @@ The dispatcher takes its global options before the command: `mnemon [--instance 
 
 | Dependency | Needed for | Install |
 |---|---|---|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude`) | extraction (`claude -p`), the plugin | per its docs; log in once interactively |
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 2.1.296+ (`claude`) | the fenced extractor (`claude -p --restricted …`), the plugin | per its docs; log in once interactively, then `mnemon fence-probe` once per version |
 | `git`, `bash`, `python3` | the engine | system / Homebrew |
 | `jq`, `shasum` | gateway JSON handling, source hashes | `brew install jq` (shasum ships with macOS / perl) |
-| `pandoc` (optional) | document conversion on import | `brew install pandoc` |
-| [`defuddle`](https://github.com/kepano/defuddle) (optional) | URL triage (`mnemon triage`) and depth probing | `npm install -g defuddle` |
+| Poppler (`pdftotext`, `pdfinfo`; optional) | PDF captures (refused before anything is published without it) | `brew install poppler` |
+| `pandoc` (optional) | document conversion on import; the HTML-to-markdown fallback when defuddle is absent | `brew install pandoc` |
+| [`defuddle`](https://github.com/kepano/defuddle) (optional) | page-to-markdown conversion of URL captures, URL triage (`mnemon triage`) and depth probing | `npm install -g defuddle` |
 | Python packages `pyyaml`, `requests` (optional) | depth-aware capture (`--depth auto`, kb-depth-fold / kb_fetch); `mnemon doctor` warns when missing | `pip3 install pyyaml requests` (or your preferred Python environment) |
 | `yt-dlp` (optional) | YouTube transcripts | `brew install yt-dlp` |
 | `ffmpeg` (optional) | audio probing / conversion | `brew install ffmpeg` |
 | `whisper` (optional) | audio transcription | `pip3 install openai-whisper` |
 | [`qmd`](https://github.com/tobi/qmd) (optional) | a hybrid semantic + keyword index of the vault for the qmd CLI; with `search_provider: qmd` the gateway refreshes it after each capture and `mnemon doctor` requires it. `mnemon search` itself is a grep-style scan and does not query qmd yet | `npm install -g @tobilu/qmd` (see the README's known issues) |
 
-`mnemon doctor` reports what is missing (required → `fail`, optional → `warn`) and whether the selected instance is healthy; `mnemon doctor --json` for machines.
+`mnemon doctor` reports what is missing (required → `fail`, optional → `warn`) and whether the selected instance is healthy — including the vault lock, the capture ledger and the fence record; `mnemon doctor --json` for machines.
+
+**State on disk.** Besides the instance files, the engine keeps one ledger per physical vault under `${XDG_STATE_HOME:-~/.local/state}/mnemon/vaults/<id>/` (mode `0700`): capture receipts, attempt directories, the raw store when `archive_dir` is unset, the inbox consumer's state and the vault lock. One account on one host writes a vault (the lock is kernel-held); a second machine runs producers only. The fence probe record lives next to it in `…/mnemon/fence-probes.json`.
 
 ## Variant A — laptop: dev tree + installed engine
 
@@ -50,6 +53,8 @@ export PATH="$HOME/.local/bin:$PATH"
 # first instance, then a health check
 mnemon init personal --vault ~/path/to/your/vault --archive ~/path/to/archive --default
 mnemon doctor
+mnemon fence-probe      # once per Claude Code version (five real claude runs, ≈ $0.20): records that the
+                        # extractor fence holds — `mnemon add` refuses to extract without the record (exit 3)
 mnemon version          # which engine answered (should be the release checkout)
 
 # Claude Code plugin, from the engine directory
@@ -68,6 +73,7 @@ Why a worktree rather than a second clone: one object store, `git -C ~/Code/mnem
 ```bash
 git -C "$MNEMON_HOME" pull --ff-only
 claude plugin marketplace update mnemon && claude plugin update mnemon@mnemon
+mnemon fence-probe      # after every Claude Code update — the record is per exact version
 ```
 
 ## Variant B — headless node (no dev tree)
@@ -85,11 +91,12 @@ pip3 install pyyaml requests
 
 mnemon init personal --vault ~/path/to/vault --archive ~/path/to/archive --default
 mnemon doctor
+mnemon fence-probe
 ```
 
-Nothing is scheduled by the install: the node only runs what you invoke (`mnemon add …`, `mnemon status`, `mnemon search …`). `ingest`, `scan` and `monitor` are stubs until phase 4 wires the automated pipelines. Claude Code is still needed on the node for extraction (`claude -p`) — install it and log in once interactively before the first `mnemon add`. The plugin is optional here; add it only if you run Claude Code sessions on the node.
+Nothing is scheduled by the install: the node only runs what you invoke — `mnemon add …`, `mnemon status`, `mnemon search …`, and `mnemon ingest <inbox-dir>` for the envelopes an automated producer (a bot, a scanner, an import script) drops into a directory ([`inbox.md`](inbox.md); run it from cron or launchd, one pass per invocation). `scan` and `monitor` are reserved for phase 4. Claude Code is still needed on the node for extraction (`claude -p --restricted …`) — install it, log in once interactively and run `mnemon fence-probe` before the first `mnemon add`. The plugin is optional here; add it only if you run Claude Code sessions on the node.
 
-**Update:** `git -C ~/.local/share/mnemon/engine pull --ff-only`.
+**Update:** `git -C ~/.local/share/mnemon/engine pull --ff-only`, and `mnemon fence-probe` after a Claude Code update.
 
 ## Variant C — a second instance on the same machine
 
