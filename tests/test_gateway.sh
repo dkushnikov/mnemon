@@ -399,8 +399,8 @@ rm -f "$XDG_STATE_HOME/mnemon/fence-probes.json"
 run_gw --url "https://example.com/env" --capture-id env-1
 assert_eq "$rc" "3" "exit3-environment: exit 3 (no probe record)"
 write_probe_record
-python3 "$MNEMON_ROOT/bin/vault-lock.py" --vault "$VAULT" -- sleep 2 & holder=$!
-sleep 0.3
+python3 "$MNEMON_ROOT/bin/vault-lock.py" --vault "$VAULT" -- bash -c ': > "$0"; sleep 2' "$TEST_TMPDIR/held-1" & holder=$!
+wait_file "$TEST_TMPDIR/held-1"
 run_gw --url "https://example.com/locked" --capture-id lock-1
 assert_eq "$rc" "75" "exit75-locked: exit 75"
 wait "$holder" 2>/dev/null || true

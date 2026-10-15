@@ -331,14 +331,16 @@ assert_contains "$out" "done-before test-producer:text-plain" "...the captured o
 
 # --- 7. a held vault lock → exit 75; --dry-run never locks ------------------------------
 echo "--- vault lock ---"
-python3 - "$LOCK" <<'PY' &
+# (the holder creates a ready file after its flock succeeded; the test waits for it, never a sleep window)
+python3 - "$LOCK" "$TEST_TMPDIR/held-1" <<'PY' &
 import fcntl, os, sys, time
 fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+open(sys.argv[2], "w").close()
 time.sleep(30)
 PY
 HOLDER=$!
-sleep 0.5
+wait_file "$TEST_TMPDIR/held-1"
 materialize locked text-plain
 ingest locked
 assert_eq "$rc" "75" "a vault lock held by another process → exit 75"
@@ -357,14 +359,15 @@ assert_contains "$out" "ok vault-lock — free ($LOCK)" "doctor: the vault lock 
 # --- 7b. the §12 A1 proof: this vault's lock file, re-asserted; another vault's descriptor is none ---
 echo "--- vault lock: the A1 proof ---"
 materialize a1 text-plain
-python3 - "$LOCK" <<'PY' &
+python3 - "$LOCK" "$TEST_TMPDIR/held-2" <<'PY' &
 import fcntl, os, sys, time
 fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+open(sys.argv[2], "w").close()
 time.sleep(30)
 PY
 HOLDER=$!
-sleep 0.5
+wait_file "$TEST_TMPDIR/held-2"
 # a descriptor open on the lock file that holds nothing, while another process holds the lock
 STUB_DIR="$TEST_TMPDIR/stub-a1" run python3 - "$LOCK" "$MNEMON" "$(inbox_of a1)" <<'PY'
 import os, subprocess, sys

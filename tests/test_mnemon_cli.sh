@@ -569,14 +569,15 @@ chmod 0700 "$VSTATE_A"
 touch "$VSTATE_A/lock"
 run "$MNEMON" doctor
 assert_contains "$out" "ok vault-lock — free ($VSTATE_A/lock)" "doctor: vault-lock free when the file exists unlocked"
-python3 - "$VSTATE_A/lock" <<'PY' &
+python3 - "$VSTATE_A/lock" "$TEST_TMPDIR/held-cli" <<'PY' &
 import fcntl, os, sys, time
 fd = os.open(sys.argv[1], os.O_RDWR)
 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+open(sys.argv[2], "w").close()
 time.sleep(30)
 PY
 HOLDER=$!
-sleep 0.5
+wait_file "$TEST_TMPDIR/held-cli"
 run "$MNEMON" doctor
 assert_contains "$out" "warn vault-lock — held ($VSTATE_A/lock) — a capture or an ingest pass is running" "doctor: vault-lock held while another process holds flock"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^fail vault-lock' || true)" "0" "...and a held vault lock is a warning, not a failure"

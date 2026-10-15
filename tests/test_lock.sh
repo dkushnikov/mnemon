@@ -30,10 +30,11 @@ assert_contains "$(cat "$TEST_TMPDIR/run.err")" "must not write vault" "...with 
 assert_eq "$(nfolders)" "$n0" "...nothing published"
 assert_eq "$(ls "$VSTATE/captures" | wc -l | tr -d ' ')" "$r0" "...no receipt written"
 
-# a lock held by another process → exit 75
-python3 "$LOCK" --vault "$VAULT" -- sleep 4 &
+# a lock held by another process → exit 75 (the holder signals readiness by creating a file after
+# its flock succeeded — exec'd under the lock, so the file proves the lock is held)
+python3 "$LOCK" --vault "$VAULT" -- bash -c ': > "$0"; sleep 4' "$TEST_TMPDIR/held-1" &
 holder=$!
-sleep 0.5
+wait_file "$TEST_TMPDIR/held-1"
 assert_eq "$(python3 "$LOCK" --vault "$VAULT" --probe)" "held" "probe reports held while another process holds the lock"
 run_gw --url "https://example.com/l1" --capture-id l-1
 assert_eq "$rc" "75" "a held vault lock → exit 75"
@@ -67,7 +68,7 @@ assert_eq "$(nfolders)" "$((n1 + 1))" "...one folder"
 export STUB_MODE=sleep STUB_SLEEP=3
 python3 "$LOCK" --vault "$VAULT" -- bash -c '"$0" source-add --config "$1" --url https://example.com/orphan --capture-id orphan-1 >"$2/orphan.out" 2>"$2/orphan.err" & echo $! > "$2/orphan.pid"; wait' "$GW" "$CONFIG" "$TEST_TMPDIR" &
 parent=$!
-sleep 1
+wait_file "$TEST_TMPDIR/orphan.pid"
 kill -9 "$parent" 2>/dev/null; wait "$parent" 2>/dev/null || true
 unset STUB_MODE STUB_SLEEP
 assert_eq "$(python3 "$LOCK" --vault "$VAULT" --probe)" "held" "parent killed: the child gateway still holds the lock"
@@ -84,8 +85,8 @@ assert_eq "$rc" "0" "...and the third writer then succeeds"
 rc=0; MNEMON_VAULT_LOCK_FD=3 MNEMON_VAULT_LOCK_INODE=1 "$GW" source-add --config "$CONFIG" --url "https://example.com/inode" --capture-id inode-1 3</dev/null >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
 out="$(cat "$TEST_TMPDIR/run.out")"
 assert_eq "$rc" "0" "a descriptor with the wrong inode is not trusted: the gateway acquires on its own and succeeds"
-python3 "$LOCK" --vault "$VAULT" -- sleep 3 & holder=$!
-sleep 0.5
+python3 "$LOCK" --vault "$VAULT" -- bash -c ': > "$0"; sleep 3' "$TEST_TMPDIR/held-2" & holder=$!
+wait_file "$TEST_TMPDIR/held-2"
 rc=0; MNEMON_VAULT_LOCK_FD=3 MNEMON_VAULT_LOCK_INODE=1 "$GW" source-add --config "$CONFIG" --url "https://example.com/inode2" --capture-id inode-2 3</dev/null >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
 assert_eq "$rc" "75" "...and gets 75 when the real lock is held (it did not assume the descriptor)"
 wait "$holder" 2>/dev/null || true
@@ -108,8 +109,8 @@ rc=0; python3 "$LOCK" --vault "$TEST_TMPDIR/other-vault" -- "$GW" source-add --c
 out="$(cat "$TEST_TMPDIR/run.out")"
 assert_eq "$rc" "0" "started under another vault's lock descriptor: the gateway acquires its own and captures"
 assert_eq "$(result status)" "extracted" "...extracted"
-python3 "$LOCK" --vault "$VAULT" -- sleep 3 & holder=$!
-sleep 0.5
+python3 "$LOCK" --vault "$VAULT" -- bash -c ': > "$0"; sleep 3' "$TEST_TMPDIR/held-3" & holder=$!
+wait_file "$TEST_TMPDIR/held-3"
 rc=0; python3 "$LOCK" --vault "$TEST_TMPDIR/other-vault" -- "$GW" source-add --config "$CONFIG" --url "https://example.com/a1-other2" --capture-id a1-other2 </dev/null >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
 assert_eq "$rc" "75" "...and gets 75 while this vault's lock is held elsewhere (the other vault's descriptor matched the inode hint, not the proof)"
 [[ -f "$(receipt a1-other2)" ]] && fail "...no receipt on 75" "exists" || pass "...no receipt on 75"
@@ -129,9 +130,9 @@ assert_contains "$(cat "$TEST_TMPDIR/run.err")" "another writer holds the vault 
 wait "$holder" 2>/dev/null || true
 # an abnormal child exit releases nothing: the parent's descriptor still holds the lock
 export MNEMON_TEST_HOOKS=1
-python3 "$LOCK" --vault "$VAULT" -- bash -c 'MNEMON_TEST_CRASH_AT=after-source-published "$0" source-add --config "$1" --url https://example.com/a1-crash --capture-id a1-crash </dev/null >"$2/crash.out" 2>"$2/crash.err"; sleep 3' "$GW" "$CONFIG" "$TEST_TMPDIR" &
+python3 "$LOCK" --vault "$VAULT" -- bash -c ': > "$2/crash.ready"; MNEMON_TEST_CRASH_AT=after-source-published "$0" source-add --config "$1" --url https://example.com/a1-crash --capture-id a1-crash </dev/null >"$2/crash.out" 2>"$2/crash.err"; sleep 3' "$GW" "$CONFIG" "$TEST_TMPDIR" &
 parent=$!
-sleep 1.5
+wait_file "$TEST_TMPDIR/crash.ready"
 unset MNEMON_TEST_HOOKS
 assert_eq "$(python3 "$LOCK" --vault "$VAULT" --probe)" "held" "a child gateway killed mid-capture: the parent's descriptor still holds the lock"
 run_gw --url "https://example.com/a1-third" --capture-id a1-third

@@ -44,6 +44,19 @@ assert_executable() {
   [[ -x "$path" ]] && pass "$msg" || fail "$msg" "not executable: $path"
 }
 
+# wait_file <path> [seconds=10]: poll until the file exists — the readiness signal of a
+# background lock holder that creates it after its flock succeeded. Never a fixed sleep window
+# (a loaded machine makes those lie), never a probe that could take the lock from the holder for
+# an instant. Prints a note on timeout; the assertions that follow report the consequence.
+wait_file() {
+  local path="$1" limit="${2:-10}" i=0
+  while [[ ! -e "$path" ]]; do
+    if [[ $i -ge $((limit * 20)) ]]; then echo "  ! wait_file: $path did not appear within ${limit}s"; return 0; fi
+    sleep 0.05; i=$((i + 1))
+  done
+  return 0
+}
+
 summary() {
   echo ""
   echo "Results: $PASS passed, $FAIL failed"

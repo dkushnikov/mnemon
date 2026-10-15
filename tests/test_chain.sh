@@ -345,8 +345,8 @@ assert_eq "$(( $(curl_calls) - curl0 ))" "1" "...fetching once more (nothing was
 
 # ==================================================================================================
 echo "--- A1: reindex runs under the vault lock; another vault's descriptor is no proof ---"
-python3 "$LOCK_PY" --vault "$VAULT" -- sleep 3 & holder=$!
-sleep 0.5
+python3 "$LOCK_PY" --vault "$VAULT" -- bash -c ': > "$0"; sleep 3' "$TEST_TMPDIR/held-1" & holder=$!
+wait_file "$TEST_TMPDIR/held-1"
 run "$MNEMON" --instance t reindex
 assert_eq "$rc" "75" "mnemon reindex while another writer holds the vault lock → 75"
 wait "$holder" 2>/dev/null || true
@@ -357,8 +357,8 @@ rc=0; printf 'foreign one\n' | python3 "$LOCK_PY" --vault "$TEST_TMPDIR/vault-u"
 out="$(cat "$TEST_TMPDIR/f1.out")"
 assert_eq "$rc" "0" "a descriptor for vault u's lock in the environment: the capture into vault t acquires its own lock and succeeds"
 assert_eq "$(result status)" "extracted" "...extracted"
-python3 "$LOCK_PY" --vault "$VAULT" -- sleep 3 & holder=$!
-sleep 0.5
+python3 "$LOCK_PY" --vault "$VAULT" -- bash -c ': > "$0"; sleep 3' "$TEST_TMPDIR/held-2" & holder=$!
+wait_file "$TEST_TMPDIR/held-2"
 rc=0; printf 'foreign two\n' | python3 "$LOCK_PY" --vault "$TEST_TMPDIR/vault-u" -- "$MNEMON" --instance t add --origin text --capture-id f2 >"$TEST_TMPDIR/f2.out" 2>"$TEST_TMPDIR/f2.err" || rc=$?
 assert_eq "$rc" "75" "...and gets 75 when vault t's lock is really held (vault u's descriptor was never taken as proof)"
 wait "$holder" 2>/dev/null || true
