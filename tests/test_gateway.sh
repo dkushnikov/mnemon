@@ -1,75 +1,63 @@
 #!/usr/bin/env bash
+# test_gateway.sh — the gateway's CLI surface: dry-run plans, origin and source-type detection,
+# batch, status, the D11 refusal, and the shared contract fixtures (tests/fixtures/contracts/):
+# every argv of expected-argv.json is accepted and the RESULT: shapes of gateway-outcomes.json are
+# what the gateway emits. Deeper contract behaviour lives in test_capture.sh / test_fence.sh /
+# test_lock.sh. Stubs from tests/fixtures/capture/setup.sh; no network, no model.
 source "$(dirname "$0")/test-helper.sh"
-
-MNEMON_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-GW="$MNEMON_ROOT/bin/knowledge-gateway.sh"
+MNEMON_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+source "$MNEMON_ROOT/tests/fixtures/capture/setup.sh"
 
 echo "=== Gateway Tests ==="
 
-# Create a temp config for testing
-TEST_TMPDIR=$(mktemp -d)
-VAULT="$TEST_TMPDIR/vault"
-mkdir -p "$VAULT/Sources"
-
-cat > "$TEST_TMPDIR/mnemon.yaml" << EOF
-vault_path: $VAULT
-reader_context_path: $VAULT/reader-context.md
-search_provider: grep
-default_model: sonnet
-whisper_model: large-v3
-auto_detect_origin: true
-EOF
-
-echo "Test reader context" > "$VAULT/reader-context.md"
-
-# Create a minimal article template for testing
-mkdir -p "$MNEMON_ROOT/templates/core"
-if [[ ! -f "$MNEMON_ROOT/templates/core/article.md" ]]; then
-  echo "# TEST TEMPLATE: Extract article" > "$MNEMON_ROOT/templates/core/article.md"
-fi
-
-# --- Test 1: Dry-run produces expected output ---
-output=$($GW source-add --url "https://example.com/test" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "DRY RUN" "dry-run flag works"
-assert_contains "$output" "source-add" "action in prompt"
-assert_contains "$output" "https://example.com/test" "URL in prompt"
-assert_contains "$output" "READER CONTEXT" "reader context section present"
-assert_contains "$output" "EXTRACTION TEMPLATE" "extraction template section present"
-assert_contains "$output" "Test reader context" "reader context content embedded"
-# --- Test 1b: Rating rubric is NOT duplicated in gateway INSTRUCTIONS (owned by reader-context) ---
-assert_not_contains "$output" "5 = average, 7 = good, 9+ = exceptional" "gateway no longer hardcodes rating scale"
-assert_contains "$output" "value-scale defined in the READER CONTEXT" "gateway points rating to reader-context"
+# --- Test 1: Dry-run produces the plan, the extractor argv and the prompt ---
+run_gw --url "https://example.com/test" --dry-run
+assert_eq "$rc" "0" "dry-run exits 0"
+assert_contains "$out" "DRY RUN" "dry-run flag works"
+assert_contains "$out" "Origin: url" "origin in the plan and prompt"
+assert_contains "$out" "URL: https://example.com/test" "URL in prompt"
+assert_contains "$out" "READER CONTEXT" "reader context section present"
+assert_contains "$out" "EXTRACTION TEMPLATE" "extraction template section present"
+assert_contains "$out" "Test reader context" "reader context content embedded"
+assert_contains "$out" "=== CONTENT ===" "content section present (inline at run time)"
+assert_contains "$out" "=== OUTPUT ===" "output section present"
+# --- Test 1b: Rating rubric is NOT duplicated in the gateway prompt (owned by reader-context) ---
+assert_not_contains "$out" "5 = average, 7 = good, 9+ = exceptional" "gateway no longer hardcodes rating scale"
+assert_contains "$out" "value-scale defined in the READER CONTEXT" "gateway points rating to reader-context"
 # --- Test 1c: Framing instruction references staleness ---
-assert_contains "$output" "framing context may be stale" "gateway instructs staleness check"
+assert_contains "$out" "framing context may be stale" "gateway instructs staleness check"
+# --- Test 1d: the prompt no longer asks the model to write files, hash or print RESULT lines ---
+assert_not_contains "$out" "RESULT:path=" "prompt has no RESULT instructions"
+assert_not_contains "$out" "shasum" "prompt has no hashing instruction"
+assert_not_contains "$out" "WebFetch" "prompt has no fetch instruction"
+assert_contains "$out" "=== EXTRACTOR ARGV ===" "dry-run prints the extractor argv"
+assert_contains "$out" "--restricted" "...with the fence"
 
 # --- Test 2: Auto-detection of YouTube URLs ---
-output=$($GW source-add --url "https://youtube.com/watch?v=abc123" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Origin: youtube" "YouTube URL auto-detected"
-
-output=$($GW source-add --url "https://youtu.be/abc123" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Origin: youtube" "youtu.be URL auto-detected"
+run_gw --url "https://youtube.com/watch?v=abc123" --dry-run
+assert_contains "$out" "Origin: youtube" "YouTube URL auto-detected"
+run_gw --url "https://youtu.be/abc123" --dry-run
+assert_contains "$out" "Origin: youtube" "youtu.be URL auto-detected"
 
 # --- Test 3: Regular URL defaults to origin=url ---
-output=$($GW source-add --url "https://example.com/article" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Origin: url" "regular URL → origin=url"
+run_gw --url "https://example.com/article" --dry-run
+assert_contains "$out" "Origin: url" "regular URL → origin=url"
 
 # --- Test 4: Source type auto-detection ---
-output=$($GW source-add --url "https://example.com/post" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Source type: article" "URL → source_type=article"
+run_gw --url "https://example.com/post" --dry-run
+assert_contains "$out" "Source type: article" "URL → source_type=article"
 
 # --- Test 4b: Article template no longer carries its own rating scale ---
-output=$($GW source-add --url "https://example.com/post" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_not_contains "$output" "obvious or wrong. 4-5 = average" "template rating guide removed (article)"
+assert_not_contains "$out" "obvious or wrong. 4-5 = average" "template rating guide removed (article)"
+# --- Test 4c: templates carry a Fields section, not frontmatter the model writes ---
+assert_contains "$out" "## Fields" "template Fields section embedded"
+assert_not_contains "$out" "## Frontmatter" "template Frontmatter section gone"
 
 # --- Test 5: Missing origin fails ---
-output=$($GW source-add --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1) && {
-  fail "missing origin" "should have failed"
-} || {
-  pass "missing origin returns error"
-}
+run_gw --dry-run
+[[ "$rc" -ne 0 ]] && pass "missing origin returns error" || fail "missing origin" "should have failed"
 
 # --- Test 6: Status action ---
-# Create a fake source
 mkdir -p "$VAULT/Sources/2026-04-04_abc12345"
 cat > "$VAULT/Sources/2026-04-04_abc12345/extract.md" << 'EXTRACT'
 ---
@@ -77,50 +65,38 @@ status: extracted
 title: "Test Article"
 ---
 EXTRACT
-
-output=$($GW status --config "$TEST_TMPDIR/mnemon.yaml" 2>&1)
+output=$("$GW" status --config "$CONFIG" 2>&1)
 assert_contains "$output" "Total sources: 1" "status counts sources"
 assert_contains "$output" "Test Article" "status shows titles"
+rm -rf "$VAULT/Sources/2026-04-04_abc12345"
 
 # --- Test 7: ref:vault dry-run ---
 REF_FILE="$TEST_TMPDIR/test-note.md"
-echo "# Test Note\nSome vault content here" > "$REF_FILE"
-output=$($GW source-add --ref-path "$REF_FILE" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "DRY RUN" "ref:vault dry-run works"
-assert_contains "$output" "Origin: ref:vault" "ref:vault origin in prompt"
-assert_contains "$output" "Ref path:" "ref_path in prompt"
-assert_contains "$output" "STDIN" "ref:vault passes file content as stdin"
+printf '# Test Note\nSome vault content here\n' > "$REF_FILE"
+run_gw --ref-path "$REF_FILE" --dry-run
+assert_contains "$out" "DRY RUN" "ref:vault dry-run works"
+assert_contains "$out" "Origin: ref:vault" "ref:vault origin in prompt"
+assert_contains "$out" "Ref path:" "ref_path in prompt"
+assert_contains "$out" "Some vault content here" "ref:vault content is inlined in the CONTENT section"
 
 # --- Test 8: ref:vault auto-detect from --ref-path ---
-output=$($GW source-add --ref-path "$REF_FILE" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Origin: ref:vault" "auto-detect ref:vault from --ref-path"
+assert_contains "$out" "Origin: ref:vault" "auto-detect ref:vault from --ref-path"
 
 # --- Test 9: ref:vault defaults source_type to document ---
-output=$($GW source-add --ref-path "$REF_FILE" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Source type: document" "ref:vault → source_type=document"
+assert_contains "$out" "Source type: document" "ref:vault → source_type=document"
 
 # --- Test 10: ref:vault with missing file fails ---
-output=$($GW source-add --ref-path "/nonexistent/file.md" --config "$TEST_TMPDIR/mnemon.yaml" 2>&1) && {
-  fail "ref:vault missing file" "should have failed"
-} || {
-  pass "ref:vault missing file returns error"
-}
+run_gw --ref-path "/nonexistent/file.md"
+[[ "$rc" -ne 0 ]] && pass "ref:vault missing file returns error" || fail "ref:vault missing file" "should have failed"
 
-# --- Test 11: ref:mcp dry-run ---
-output=$($GW source-add --ref-source notion --ref-id "page-123" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "DRY RUN" "ref:mcp dry-run works"
-assert_contains "$output" "Origin: ref:mcp" "ref:mcp origin in prompt"
-assert_contains "$output" "Ref source: notion" "ref_source in prompt"
-assert_contains "$output" "Ref ID: page-123" "ref_id in prompt"
-assert_contains "$output" "MCP" "ref:mcp mode indicated"
-
-# --- Test 12: ref:mcp auto-detect ---
-output=$($GW source-add --ref-source granola --ref-id "meeting-456" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Origin: ref:mcp" "auto-detect ref:mcp from --ref-source + --ref-id"
-
-# --- Test 13: ref:mcp defaults source_type to document ---
-output=$($GW source-add --ref-source notion --ref-id "page-123" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Source type: document" "ref:mcp → source_type=document"
+# --- Test 11–13: ref:mcp is refused in phase 1 (D11) ---
+run_gw --ref-source notion --ref-id "page-123" --dry-run
+assert_eq "$rc" "2" "ref:mcp → exit 2 (D11)"
+assert_contains "$err" "inbox" "ref:mcp refusal points to inbox producers"
+run_gw --ref-source granola --dry-run
+assert_eq "$rc" "2" "auto-detect ref:mcp from --ref-source → exit 2"
+run_gw --origin ref:mcp --ref-source notion
+assert_eq "$rc" "2" "explicit --origin ref:mcp → exit 2"
 
 # --- Test 14: batch dry-run ---
 MANIFEST_FILE="$TEST_TMPDIR/test-manifest.json"
@@ -130,109 +106,101 @@ cat > "$MANIFEST_FILE" << 'MANIFEST'
   {"origin": "url", "url": "https://example.com/article2", "title": "Article Two"}
 ]
 MANIFEST
-output=$($GW source-add --manifest "$MANIFEST_FILE" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Batch Import" "batch shows header"
-assert_contains "$output" "2 items" "batch counts items"
-assert_contains "$output" "Article One" "batch shows item 1"
-assert_contains "$output" "Article Two" "batch shows item 2"
-assert_contains "$output" "Batch Complete" "batch shows summary"
+run_gw --manifest "$MANIFEST_FILE" --dry-run
+assert_contains "$err" "Batch Import" "batch shows header"
+assert_contains "$err" "2 items" "batch counts items"
+assert_contains "$err" "Article One" "batch shows item 1"
+assert_contains "$err" "Article Two" "batch shows item 2"
+assert_contains "$err" "Batch Complete" "batch shows summary"
+assert_contains "$out" "RESULT:batch_total=2" "batch summary lines"
 
 # --- Test 15: batch auto-detect from --manifest ---
-output=$($GW source-add --manifest "$MANIFEST_FILE" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Batch Import" "auto-detect batch from --manifest"
+assert_contains "$err" "Batch Import" "auto-detect batch from --manifest"
 
 # --- Test 16: batch with invalid JSON fails ---
 BAD_MANIFEST="$TEST_TMPDIR/bad-manifest.json"
 echo "not valid json" > "$BAD_MANIFEST"
-output=$($GW source-add --manifest "$BAD_MANIFEST" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1) && {
-  fail "batch invalid JSON" "should have failed"
-} || {
-  pass "batch invalid JSON returns error"
-}
+run_gw --manifest "$BAD_MANIFEST" --dry-run
+[[ "$rc" -ne 0 ]] && pass "batch invalid JSON returns error" || fail "batch invalid JSON" "should have failed"
 
 # --- Test 17: batch with missing manifest fails ---
-output=$($GW source-add --manifest "/nonexistent/manifest.json" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1) && {
-  fail "batch missing manifest" "should have failed"
-} || {
-  pass "batch missing manifest returns error"
-}
+run_gw --manifest "/nonexistent/manifest.json" --dry-run
+[[ "$rc" -ne 0 ]] && pass "batch missing manifest returns error" || fail "batch missing manifest" "should have failed"
 
 # --- Test 18: import-source and import-batch in prompt ---
-output=$($GW source-add --url "https://example.com/test" --import-source "safari" --import-batch "2026-04-05-safari" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Import source: safari" "import-source in prompt"
-assert_contains "$output" "Import batch: 2026-04-05-safari" "import-batch in prompt"
+run_gw --url "https://example.com/test" --import-source "safari" --import-batch "2026-04-05-safari" --dry-run
+assert_contains "$out" "Import source: safari" "import-source in prompt"
+assert_contains "$out" "Import batch: 2026-04-05-safari" "import-batch in prompt"
 
-# --- Test 18b: gateway instructs writing the context tag into extract frontmatter ---
-output=$($GW source-add --url "https://example.com/test" --context mc --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Context: mc" "gateway carries context label in CAPTURE CONTEXT block"
-assert_contains "$output" "write the capture context as a top-level" "gateway instructs context field in frontmatter"
+# --- Test 18b: --context must be declared in the charter (D5) ---
+run_gw --url "https://example.com/test" --context mc --dry-run
+assert_eq "$rc" "2" "an undeclared context → exit 2 (no charter: only personal)"
+printf '# Charter\n\n## Contexts\n\n### personal\n\n### mc\n' > "$VAULT/_meta/charter.md"
+run_gw --url "https://example.com/test" --context mc --dry-run
+assert_eq "$rc" "0" "a declared context is accepted"
+assert_contains "$out" "Context: mc" "gateway carries context label in CAPTURE CONTEXT block"
+rm -f "$VAULT/_meta/charter.md"
 
-# --- Test 19: --render flag recognized and injects pre-render note into prompt ---
-output=$($GW source-add --url "https://example.com/spa" --render --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_not_contains "$output" "Unknown option" "--render flag recognized"
-assert_contains "$output" "pre-rendered via Chrome headless" "--render injects pre-render note"
-assert_contains "$output" "Do NOT refetch via WebFetch" "--render tells extractor to use stdin"
+# --- Test 19: --render flag recognized; the rendered text is the raw ---
+run_gw --url "https://example.com/spa" --render --dry-run
+assert_eq "$rc" "0" "--render dry-run exits 0"
+assert_not_contains "$out" "Unknown option" "--render flag recognized"
+assert_contains "$out" "Raw store: archive — $ARCHIVE/$(date +%Y-%m-%d)_<resource_id>.txt" "--render: the raw is the rendered text (.txt)"
 
 # --- Test 20: PDF origin auto-detected from --file extension ---
 touch "$TEST_TMPDIR/paper.pdf"
-output=$($GW source-add --file "$TEST_TMPDIR/paper.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Origin: pdf" "pdf origin auto-detected from .pdf file"
-assert_contains "$output" "Source type: paper" "pdf → paper source_type"
-assert_contains "$output" "Content format: pdf" "content format marked pdf in prompt"
-assert_contains "$output" "Read tool natively handles PDFs" "prompt instructs Read-tool usage"
-assert_contains "$output" "paper.pdf" "file path present in prompt"
+run_gw --file "$TEST_TMPDIR/paper.pdf" --dry-run
+assert_contains "$out" "Origin: pdf" "pdf origin auto-detected from .pdf file"
+assert_contains "$out" "Source type: paper" "pdf → paper source_type"
+assert_contains "$out" "Content format: pdf" "content format marked pdf in prompt"
+assert_not_contains "$out" "Read tool" "prompt no longer instructs tool usage"
+assert_contains "$out" "paper.pdf" "file name present in the plan"
 
 # --- Test 21: PDF origin auto-detected from URL ending in .pdf ---
-output=$($GW source-add --url "https://arxiv.org/pdf/2401.12345.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Origin: pdf" "pdf origin auto-detected from .pdf URL"
-assert_contains "$output" "URL: https://arxiv.org/pdf/2401.12345.pdf" "URL preserved in prompt"
+run_gw --url "https://arxiv.org/pdf/2401.12345.pdf" --dry-run
+assert_contains "$out" "Origin: pdf" "pdf origin auto-detected from .pdf URL"
+assert_contains "$out" "URL: https://arxiv.org/pdf/2401.12345.pdf" "URL preserved in prompt"
 
 # --- Test 22: PDF URL with query string still detected ---
-output=$($GW source-add --url "https://example.com/download.pdf?v=2" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Origin: pdf" "pdf origin detected with URL query string"
+run_gw --url "https://example.com/download.pdf?v=2" --dry-run
+assert_contains "$out" "Origin: pdf" "pdf origin detected with URL query string"
 
 # --- Test 23: explicit --origin pdf with --file works ---
-output=$($GW source-add --origin pdf --file "$TEST_TMPDIR/paper.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Origin: pdf" "explicit pdf origin works"
-assert_contains "$output" "Source type: paper" "pdf → paper source_type (explicit)"
+run_gw --origin pdf --file "$TEST_TMPDIR/paper.pdf" --dry-run
+assert_contains "$out" "Origin: pdf" "explicit pdf origin works"
+assert_contains "$out" "Source type: paper" "pdf → paper source_type (explicit)"
 
-# --- Test 24: PDF dry-run includes archive placeholder ---
-output=$($GW source-add --file "$TEST_TMPDIR/paper.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Archive:" "pdf dry-run shows archive field"
-assert_contains "$output" "archive_dir:" "pdf dry-run shows archive_dir reference"
+# --- Test 24–27: PDF dry-run shows the raw store and the origin path ---
+run_gw --file "$TEST_TMPDIR/paper.pdf" --dry-run
+assert_contains "$out" "Raw store: archive — $ARCHIVE/" "pdf dry-run shows the archive raw store"
+assert_contains "$out" "_<resource_id>.pdf" "...with the revision-named .pdf"
+assert_contains "$out" "Origin path: $TEST_TMPDIR/paper.pdf" "pdf from file shows origin_path"
+run_gw --url "https://arxiv.org/pdf/2401.12345.pdf" --dry-run
+assert_not_contains "$out" "Origin path:" "pdf from URL has no origin_path"
+assert_contains "$out" "Raw store: archive" "pdf from URL still has a raw store"
+rc=0; "$GW" source-add --config "$TEST_TMPDIR/noarchive.yaml" --file "$TEST_TMPDIR/paper.pdf" --dry-run >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+assert_contains "$(cat "$TEST_TMPDIR/run.out")" "Raw store: state — $VSTATE/raw/" "without archive_dir the raw store is the vault state"
 
-# --- Test 25: PDF from local file shows origin_path in dry-run ---
-output=$($GW source-add --file "$TEST_TMPDIR/paper.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Origin path: $TEST_TMPDIR/paper.pdf" "pdf from file shows origin_path"
-assert_contains "$output" "origin_path" "prompt instructs origin_path in frontmatter"
-
-# --- Test 26: PDF from URL does NOT show origin_path in dry-run ---
-output=$($GW source-add --url "https://arxiv.org/pdf/2401.12345.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_not_contains "$output" "Origin path:" "pdf from URL has no origin_path"
-assert_contains "$output" "Archive:" "pdf from URL still has archive"
-
-# --- Test 27: PDF prompt includes archive frontmatter instruction ---
-output=$($GW source-add --file "$TEST_TMPDIR/paper.pdf" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" 'archive:' "prompt instructs archive field in frontmatter"
-assert_contains "$output" "archive_dir" "prompt references configured archive_dir"
-
-# --- Test 28: YouTube dry-run shows archive placeholder ---
-output=$($GW source-add --url "https://youtube.com/watch?v=test123" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Archive:" "youtube dry-run shows archive path"
-
-# --- Test 29: Render dry-run shows archive placeholder ---
-output=$($GW source-add --url "https://example.com/spa" --render --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Archive:" "render dry-run shows archive path"
-
-# --- Test 30: Audio dry-run shows archive placeholder ---
+# --- Test 28–30: media dry-runs show the raw store ---
+run_gw --url "https://youtube.com/watch?v=test123" --dry-run
+assert_contains "$out" "_<resource_id>.txt" "youtube dry-run shows the transcript raw (.txt)"
 touch "$TEST_TMPDIR/recording.mp3"
-output=$($GW source-add --file "$TEST_TMPDIR/recording.mp3" --origin audio --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "Archive:" "audio dry-run shows archive path"
-assert_contains "$output" "Origin path:" "audio file shows origin_path"
+run_gw --file "$TEST_TMPDIR/recording.mp3" --origin audio --dry-run
+assert_contains "$out" "Raw store: archive" "audio dry-run shows the raw store"
+assert_contains "$out" "Origin path:" "audio file shows origin_path"
 
-# --- Test 31: Archive/origin_path lines appear generically (not only PDF) ---
-output=$($GW source-add --url "https://youtube.com/watch?v=test123" --config "$TEST_TMPDIR/mnemon.yaml" --dry-run 2>&1)
-assert_contains "$output" "archive_dir:" "youtube archive shows archive_dir"
+# --- Test 31: new flags are accepted and shown ---
+run_gw --url "https://example.com/flags" --capture-id "feed:1~2" --import-ref "feed:1~2" --producer-fidelity exact --provenance-file "$TEST_TMPDIR/prov.json" --keep-run --dry-run
+assert_eq "$rc" "0" "--capture-id/--import-ref/--producer-fidelity/--provenance-file/--keep-run accepted"
+assert_contains "$out" "Capture id: feed:1~2" "dry-run shows the capture id"
+run_gw --url "https://example.com/flags" --ref-id "legacy-ref" --dry-run
+assert_contains "$out" "Capture id: legacy-ref" "--ref-id is an alias of --capture-id"
+run_gw --url "https://example.com/flags" --capture-id "bad id!" --dry-run
+assert_eq "$rc" "2" "an invalid capture-id → exit 2"
+run_gw --url "https://example.com/flags" --depth sideways --dry-run
+assert_eq "$rc" "2" "--depth takes auto|off|force"
+run_gw --url "https://example.com/flags" --resume x --capture-id y --dry-run
+assert_eq "$rc" "2" "--resume and --capture-id are exclusive"
 
 # --- Test 32: render-url.sh keeps headless Chrome off the login keychain and the
 # user's profile. From a sandboxed shell the keychain is unreachable
@@ -247,7 +215,170 @@ assert_contains "$chrome_call" '--user-data-dir="$PROFILE"' "render-url.sh launc
 assert_contains "$(grep -F 'mktemp -d' "$RENDER")" 'PROFILE=$(mktemp -d -t render-url-profile.' "the profile dir is a fresh mktemp -d"
 assert_contains "$(grep -F 'trap ' "$RENDER")" 'rm -rf "$TMP" "$PROFILE"' "the EXIT trap removes the profile dir with the dump"
 
-# Cleanup
-rm -rf "$TEST_TMPDIR"
+# --- Test 33: the dead letter moved: _inputs/pending-writes is never written ---
+STUB_CURL=fail STUB_RENDER=fail run_gw --url "https://example.com/unreachable" --capture-id dead-1
+assert_eq "$rc" "1" "fetch failure → exit 1"
+assert_eq "$(result error_class)" "fetch" "...error_class fetch"
+[[ -e "$VAULT/_inputs/pending-writes" ]] && fail "no pending-writes" "exists" || pass "_inputs/pending-writes is no longer written (D6)"
+assert_file_exists "$(receipt dead-1)" "...the receipt is the record instead"
 
+# ---------------------------------------------------------------------------------------------
+# --- Contract fixtures (tests/fixtures/contracts/): argv acceptance and RESULT shapes ---
+# ---------------------------------------------------------------------------------------------
+echo "--- contract fixtures: argv acceptance ---"
+CF="$MNEMON_ROOT/tests/fixtures/contracts"
+FXD="$TEST_TMPDIR/fixtures"
+mkdir -p "$FXD/payloads"
+# materialize per case: argv (placeholders substituted) one per line, stdin bytes, payload files
+python3 - "$CF" "$FXD" "$VAULT" <<'PY'
+import json, os, sys
+cf, out, vault = sys.argv[1], sys.argv[2], sys.argv[3]
+argv = json.load(open(os.path.join(cf, "expected-argv.json")))["cases"]
+envs = {c["name"]: c for c in json.load(open(os.path.join(cf, "envelopes.json")))}
+for name, case in argv.items():
+    env = envs[name]
+    eid = env["envelope"]["envelope_id"]
+    pdir = os.path.join(out, "payloads", eid)
+    os.makedirs(pdir, exist_ok=True)
+    for rel, hexdata in env["payload_files"].items():
+        p = os.path.join(pdir, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        open(p, "wb").write(bytes.fromhex(hexdata))
+    prov = os.path.join(pdir, "provenance.json")
+    json.dump({"schema": "mnemon-provenance/1", "envelope_id": eid, "producer": env["envelope"]["producer"],
+               "instance": env["envelope"]["instance"], "created_at": env["envelope"]["created_at"],
+               "fidelity": env["envelope"]["fidelity"], "request_url": env["envelope"]["request"].get("url"),
+               "request": env["envelope"]["request"], "provenance": env["envelope"]["provenance"]}, open(prov, "w"))
+    lines = []
+    for a in case["argv"]:
+        a = a.replace("<envelope_id>", eid).replace("<provenance>", prov)
+        if a.startswith("<snapshot:"):
+            a = os.path.join(pdir, a[len("<snapshot:"):-1])
+        if a.startswith("<revision:"):
+            a = "2026-10-12_aaaaaaaa"   # a revision the test creates in the vault
+        lines.append(a)
+    open(os.path.join(out, name + ".argv"), "w").write("\n".join(lines) + "\n")
+    text = env["envelope"]["payload"].get("text")
+    if text is not None:
+        open(os.path.join(out, name + ".stdin"), "wb").write(text.encode("utf-8"))
+    open(os.path.join(out, name + ".id"), "w").write(eid)
+print("\n".join(sorted(argv)))
+PY
+# the revision a <revision:NAME> placeholder resolves to
+mkdir -p "$VAULT/Sources/2026-10-12_aaaaaaaa"
+printf -- '---\ntype: source\norigin: text\ncapture_id: "fixture-old"\nresource_sha256: "0000"\nrevision: "2026-10-12_aaaaaaaa"\n---\nold\n' > "$VAULT/Sources/2026-10-12_aaaaaaaa/source.md"
+printf -- '---\ntype: extract\ntitle: "Old"\nstatus: extracted\n---\n### Summary\n' > "$VAULT/Sources/2026-10-12_aaaaaaaa/extract.md"
+
+load_argv() {   # <case> → ARGV array
+  ARGV=()
+  while IFS= read -r line; do ARGV+=("$line"); done < "$FXD/$1.argv"
+}
+for name in $(jq -r '.cases | keys[]' "$CF/expected-argv.json"); do
+  load_argv "$name"
+  stdin_file=/dev/null
+  [[ -f "$FXD/$name.stdin" ]] && stdin_file="$FXD/$name.stdin"
+  rc=0; "$GW" source-add --config "$CONFIG" "${ARGV[@]}" --dry-run <"$stdin_file" >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+  out="$(cat "$TEST_TMPDIR/run.out")"; err="$(cat "$TEST_TMPDIR/run.err")"
+  if [[ "$name" == "context-undeclared" ]]; then
+    assert_eq "$rc" "2" "fixture argv '$name' is parsed and refused by the context contract (exit 2)"
+    assert_contains "$err" "context 'mc' is not declared" "...with the D5 message"
+  else
+    assert_eq "$rc" "0" "fixture argv '$name' is accepted (dry-run exit 0)"
+    assert_not_contains "$err" "Unknown option" "...no unknown option for '$name'"
+    assert_contains "$out" "Capture id: $(cat "$FXD/$name.id")" "...capture id bound for '$name'"
+  fi
+done
+
+echo "--- contract fixtures: RESULT shapes ---"
+# compare_shape <scenario> : the gateway's RESULT lines (in $out) against gateway-outcomes.json.
+# Keys and order must match; capture_id/status/extract/error_class/retryable exactly; revision and
+# path empty iff the fixture's are; source_sha256 exactly when the fixture has one, empty iff empty;
+# title is the stub's guess, not compared.
+compare_shape() {
+  local scenario="$1" eid="$2" expected actual ok=true k ev av
+  expected="$(jq -r --arg s "$1" --arg id "$2" '.scenarios[$s].stdout[] | gsub("<envelope_id>"; $id)' "$CF/gateway-outcomes.json")"
+  actual="$(printf '%s\n' "$out" | grep '^RESULT:' | grep -v '^RESULT:replayed=')"
+  assert_eq "$(printf '%s\n' "$actual" | cut -d= -f1 | tr '\n' ' ')" "$(printf '%s\n' "$expected" | cut -d= -f1 | tr '\n' ' ')" "$scenario: RESULT keys and order"
+  for k in capture_id status extract error_class retryable; do
+    ev="$(printf '%s\n' "$expected" | grep "^RESULT:$k=" | cut -d= -f2-)"; av="$(printf '%s\n' "$actual" | grep "^RESULT:$k=" | cut -d= -f2-)"
+    assert_eq "$av" "$ev" "$scenario: $k"
+  done
+  for k in revision path source_sha256; do
+    ev="$(printf '%s\n' "$expected" | grep "^RESULT:$k=" | cut -d= -f2-)"; av="$(printf '%s\n' "$actual" | grep "^RESULT:$k=" | cut -d= -f2-)"
+    if [[ -z "$ev" ]]; then assert_eq "$av" "" "$scenario: $k empty"
+    elif [[ "$k" == "source_sha256" ]]; then assert_eq "$av" "$ev" "$scenario: source_sha256 (the hash of the fixture's stdin bytes)"
+    else [[ -n "$av" ]] && pass "$scenario: $k set" || fail "$scenario: $k set" "empty"; fi
+  done
+}
+run_case() {   # <case> <extra args…>: runs the fixture argv for real
+  local name="$1"; shift
+  load_argv "$name"
+  local stdin_file=/dev/null
+  [[ -f "$FXD/$name.stdin" ]] && stdin_file="$FXD/$name.stdin"
+  rc=0; bash -c '"$@"; exit $?' _ "$GW" source-add --config "$CONFIG" "${ARGV[@]}" "$@" <"$stdin_file" >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+  out="$(cat "$TEST_TMPDIR/run.out")"; err="$(cat "$TEST_TMPDIR/run.err")"
+}
+stub_reset
+run_case text-plain
+assert_eq "$rc" "0" "extracted: exit 0"
+compare_shape extracted "$(cat "$FXD/text-plain.id")"
+run_case text-with-url
+assert_eq "$rc" "0" "duplicate: exit 0"
+compare_shape duplicate "$(cat "$FXD/text-with-url.id")"
+# exit4-*: the fixture's source_sha256 is the text payload's hash, so the scenarios run on the
+# text-plain argv (new revision via --recapture, a fresh id; a later --capture-id wins)
+tp="$(cat "$FXD/text-plain.id")"
+STUB_MODE=is-error run_case text-plain --recapture --capture-id "$tp~t"
+assert_eq "$rc" "4" "exit4-transient: exit 4"
+compare_shape exit4-transient "$tp~t"
+STUB_FIXTURE="$FIX/extract-missing-heading.json" run_case text-plain --recapture --capture-id "$tp~p"
+assert_eq "$rc" "4" "exit4-permanent: exit 4"
+compare_shape exit4-permanent "$tp~p"
+STUB_MODE=is-error run_case url-auto
+assert_eq "$rc" "4" "exit4-transient on a url capture: exit 4"
+assert_eq "$(result error_class)" "transient" "...error_class transient"
+# exit1-*: fetch (curl + render fail), unsupported (a file no converter reads), archive-exists, integrity
+load_argv url-auto
+STUB_CURL=fail STUB_RENDER=fail run_gw --url "https://example.com/fetch-fails" --capture-id "$(cat "$FXD/url-auto.id")~f"
+assert_eq "$rc" "1" "exit1-fetch: exit 1"
+compare_shape exit1-fetch "$(cat "$FXD/url-auto.id")~f"
+printf 'bytes' > "$TEST_TMPDIR/blob.xyz"
+run_gw --file "$TEST_TMPDIR/blob.xyz" --capture-id "$(cat "$FXD/file-pdf.id")~u"
+assert_eq "$rc" "1" "exit1-unsupported: exit 1"
+compare_shape exit1-unsupported "$(cat "$FXD/file-pdf.id")~u"
+export MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-raw-staged
+run_gw --url "https://example.com/taken" --capture-id "$(cat "$FXD/url-auto.id")~a"
+unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT
+rm -f "$(rget "$(cat "$FXD/url-auto.id")~a" '.raw_staged_path')"
+printf 'foreign\n' > "$(rget "$(cat "$FXD/url-auto.id")~a" '.raw_path')"
+run_gw --capture-id "$(cat "$FXD/url-auto.id")~a"
+assert_eq "$rc" "1" "exit1-archive-exists: exit 1"
+compare_shape exit1-archive-exists "$(cat "$FXD/url-auto.id")~a"
+rev_tp="$(rget "$(cat "$FXD/text-plain.id")" '.revision')"
+printf 'edited\n' >> "$VAULT/Sources/$rev_tp/source.md"
+run_gw --capture-id "$(cat "$FXD/text-plain.id")"
+assert_eq "$rc" "1" "exit1-integrity: exit 1"
+compare_shape exit1-integrity "$(cat "$FXD/text-plain.id")"
+# exit2-contract
+run_case context-undeclared
+assert_eq "$rc" "2" "exit2-contract: exit 2"
+assert_eq "$(printf '%s\n' "$out" | grep -c '^RESULT:' || true)" "0" "exit2-contract: no RESULT lines"
+assert_contains "$err" "context 'mc' is not declared" "exit2-contract: stderr carries the contract message"
+# exit3 / exit75 for completeness of the matrix
+rm -f "$XDG_STATE_HOME/mnemon/fence-probes.json"
+run_gw --url "https://example.com/env" --capture-id env-1
+assert_eq "$rc" "3" "exit3-environment: exit 3 (no probe record)"
+write_probe_record
+python3 "$MNEMON_ROOT/bin/vault-lock.py" --vault "$VAULT" -- sleep 2 & holder=$!
+sleep 0.3
+run_gw --url "https://example.com/locked" --capture-id lock-1
+assert_eq "$rc" "75" "exit75-locked: exit 75"
+wait "$holder" 2>/dev/null || true
+# the recapture fixture: --recapture --supersedes <revision:text-plain> creates a new revision
+run_case "text-plain~2"
+assert_eq "$rc" "0" "extracted-recapture: exit 0"
+compare_shape extracted-recapture "$(cat "$FXD/text-plain~2.id")"
+assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" supersedes)" '"2026-10-12_aaaaaaaa"' "extracted-recapture: supersedes recorded"
+
+cleanup_capture_test
 summary
