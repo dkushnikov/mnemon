@@ -474,8 +474,14 @@ cmd_doctor() {
       _check fail qmd "search_provider is qmd but qmd is not installed"
     else
       _check ok qmd "$(command -v qmd)"
-      local listing
-      if listing="$(qmd collection list 2>/dev/null)"; then
+      # `qmd collection list` creates ${XDG_CACHE_HOME:-~/.cache}/qmd/index.sqlite on
+      # a host where qmd never ran — doctor writes nothing, so the collection is
+      # probed only when qmd's cache dir already exists.
+      local qmd_cache listing
+      qmd_cache="${XDG_CACHE_HOME:-$HOME/.cache}/qmd"
+      if [[ ! -d "$qmd_cache" ]]; then
+        _check warn qmd-collection "not probed (qmd never ran here: no $qmd_cache, and 'qmd collection list' would create its index) — run: qmd collection add $QMD_COLLECTION $VAULT_PATH --mode hybrid"
+      elif listing="$(qmd collection list 2>/dev/null)"; then
         if printf '%s\n' "$listing" | awk -v c="$QMD_COLLECTION" '$1 == c { found = 1 } END { exit !found }'; then
           _check ok qmd-collection "$QMD_COLLECTION"
         else

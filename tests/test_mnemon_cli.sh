@@ -342,6 +342,33 @@ assert_not_contains "$out" "init adhoc" "doctor never suggests the reserved name
 run "$MNEMON" doctor --bogus
 assert_eq "$rc" "2" "doctor rejects unknown options"
 
+# F4: doctor never writes — `qmd collection list` creates qmd's index on a host
+# where qmd never ran, so the collection probe runs only when qmd's cache dir
+# (${XDG_CACHE_HOME:-$HOME/.cache}/qmd) already exists. A stub qmd logs every call.
+echo "--- doctor: qmd probe (F4) ---"
+QSTUB="$TEST_TMPDIR/qmdstub"; mkdir -p "$QSTUB"
+QMD_LOG="$TEST_TMPDIR/qmd.log"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n[ "$1 $2" = "collection list" ] && echo "kb-q /some/vault hybrid"\nexit 0\n' "$QMD_LOG" > "$QSTUB/qmd"
+chmod +x "$QSTUB/qmd"
+run "$MNEMON" init qinst --vault "$TEST_TMPDIR/vault-q" --collection kb-q --non-interactive
+sed -i '' 's/^search_provider: grep/search_provider: qmd/' "$CFG_DIR/instances/qinst.yaml"
+QCACHE="$TEST_TMPDIR/cache"
+run env XDG_CACHE_HOME="$QCACHE" PATH="$QSTUB:$PATH" "$MNEMON" --instance qinst doctor
+assert_contains "$out" "ok qmd — $QSTUB/qmd" "doctor: ok qmd when search_provider is qmd and qmd is on PATH"
+assert_contains "$out" "warn qmd-collection — not probed (qmd never ran here" "doctor: no qmd cache dir → the collection is not probed"
+assert_contains "$out" "no $QCACHE/qmd" "...naming the missing cache dir"
+[[ -e "$QMD_LOG" ]] && fail "doctor runs no qmd command without its cache dir" "$(cat "$QMD_LOG")" || pass "doctor runs no qmd command without its cache dir"
+[[ -e "$QCACHE/qmd" ]] && fail "doctor creates no qmd cache dir" "created" || pass "doctor creates no qmd cache dir"
+mkdir -p "$QCACHE/qmd"
+run env XDG_CACHE_HOME="$QCACHE" PATH="$QSTUB:$PATH" "$MNEMON" --instance qinst doctor
+assert_contains "$out" "ok qmd-collection — kb-q" "doctor: with the cache dir present the collection is probed"
+assert_eq "$(cat "$QMD_LOG" 2>/dev/null)" "collection list" "doctor ran exactly one 'qmd collection list'"
+run env -u XDG_CACHE_HOME HOME="$TEST_TMPDIR/home-q" PATH="$QSTUB:$PATH" "$MNEMON" --instance qinst doctor
+assert_contains "$out" "warn qmd-collection — not probed (qmd never ran here: no $TEST_TMPDIR/home-q/.cache/qmd" "doctor: without XDG_CACHE_HOME the default HOME/.cache/qmd is checked"
+assert_eq "$(cat "$QMD_LOG" 2>/dev/null)" "collection list" "...and qmd was not run again"
+run env PATH="/usr/bin:/bin" "$MNEMON" --instance qinst doctor
+assert_contains "$out" "fail qmd — search_provider is qmd but qmd is not installed" "doctor: fail qmd when search_provider is qmd and qmd is missing"
+
 # --- engine maintenance lock (A3) ---
 echo "--- engine lock ---"
 LOCK="$XDG_STATE_HOME/mnemon/engine-release.lock"
