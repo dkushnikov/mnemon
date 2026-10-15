@@ -1,0 +1,17 @@
+{
+ "schema": "mnemon-media/1",
+ "method": "captions:pt:manual",
+ "audio_path": null,
+ "title": "Um vídeo de exemplo",
+ "duration": "0:12:34",
+ "upload_date": "20260901",
+ "video_id": "abc123xyz00",
+ "language": "pt",
+ "original_language": "pt",
+ "track": {
+  "lang": "pt",
+  "kind": "manual",
+  "orig": false
+ },
+ "channel": "Example Channel"
+}

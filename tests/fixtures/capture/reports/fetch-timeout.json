@@ -1,0 +1,74 @@
+{
+ "schema": "mnemon-fetch/1",
+ "url": "https://example.com/app",
+ "fetch_url": "https://example.com/app",
+ "canonical_url": "https://example.com/app",
+ "canonical_version": 1,
+ "kind": "page",
+ "requested_version": null,
+ "final_url": "https://example.com/app",
+ "method": null,
+ "raw_kind": null,
+ "http_status": 200,
+ "content_type": "text/html",
+ "charset": "utf-8",
+ "bytes": 0,
+ "ext": null,
+ "audio_sniff": null,
+ "egress": "direct",
+ "stages": [
+  {
+   "stage": "direct",
+   "outcome": "js-shell",
+   "kind": "js-shell",
+   "status": 200,
+   "bytes": 1800,
+   "elapsed_ms": 90,
+   "note": "empty #root; script bytes 71%"
+  },
+  {
+   "stage": "render",
+   "outcome": "timeout",
+   "kind": null,
+   "status": null,
+   "bytes": 0,
+   "elapsed_ms": 90000,
+   "note": "render-url.sh killed with its process group after 90 s"
+  }
+ ],
+ "acquisition": {
+  "outcome": "js-shell",
+  "kind": "js-shell",
+  "evidence": "empty #root",
+  "visible_words": 12
+ },
+ "metadata": {
+  "title": null,
+  "authors": [],
+  "published": null,
+  "published_source": null,
+  "arxiv_id": null,
+  "arxiv_version": null,
+  "arxiv_requested_version": null,
+  "declared_canonical_url": null
+ },
+ "hops": [
+  {
+   "url": "https://example.com/app",
+   "status": 200,
+   "address": "203.0.113.10"
+  }
+ ],
+ "elapsed_ms": 90090,
+ "error_class": "timeout",
+ "error": "render stage exceeded render_timeout=90",
+ "retryable": true,
+ "stage": "render",
+ "policy": {
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36",
+  "max_bytes": 20000000,
+  "max_redirects": 5,
+  "connect_timeout": 15,
+  "read_timeout": 45
+ }
+}

@@ -1,0 +1,53 @@
+{
+ "schema": "mnemon-site/1",
+ "pages": [
+  {
+   "n": 1,
+   "url": "https://example.com/",
+   "role": "landing",
+   "disposition": "converted",
+   "converter": "pandoc",
+   "completeness": "complete",
+   "missing_count": 0,
+   "glued_count": 0,
+   "words": 2,
+   "bytes": 24,
+   "error_class": null,
+   "error": null
+  },
+  {
+   "n": 2,
+   "url": "https://example.com/product",
+   "role": "product",
+   "disposition": "converted",
+   "converter": "dom-text",
+   "completeness": "complete",
+   "missing_count": 0,
+   "glued_count": 0,
+   "words": 2,
+   "bytes": 24,
+   "error_class": null,
+   "error": null
+  },
+  {
+   "n": 3,
+   "url": "https://docs.example.com/guide",
+   "role": "docs",
+   "disposition": "fetch-failed",
+   "converter": null,
+   "completeness": null,
+   "missing_count": null,
+   "glued_count": null,
+   "words": 0,
+   "bytes": 0,
+   "error_class": "server-error",
+   "error": "HTTP 500"
+  }
+ ],
+ "included": 3,
+ "captured": 2,
+ "converted": 2,
+ "completeness": "partial",
+ "words": 4,
+ "bytes": 110
+}

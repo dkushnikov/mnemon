@@ -1,0 +1,6 @@
+{
+ "schema": "mnemon-media-error/1",
+ "error_class": "timeout",
+ "stage": "download",
+ "elapsed_s": 3600.4
+}

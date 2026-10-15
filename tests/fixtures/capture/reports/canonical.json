@@ -1,0 +1,9 @@
+{
+ "schema": "mnemon-canonical/1",
+ "url": "https://Example.com/post?utm_source=x&s=alpha#intro",
+ "canonical_url": "https://example.com/post?s=alpha",
+ "canonical_version": 1,
+ "kind": "page",
+ "fetch_url": "https://example.com/post?s=alpha",
+ "requested_version": null
+}

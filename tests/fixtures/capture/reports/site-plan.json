@@ -1,0 +1,108 @@
+{
+ "schema": "mnemon-site-plan/1",
+ "landing": "https://example.com/",
+ "created": "2026-10-15T12:00:00Z",
+ "discovery": {
+  "sources": [
+   {
+    "name": "landing-links",
+    "yield": 6,
+    "note": null
+   },
+   {
+    "name": "sitemap",
+    "yield": 5,
+    "note": "/sitemap.xml via robots.txt Sitemap:"
+   },
+   {
+    "name": "llms.txt",
+    "yield": 0,
+    "note": "served the landing shell"
+   },
+   {
+    "name": "docs-toc",
+    "yield": 2,
+    "note": null
+   },
+   {
+    "name": "github-readme",
+    "yield": 0,
+    "note": null
+   }
+  ],
+  "robots": {
+   "fetched": true,
+   "status": 200,
+   "groups": [
+    "*"
+   ],
+   "rules_applied": [
+    "Disallow: /private"
+   ]
+  }
+ },
+ "hosts": [
+  "example.com",
+  "docs.example.com"
+ ],
+ "pages": [
+  {
+   "n": 1,
+   "url": "https://example.com/",
+   "canonical_url": "https://example.com/",
+   "role": "landing",
+   "include": true,
+   "reason": "landing",
+   "title": "Example",
+   "discovered_by": "landing",
+   "render": null
+  },
+  {
+   "n": 2,
+   "url": "https://example.com/product",
+   "canonical_url": "https://example.com/product",
+   "role": "product",
+   "include": true,
+   "reason": "product page",
+   "title": "Product",
+   "discovered_by": "landing-links",
+   "render": null
+  },
+  {
+   "n": 3,
+   "url": "https://docs.example.com/guide",
+   "canonical_url": "https://docs.example.com/guide",
+   "role": "docs",
+   "include": true,
+   "reason": "docs",
+   "title": "Guide",
+   "discovered_by": "docs-toc",
+   "render": null
+  },
+  {
+   "n": 4,
+   "url": "https://example.com/privacy",
+   "canonical_url": "https://example.com/privacy",
+   "role": "legal",
+   "include": false,
+   "reason": "excluded: legal",
+   "title": "Privacy",
+   "discovered_by": "sitemap",
+   "render": null
+  },
+  {
+   "n": 5,
+   "url": "https://example.com/private/x",
+   "canonical_url": "https://example.com/private/x",
+   "role": "other",
+   "include": false,
+   "reason": "excluded: robots",
+   "title": null,
+   "discovered_by": "sitemap",
+   "render": null
+  }
+ ],
+ "caps": {
+  "max_pages": 40
+ }
+}

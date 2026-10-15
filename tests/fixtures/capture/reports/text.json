@@ -1,0 +1,105 @@
+{
+ "schema": "mnemon-capture-text/2",
+ "url": "https://example.com/post?utm_source=x",
+ "method": "direct+pandoc",
+ "bytes": 9120,
+ "words": 1540,
+ "title": "An example post",
+ "completeness": "complete",
+ "tool": {
+  "name": "pandoc",
+  "version": "pandoc 3.9.0.2"
+ },
+ "error_class": null,
+ "error": null,
+ "converter": "pandoc",
+ "acquisition": "ok",
+ "candidates": [
+  {
+   "converter": "defuddle",
+   "missing_count": 2,
+   "glued_count": 0,
+   "headings_missing_count": 1,
+   "chosen": false,
+   "note": "dropped the section 'Safety is paramount'"
+  },
+  {
+   "converter": "pandoc",
+   "missing_count": 0,
+   "glued_count": 0,
+   "headings_missing_count": 0,
+   "chosen": true,
+   "note": null
+  }
+ ],
+ "reference_count": 212,
+ "eligible_count": 96,
+ "missing_count": 0,
+ "glued_count": 0,
+ "headings_missing_count": 0,
+ "missing_examples": [],
+ "inventory": {
+  "headings": {
+   "html": 9,
+   "md": 9
+  },
+  "list_items": {
+   "html": 31,
+   "md": 31
+  },
+  "tables": {
+   "html": 1,
+   "md": 1
+  },
+  "code_blocks": {
+   "html": 2,
+   "md": 2
+  },
+  "links": {
+   "html": 44,
+   "md": 40
+  },
+  "images": {
+   "html": 3,
+   "md": 3
+  }
+ },
+ "repairs": {
+  "html": {
+   "svg_diagrams": 1,
+   "svg_icons": 4,
+   "latexml_listings": 0,
+   "data_links": 0,
+   "tables_rewritten": 0
+  },
+  "markdown": {
+   "data_uris": 0,
+   "data_links": 0,
+   "next_images": 2,
+   "tcolorbox_residue": 0,
+   "residue_lines": 0,
+   "comment_sections": 1,
+   "tables_unrepaired": 0
+  }
+ },
+ "bytes_per_word": 5.9,
+ "bloat": false,
+ "published_candidates": [
+  {
+   "value": "2026-09-01",
+   "source": "article:published_time"
+  }
+ ],
+ "authors": [],
+ "arxiv_id": null,
+ "arxiv_version": null,
+ "arxiv_requested_version": null,
+ "limits": [
+  "lines under six words that are not headings are not required",
+  "table cells, equations and operators are not required"
+ ],
+ "tools": {
+  "defuddle": "0.8.0",
+  "pandoc": "pandoc 3.9.0.2"
+ }
+}

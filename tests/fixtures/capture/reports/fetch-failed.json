@@ -1,0 +1,65 @@
+{
+ "schema": "mnemon-fetch/1",
+ "url": "https://example.com/members",
+ "fetch_url": "https://example.com/members",
+ "canonical_url": "https://example.com/members",
+ "canonical_version": 1,
+ "kind": "page",
+ "requested_version": null,
+ "final_url": "https://example.com/members",
+ "method": null,
+ "raw_kind": null,
+ "http_status": 200,
+ "content_type": "text/html",
+ "charset": "utf-8",
+ "bytes": 0,
+ "ext": null,
+ "audio_sniff": null,
+ "egress": "direct",
+ "stages": [
+  {
+   "stage": "direct",
+   "outcome": "login",
+   "kind": "login",
+   "status": 200,
+   "bytes": 2210,
+   "elapsed_ms": 150,
+   "note": "marker: sign in to continue; visible words 41"
+  }
+ ],
+ "acquisition": {
+  "outcome": "login",
+  "kind": "login",
+  "evidence": "sign in to continue",
+  "visible_words": 41
+ },
+ "metadata": {
+  "title": null,
+  "authors": [],
+  "published": null,
+  "published_source": null,
+  "arxiv_id": null,
+  "arxiv_version": null,
+  "arxiv_requested_version": null,
+  "declared_canonical_url": null
+ },
+ "hops": [
+  {
+   "url": "https://example.com/members",
+   "status": 200,
+   "address": "203.0.113.10"
+  }
+ ],
+ "elapsed_ms": 150,
+ "error_class": "blocked",
+ "error": "login wall: sign in to continue (no escalation past a login)",
+ "retryable": false,
+ "stage": "direct",
+ "policy": {
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36",
+  "max_bytes": 20000000,
+  "max_redirects": 5,
+  "connect_timeout": 15,
+  "read_timeout": 45
+ }
+}

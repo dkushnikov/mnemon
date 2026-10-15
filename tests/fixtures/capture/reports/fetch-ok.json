@@ -1,0 +1,65 @@
+{
+ "schema": "mnemon-fetch/1",
+ "url": "https://example.com/post?utm_source=x",
+ "fetch_url": "https://example.com/post",
+ "canonical_url": "https://example.com/post",
+ "canonical_version": 1,
+ "kind": "page",
+ "requested_version": null,
+ "final_url": "https://example.com/post",
+ "method": "direct",
+ "raw_kind": "response",
+ "http_status": 200,
+ "content_type": "text/html",
+ "charset": "utf-8",
+ "bytes": 48213,
+ "ext": null,
+ "audio_sniff": null,
+ "egress": "direct",
+ "stages": [
+  {
+   "stage": "direct",
+   "outcome": "ok",
+   "kind": null,
+   "status": 200,
+   "bytes": 48213,
+   "elapsed_ms": 412,
+   "note": null
+  }
+ ],
+ "acquisition": {
+  "outcome": "ok",
+  "kind": null,
+  "evidence": null,
+  "visible_words": 1830
+ },
+ "metadata": {
+  "title": "An example post",
+  "authors": [],
+  "published": null,
+  "published_source": null,
+  "arxiv_id": null,
+  "arxiv_version": null,
+  "arxiv_requested_version": null,
+  "declared_canonical_url": null
+ },
+ "hops": [
+  {
+   "url": "https://example.com/post",
+   "status": 200,
+   "address": "203.0.113.10"
+  }
+ ],
+ "elapsed_ms": 412,
+ "error_class": null,
+ "error": null,
+ "retryable": null,
+ "stage": null,
+ "policy": {
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36",
+  "max_bytes": 20000000,
+  "max_redirects": 5,
+  "connect_timeout": 15,
+  "read_timeout": 45
+ }
+}
