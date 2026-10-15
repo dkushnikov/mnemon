@@ -47,7 +47,7 @@ One JSON file per item, `<inbox-dir>/<envelope_id>.json`, UTF-8, a **regular fil
 
 ### Field rules
 
-Every rule below is checked by the consumer; a violation quarantines the envelope (permanent, reason recorded, a copy kept under `quarantine/`). Unknown extra keys are ignored.
+Every rule below is checked by the consumer; a violation quarantines the envelope (permanent, reason recorded, a copy kept under `quarantine/`). Unknown extra keys are ignored. The whole document must be representable as UTF-8 (no lone surrogate escapes such as `"\udcff"` in any string) and nest at most 64 levels deep — a document the decoder cannot even parse (nested beyond its recursion limit) is quarantined like any other broken one, never a crashed pass (§10 of the spec's §5.2: one envelope never ends a pass).
 
 | Field | Rule |
 |---|---|
@@ -174,7 +174,7 @@ The dispatcher resolves the instance once (global `--instance` / `--config`, or 
 3. **Replacement check, first, for every stored state.** The envelope bytes are hashed; a result with a different `envelope_sha256` → `quarantined`/`envelope-replaced`, the previous record appended to `history`.
 4. **Validate** (§1). Broken → `quarantined`; wrong `instance` → `other-instance`, untouched; `tier: bookmark` → `unsupported`; `kind: none` without a url → `needs_input`; an invalid kind × origin pair → `failed`/`invalid-request`. These settle without a gateway call and without spending an attempt.
 5. **Transition table** (§5): terminal → `done-before`; not yet due → `waiting`; otherwise continue.
-6. **Snapshot the payload** under `payloads/<envelope_id>/`: a file is copied to `files/<basename>` (apart from the control files `dispatch.json`, `provenance.json`, `stdin`, so a payload named like one of them never collides) and verified on the copy (sha256 and size) — a verified snapshot is kept and reused, so a payload replaced in the inbox after the snapshot changes nothing; missing or not yet matching → `incomplete` (re-checked every 15 minutes, `quarantined`/`incomplete-expired` 24 h after `first_seen`); text is written to `payloads/<envelope_id>/stdin` after its sha256/bytes are verified (mismatch → `quarantined`/`payload-mismatch`). `provenance.json` is written (§3).
+6. **Snapshot the payload** under `payloads/<envelope_id>/`: a file is copied to `files/<basename>` (apart from the control files `dispatch.json`, `provenance.json`, `stdin`, so a payload named like one of them never collides) and verified on the copy (sha256 and size) — a verified snapshot is kept and reused, so a payload replaced in the inbox after the snapshot changes nothing; missing or not yet matching → `incomplete` (re-checked every 15 minutes, `quarantined`/`incomplete-expired` 24 h after `first_seen`); a copy that fails with an `OSError` (an unreadable file) → `quarantined`/`payload-unreadable`; text is written to `payloads/<envelope_id>/stdin` after its sha256/bytes are verified (mismatch → `quarantined`/`payload-mismatch`). `provenance.json` is written (§3).
 7. **Predecessor** (`supersedes`): resolved from the superseded envelope's result (§5); unresolved predecessors defer the envelope.
 8. **`dispatch.json`** — the exact request about to be dispatched — is persisted **before** the claim, so a crash between the claim and the gateway's answer can be recovered without reconstructing anything. From this point the request is **frozen**: every later dispatch of the envelope (a retry, a deferred re-check, a crash recovery) reuses `dispatch.json` and the snapshot as they are — the producer-side payload is never re-read, the predecessor is never resolved again, and `incomplete` can only occur before the freeze.
 9. **Claim** = one atomic rewrite of the result record: `state: started`, `attempts + 1`, `envelope_sha256`, `dispatch_sha256`, `started_at`. It is the only place an attempt is spent; a first attempt, a retry and a crash recovery all go through it.
@@ -313,14 +313,16 @@ Records are `0600`, directories `0700`, every write is `<name>.tmp` + fsync + re
 | `not-regular` | the envelope is a symbolic link |
 | `conflict-copy` | a `.sync-conflict-` copy; never processed |
 | `too-large` | the envelope file exceeds 2 MB |
-| `invalid-json` | not valid UTF-8 JSON |
-| `schema` | a field rule of §1 failed; `error` names the field |
+| `invalid-json` | not valid UTF-8 JSON: bad bytes, bad syntax, a document nested beyond the decoder's recursion limit, or a string that no UTF-8 file can carry (a lone surrogate escape such as `"\udcff"`); `error` names the exception and, for a string, its path |
+| `schema` | a field rule of §1 failed, or the document nests deeper than 64 levels; `error` names the field |
 | `path-escape` | `payload.path` is absolute, contains `..`, or resolves outside the inbox |
 | `payload-mismatch` | `payload.sha256` / `bytes` do not match the UTF-8 bytes of `payload.text` |
 | `payload-not-regular` / `payload-too-large` | the payload file is not a regular file / exceeds 20 MB |
+| `payload-unreadable` | the payload file could not be copied into the snapshot (an `OSError` — unreadable, I/O error, the state dir unwritable); `error` names the exception |
 | `envelope-replaced` | the envelope's bytes changed under the same id (previous record under `history`) |
 | `incomplete-expired` | the payload file never arrived or never matched within 24 h of `first_seen` |
 | `supersedes-unknown` | the superseded envelope produced no result within 24 h of `first_seen` |
+| `internal-error` | an exception the consumer did not expect while reading, parsing, validating or snapshotting this envelope; `error` names it. The pass went on to the next envelope — one envelope never ends a pass. A corrected `~2` envelope is the way forward, or a fix of the consumer when the envelope was fine |
 
 ## 7. `--retry`
 
@@ -338,4 +340,4 @@ Choose a stable `producer.id` per producer and account, and an `item_id` that is
 
 ## 10. Test hooks
 
-Honoured only with `MNEMON_TEST_HOOKS=1`: `MNEMON_INGEST_ADD_CMD` replaces the `mnemon add` call (it receives the same argv after `add`, the same stdin and the same environment, lock descriptor included); `MNEMON_TEST_CRASH_AT=after-snapshot | after-dispatch-saved | after-claim` kills the pass at that boundary. Without the guard both are ignored with a stderr note. `tests/test_ingest.sh` is the executable form of this page.
+Honoured only with `MNEMON_TEST_HOOKS=1`: `MNEMON_INGEST_ADD_CMD` replaces the `mnemon add` call (it receives the same argv after `add`, the same stdin and the same environment, lock descriptor included); `MNEMON_TEST_CRASH_AT=after-snapshot | after-dispatch-saved | after-claim` kills the pass at that boundary; `MNEMON_TEST_RAISE_FOR=<envelope_id>` raises an exception while that envelope is processed (it must end as `quarantined`/`internal-error` with the pass continuing). Without the guard all three are ignored. `tests/test_ingest.sh` is the executable form of this page.

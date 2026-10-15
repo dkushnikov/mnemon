@@ -784,6 +784,78 @@ ingest wrong
 assert_contains "$out" "other-instance test-producer:text-plain" "an envelope for another instance is reported other-instance"
 assert_eq "$(res wrong test-producer:text-plain 'd["state"]')" "<missing>" "...and left untouched (no record)"
 
+# --- 14b. poison pills: one envelope can never end the pass ------------------------------------
+echo "--- poison pills ---"
+materialize poison text-plain --clone file-pdf=test-producer:locked-payload
+python3 - "$(inbox_of poison)" <<'PY'
+import json, os, sys
+inbox = sys.argv[1]
+def write(name, data):
+    tmp, final = os.path.join(inbox, "." + name + ".tmp"), os.path.join(inbox, name)
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+    os.replace(tmp, final)
+def envelope(eid, text_json, title_json):
+    # a syntactically valid envelope assembled as text so that JSON escapes reach the decoder as written
+    return ('{"schema": "mnemon-envelope/1", "envelope_id": "%s", "producer": {"id": "test-producer", "kind": "fixture",'
+            ' "host": "node-a", "version": "1"}, "instance": "t", "created_at": "2026-10-15T12:00:00+00:00",'
+            ' "supersedes": null, "request": {"origin": "text", "url": null, "title": %s, "author": null, "intent": null,'
+            ' "context": null, "source_type": null, "tier": "full"}, "payload": {"kind": "text", "text": %s, "path": null,'
+            ' "media_type": "text/plain", "sha256": "%s", "bytes": 1}, "fidelity": "exact", "provenance": {"fixture": "poison"},'
+            ' "complete": true}' % (eid, title_json, text_json, "ab" * 32)).encode("utf-8")
+# a document nested 200000 levels deep: RecursionError out of the JSON decoder on every python
+write("test-producer:deep.json", b"[" * 200000)
+# lone surrogate escapes: valid JSON, but no UTF-8 file, record or argv can carry the string
+write("test-producer:surrogate-text.json", envelope("test-producer:surrogate-text", '"\\udcff"', '"T"'))
+write("test-producer:surrogate-title.json", envelope("test-producer:surrogate-title", '"ok"', '"\\ud800 title"'))
+# valid JSON nested 100 levels deep inside the opaque provenance object (beyond the 64-level cap)
+env = json.loads(envelope("test-producer:deep-provenance", '"ok"', '"T"'))
+nested = 1
+for _ in range(100):
+    nested = {"a": nested}
+env["provenance"] = nested
+write("test-producer:deep-provenance.json", json.dumps(env).encode("utf-8"))
+# an ordinary envelope for the injected-exception hook
+write("test-producer:raise.json", envelope("test-producer:raise", '"ok"', '"T"'))
+PY
+chmod 000 "$(inbox_of poison)/attachments/file-pdf/paper.pdf"
+MNEMON_TEST_RAISE_FOR=test-producer:raise ingest poison
+chmod 600 "$(inbox_of poison)/attachments/file-pdf/paper.pdf"
+assert_eq "$rc" "0" "a pass over poison envelopes exits 0 (the pass is never ended by one envelope)"
+assert_not_contains "$out" "Traceback" "...and prints no traceback"
+assert_eq "$(res poison test-producer:deep 'd["state"] + "/" + d["error_class"] + " retryable=" + str(d["retryable"]) + " attempts=" + str(d["attempts"])')" "quarantined/invalid-json retryable=False attempts=0" "200000 nested '[' (RecursionError in the decoder) → quarantined/invalid-json, permanent, no attempt"
+assert_contains "$(res poison test-producer:deep 'd["error"]')" "RecursionError" "...the record names the exception"
+assert_file_exists "$(state_dir poison)/quarantine/test-producer:deep.json" "...with a quarantine copy"
+assert_eq "$(res poison test-producer:surrogate-text 'd["state"] + "/" + d["error_class"]')" "quarantined/invalid-json" "a lone surrogate escape in payload.text → quarantined/invalid-json before anything is written"
+assert_contains "$(res poison test-producer:surrogate-text 'd["error"]')" "UnicodeEncodeError" "...naming UnicodeEncodeError"
+assert_contains "$(res poison test-producer:surrogate-text 'd["error"]')" '$.payload.text' "...and the path of the string"
+[[ -e "$(state_dir poison)/payloads/test-producer:surrogate-text" ]] && fail "no snapshot for a surrogate payload" "exists" || pass "...no snapshot was attempted"
+assert_eq "$(res poison test-producer:surrogate-title 'd["state"] + "/" + d["error_class"]')" "quarantined/invalid-json" "a lone surrogate in request.title (would break provenance.json / argv) → quarantined/invalid-json"
+assert_contains "$(res poison test-producer:surrogate-title 'd["error"]')" '$.request.title' "...at its path"
+assert_eq "$(res poison test-producer:deep-provenance 'd["state"] + "/" + d["error_class"]')" "quarantined/schema" "100 nested levels inside provenance → quarantined/schema (the 64-level cap, before json.dumps can recurse)"
+assert_contains "$(res poison test-producer:deep-provenance 'd["error"]')" "nesting deeper than 64 levels at \$.provenance" "...naming the cap and the path"
+assert_eq "$(res poison test-producer:raise 'd["state"] + "/" + d["error_class"] + " retryable=" + str(d["retryable"])')" "quarantined/internal-error retryable=False" "an exception that escapes the consumer's own code → quarantined/internal-error (the per-envelope guard)"
+assert_contains "$(res poison test-producer:raise 'd["error"]')" "RuntimeError: injected by MNEMON_TEST_RAISE_FOR" "...naming the exception and its message"
+assert_file_exists "$(state_dir poison)/quarantine/test-producer:raise.json" "...with a quarantine copy"
+assert_contains "$out" "quarantined test-producer:raise — internal-error: RuntimeError" "...reported on stdout"
+if [[ "$(id -u)" != "0" ]]; then
+  assert_eq "$(res poison test-producer:locked-payload 'd["state"] + "/" + d["error_class"]')" "quarantined/payload-unreadable" "an unreadable payload file (OSError on the copy) → quarantined/payload-unreadable, never incomplete forever and never a crash"
+  assert_contains "$(res poison test-producer:locked-payload 'd["error"]')" "PermissionError" "...naming the OSError"
+  expected_q=6
+else
+  expected_q=5
+fi
+assert_eq "$(res poison test-producer:text-plain 'd["state"]')" "captured" "the envelope after the poison ones in the same pass is still processed and captured"
+assert_eq "$(calls poison)" "1" "...the stub ran for it alone"
+assert_contains "$out" "captured 1" "...counted as captured"
+assert_contains "$out" "quarantined $expected_q" "...and every poison envelope counted as quarantined"
+ingest poison
+assert_eq "$rc" "0" "the second pass exits 0"
+assert_contains "$out" "quarantined 0" "second pass: nothing new is quarantined"
+assert_contains "$out" "done-before $((expected_q + 1))" "...every poison envelope and the captured one are done-before"
+assert_contains "$out" "done-before test-producer:deep — quarantined/invalid-json" "...the deep one by its stored reason"
+assert_eq "$(calls poison)" "1" "...and nothing was dispatched again"
+
 # --- 15. the test hook is ignored without MNEMON_TEST_HOOKS=1 --------------------------------
 echo "--- hook discipline ---"
 materialize hook text-plain

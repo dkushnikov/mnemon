@@ -25,7 +25,18 @@ lib_config; the engine root is this file's own checkout, never the environment.
 Test hooks (honoured only with MNEMON_TEST_HOOKS=1): MNEMON_INGEST_ADD_CMD replaces
 the `mnemon add` call (same argv after `add`, same stdin, same environment);
 MNEMON_TEST_CRASH_AT=after-snapshot | after-dispatch-saved | after-claim kills the
-process at that boundary.
+process at that boundary; MNEMON_TEST_RAISE_FOR=<envelope_id> raises a RuntimeError
+while that envelope is processed (the per-envelope guard below is what it exercises).
+
+One envelope can never end the pass: every failure while reading, parsing, validating
+or snapshotting an envelope — a JSON document nested beyond the interpreter's recursion
+limit (RecursionError out of the decoder), a lone surrogate escape that no UTF-8 write
+can carry (UnicodeEncodeError), an unreadable payload file (OSError on the copy), or any
+other exception — quarantines THAT envelope (a copy under quarantine/, a permanent
+`quarantined` record naming the reason class and the exception) and the pass goes on to
+the next one; the summary counts it. Cheap structural guards run before anything is
+written: the decoder's RecursionError is caught (independent of sys.setrecursionlimit),
+every string of the envelope must encode as UTF-8, and nesting is capped at NESTING_MAX.
 
 Payload snapshots live under `payloads/<envelope_id>/files/<basename>` (§12 A8), apart from
 the control files `dispatch.json`, `provenance.json` and `stdin`. Once `dispatch.json` exists
@@ -80,6 +91,8 @@ BACKOFF_CAP = 24 * 3600          # … capped at 24 h
 EXPIRY_SECONDS = 24 * 3600       # incomplete-expired / supersedes-unknown, since first_seen
 DEFAULT_MAX_ATTEMPTS = 5
 STDERR_TAIL = 4000
+NESTING_MAX = 64                 # JSON nesting an envelope may use (objects and arrays, counted together)
+DETAIL_MAX = 600                 # characters of an exception message kept in a record
 
 ORIGINS = (None, "text", "url", "file", "pdf", "audio")
 FIDELITIES = ("exact", "embed", "model-transcribed", "url-only")
@@ -235,6 +248,22 @@ def single_line(value, maxlen=None) -> bool:
     return isinstance(value, str) and not CONTROL_RE.search(value) and (maxlen is None or len(value) <= maxlen)
 
 
+def safe_text(value, limit: int = DETAIL_MAX) -> str:
+    """A detail string that every record, report line and stdout can carry: one line, UTF-8
+    encodable (a lone surrogate becomes its \\uXXXX escape), bounded."""
+    text = " ".join(str(value).split())
+    text = text.encode("utf-8", "backslashreplace").decode("utf-8")
+    if len(text) > limit:
+        text = text[:limit] + "…"
+    return text
+
+
+def exception_text(exc: BaseException) -> str:
+    """`<ExceptionName>: <message>` for a record (the message may be empty)."""
+    msg = safe_text(exc)
+    return type(exc).__name__ + (": " + msg if msg else "")
+
+
 def sort_key(stem: str):
     """(base id, numeric ~n suffix): `~2` precedes `~10`; the bare id precedes both."""
     m = SUFFIX_RE.match(stem)
@@ -338,10 +367,57 @@ def inside_inbox(real: str, inbox_real: str) -> bool:
     return real == inbox_real or real.startswith(inbox_real.rstrip("/") + os.sep)
 
 
+def decode_envelope(data: bytes):
+    """The envelope bytes → a JSON value. Raises Invalid('invalid-json') for bytes that are not
+    UTF-8, text that is not JSON, and a document nested beyond the interpreter's recursion limit:
+    the decoder raises RecursionError for the latter (whatever sys.setrecursionlimit says — the
+    C scanner has its own ceiling), and that must quarantine the envelope, never end the pass."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise Invalid("invalid-json", "not valid UTF-8: %s" % exception_text(exc))
+    try:
+        return json.JSONDecoder().decode(text)
+    except RecursionError as exc:
+        raise Invalid("invalid-json", "JSON nested beyond the decoder's recursion limit: %s" % exception_text(exc))
+    except ValueError as exc:
+        raise Invalid("invalid-json", "not valid JSON: %s" % exception_text(exc))
+
+
+def check_envelope_text(obj) -> None:
+    """Structural guards before anything is written (iterative, never recursive): every string —
+    keys and values — must encode as UTF-8 (a lone surrogate escape such as "\\udcff" parses as
+    JSON but no UTF-8 file, record, argv or stdout can carry it → UnicodeEncodeError later), and
+    nesting must stay within NESTING_MAX (a provenance object nested a few thousand levels deep
+    parses on one interpreter and blows the recursion limit of json.dumps on another)."""
+    stack = [(obj, 1, "$")]
+    while stack:
+        value, depth, path = stack.pop()
+        if isinstance(value, str):
+            try:
+                value.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise Invalid("invalid-json", "the string at %s is not representable as UTF-8 (lone surrogate escape): %s"
+                              % (path, exception_text(exc)))
+            continue
+        if isinstance(value, dict):
+            if depth > NESTING_MAX:
+                raise Invalid("schema", "nesting deeper than %d levels at %s" % (NESTING_MAX, path))
+            for key, item in value.items():
+                stack.append((key, depth, path + "." + safe_text(key, 80)))
+                stack.append((item, depth + 1, path + "." + safe_text(key, 80)))
+        elif isinstance(value, list):
+            if depth > NESTING_MAX:
+                raise Invalid("schema", "nesting deeper than %d levels at %s" % (NESTING_MAX, path))
+            for i, item in enumerate(value):
+                stack.append((item, depth + 1, "%s[%d]" % (path, i)))
+
+
 def validate_envelope(obj, stem: str, inbox_real: str) -> dict:
     """Every field rule of §5.1. Returns the envelope; raises Invalid."""
     if not isinstance(obj, dict):
         raise Invalid("schema", "the envelope is not a JSON object")
+    check_envelope_text(obj)
 
     def req(name):
         if name not in obj:
@@ -672,7 +748,7 @@ class Ingest:
         for stem, file_name in entries:
             if self.args.only and stem != self.args.only:
                 continue
-            self.process(stem, file_name)
+            self.process_guarded(stem, file_name)
         self.summary()
         return 0
 
@@ -681,9 +757,51 @@ class Ingest:
         for name in os.listdir(self.inbox):
             if name.startswith(".") or name.endswith(".tmp") or not name.endswith(".json"):
                 continue
+            try:
+                name.encode("utf-8")
+            except UnicodeEncodeError:
+                # a file name that is not UTF-8 (surrogate-escaped by os.listdir) can never be an
+                # envelope_id and could not be written into a record; left alone, with a note
+                self.note("skipping %r: the file name is not UTF-8" % name)
+                continue
             entries.append((name[:-5], name))
         entries.sort(key=lambda e: sort_key(e[0]))
         return entries
+
+    def process_guarded(self, stem: str, file_name: str) -> None:
+        """One envelope can never end the pass: an exception that escapes process() quarantines
+        that envelope (reason internal-error, the exception named) and the loop goes on."""
+        try:
+            self.process(stem, file_name)
+        except (UsageError, LockHeld):
+            raise
+        except Exception as exc:  # noqa: BLE001 — every class, by design (the pass must continue)
+            self.quarantine_exception(stem, file_name, exc)
+
+    def quarantine_exception(self, stem: str, file_name: str, exc: BaseException) -> None:
+        detail = exception_text(exc)
+        self.note("envelope %s: unexpected %s — quarantined, the pass continues" % (stem, detail))
+        data = None
+        try:
+            path = os.path.join(self.inbox, file_name)
+            if os.path.isfile(path) and not os.path.islink(path) and os.path.getsize(path) <= ENVELOPE_MAX:
+                with open(path, "rb") as fh:
+                    data = fh.read()
+        except OSError:
+            data = None
+        try:
+            prev = self.safe_load(stem)
+            rec = self.settle(stem, file_name, sha256_bytes(data) if data is not None else None, prev,
+                              "quarantined", "internal-error", detail, data=data)
+            self.report(stem, file_name, "quarantined", "internal-error: %s" % detail, rec)
+        except Exception as exc2:  # noqa: BLE001 — the record could not be written either (disk full?)
+            self.note("envelope %s: the quarantine record could not be written (%s); it will be seen again on the next pass"
+                      % (stem, exception_text(exc2)))
+            self.counts["processed"] += 1
+            self.counts["quarantined"] += 1
+            self.items.append({"envelope_id": stem, "file": file_name, "report": "quarantined",
+                               "detail": "internal-error: %s (record not written)" % detail})
+            self.say("quarantined %s — internal-error: %s (record not written)" % (stem, detail))
 
     def summary(self) -> None:
         c = self.counts
@@ -787,13 +905,16 @@ class Ingest:
             cls = prev.get("error_class")
             self.report(stem, file_name, "done-before", prev.get("state") + ("/" + cls if cls else ""), prev)
             return
+        if test_hooks() and os.environ.get("MNEMON_TEST_RAISE_FOR", "") == stem:
+            raise RuntimeError("injected by MNEMON_TEST_RAISE_FOR (test hook)")
 
-        # step 4: parse and validate
+        # step 4: parse and validate (decode_envelope quarantines bad UTF-8, bad JSON and nesting
+        # beyond the decoder's recursion limit; validate_envelope the structure and every field)
         try:
-            obj = json.loads(data.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError) as exc:
-            rec = self.settle(stem, file_name, sha, prev, "quarantined", "invalid-json", "not valid UTF-8 JSON: %s" % exc, data=data)
-            self.report(stem, file_name, "quarantined", "invalid-json", rec)
+            obj = decode_envelope(data)
+        except Invalid as exc:
+            rec = self.settle(stem, file_name, sha, prev, "quarantined", exc.reason, exc.detail, data=data)
+            self.report(stem, file_name, "quarantined", "%s: %s" % (exc.reason, exc.detail), rec)
             return
         if isinstance(obj, dict) and isinstance(obj.get("instance"), str) and obj.get("instance") != self.instance:
             self.report(stem, file_name, "other-instance", "instance %r is not %r" % (obj.get("instance"), self.instance))
@@ -902,32 +1023,35 @@ class Ingest:
             # §12 A8: the snapshot lives under files/<basename>, never beside the control files
             # dispatch.json, provenance.json and stdin of the same directory
             snap = os.path.join(pdir, "files", parts[-1])
-            if os.path.isfile(snap):
-                digest, size = sha256_file(snap)
-                if digest == payload["sha256"] and size == payload["bytes"]:
-                    return ("ok", snap)
-                if not self.dry_run:
-                    os.unlink(snap)
-            src = os.path.join(self.inbox, *parts)
-            # containment is enforced on the path that is opened now (a symlink may have changed
-            # since the validation), not only on the string the producer wrote
-            if not inside_inbox(os.path.realpath(src), self.inbox):
-                return ("quarantined", "path-escape", "payload.path %s resolves outside the inbox" % rel)
-            if not os.path.exists(src):
-                return ("incomplete", "payload file %s is not in the inbox yet" % rel)
-            if not os.path.isfile(src):
-                return ("quarantined", "payload-not-regular", "payload.path %s is not a regular file" % rel)
-            size = os.path.getsize(src)
-            if size > FILE_MAX:
-                return ("quarantined", "payload-too-large", "payload file %s is %d bytes, more than the 20 MB limit" % (rel, size))
-            if self.dry_run:
-                digest, size = sha256_file(src)
-                if digest != payload["sha256"] or size != payload["bytes"]:
-                    return ("incomplete", "payload file %s does not match its sha256/bytes yet" % rel)
-                return ("ok", snap)
-            mkdir_private(os.path.dirname(snap))
             tmp = snap + ".tmp"
+            # every OSError of the copy — an unreadable payload, a failed write of the snapshot —
+            # quarantines the envelope with the exception named; only "not there yet" and "does not
+            # match yet" are `incomplete` (the producer may still be writing the file)
             try:
+                if os.path.isfile(snap):
+                    digest, size = sha256_file(snap)
+                    if digest == payload["sha256"] and size == payload["bytes"]:
+                        return ("ok", snap)
+                    if not self.dry_run:
+                        os.unlink(snap)
+                src = os.path.join(self.inbox, *parts)
+                # containment is enforced on the path that is opened now (a symlink may have changed
+                # since the validation), not only on the string the producer wrote
+                if not inside_inbox(os.path.realpath(src), self.inbox):
+                    return ("quarantined", "path-escape", "payload.path %s resolves outside the inbox" % rel)
+                if not os.path.exists(src):
+                    return ("incomplete", "payload file %s is not in the inbox yet" % rel)
+                if not os.path.isfile(src):
+                    return ("quarantined", "payload-not-regular", "payload.path %s is not a regular file" % rel)
+                size = os.path.getsize(src)
+                if size > FILE_MAX:
+                    return ("quarantined", "payload-too-large", "payload file %s is %d bytes, more than the 20 MB limit" % (rel, size))
+                if self.dry_run:
+                    digest, size = sha256_file(src)
+                    if digest != payload["sha256"] or size != payload["bytes"]:
+                        return ("incomplete", "payload file %s does not match its sha256/bytes yet" % rel)
+                    return ("ok", snap)
+                mkdir_private(os.path.dirname(snap))
                 shutil.copyfile(src, tmp)
                 with open(tmp, "rb") as fh:
                     os.fsync(fh.fileno())
@@ -943,7 +1067,7 @@ class Ingest:
                     os.unlink(tmp)
                 except OSError:
                     pass
-                return ("incomplete", "cannot snapshot payload file %s: %s" % (rel, exc))
+                return ("quarantined", "payload-unreadable", "cannot snapshot payload file %s: %s" % (rel, exception_text(exc)))
             return ("ok", snap)
         return ("ok", None)
 
