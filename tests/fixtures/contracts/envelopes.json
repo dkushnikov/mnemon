@@ -81,7 +81,7 @@
    "complete": true
   },
   "payload_files": {},
-  "note": "text + provenance url, no context → --origin text --url; no --context (the gateway's resolver decides)"
+  "note": "text + provenance url, no context → --origin text --url; no --context (the gateway's resolver decides); same text as text-plain → the real gateway answers skipped-duplicate"
  },
  {
   "name": "text-origin-url-invalid",
@@ -293,7 +293,7 @@
   "payload_files": {
    "attachments/file-pdf/paper.pdf": "255044462d312e370a25e2e3cfd30a312030206f626a203c3c202f54797065202f436174616c6f67203e3e20656e646f626a0a747261696c6572203c3c202f526f6f74203120302052203e3e0a2525454f460a"
   },
-  "note": "file payload, origin null, provenance url → --file <snapshot> and NO --url (the file is authoritative)"
+  "note": "file payload, origin null, provenance url → --file <snapshot> and NO --url (the url lands in provenance.json request_url)"
  },
  {
   "name": "file-origin-audio",
@@ -463,7 +463,7 @@
    "complete": true
   },
   "payload_files": {},
-  "note": "sync conflict copy → quarantined, never processed"
+  "note": "sync conflict copy → quarantined/conflict-copy, never processed"
  },
  {
   "name": "path-escape",
@@ -673,7 +673,7 @@
    "complete": true
   },
   "payload_files": {},
-  "note": "gateway exit 2 (context not in charter) → failed/contract, permanent"
+  "note": "passed through to the gateway; its exit 2 (context not in charter) → failed/contract, permanent"
  },
  {
   "name": "text-plain~2",
@@ -715,7 +715,7 @@
    "complete": true
   },
   "payload_files": {},
-  "note": "re-capture → --recapture --supersedes <revision:text-plain>; predecessor-pending while text-plain has no result"
+  "note": "re-capture → --recapture --supersedes <revision:text-plain>; deferred/predecessor-pending while text-plain has no result"
  },
  {
   "name": "text-plain~10",
@@ -757,6 +757,6 @@
    "complete": true
   },
   "payload_files": {},
-  "note": "sorts after ~2 (numeric suffix order); its predecessor ~9 never appears → predecessor-pending, supersedes-unknown after 24 h"
+  "note": "sorts after ~2 (numeric suffix order); its predecessor ~9 never appears → deferred/predecessor-pending, supersedes-unknown after 24 h"
  }
 ]

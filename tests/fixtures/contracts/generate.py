@@ -6,7 +6,8 @@
 Files: envelopes.json (named envelopes + payload files), expected-argv.json (the full `mnemon add` argv per
 envelope, with placeholders), gateway-outcomes.json (gateway exit/RESULT scenarios → ingest result state).
 Edit this generator, never the JSON files: hashes are computed, not typed. tests/test_hygiene.sh checks that
-the committed files equal the generator's output. Stdlib only, python 3.9.
+the committed files equal the generator's output. Stdlib only, python 3.9. These are stub-interface fixtures:
+identity behaviour across envelopes is proven by the chain test, not by the stub outcomes.
 """
 from __future__ import annotations
 
@@ -67,7 +68,7 @@ def add(name, envelope, *, file_name=None, payload_files=None, note=""):
 add("text-plain", env("text-plain", request={"title": "Plain T", "author": "A. Author", "intent": "why", "context": "personal"}),
     note="text payload, no url → --origin text, stdin = text bytes")
 add("text-with-url", env("text-with-url", request={"url": "https://example.com/post"}),
-    note="text + provenance url, no context → --origin text --url; no --context (the gateway's resolver decides)")
+    note="text + provenance url, no context → --origin text --url; no --context (the gateway's resolver decides); same text as text-plain → the real gateway answers skipped-duplicate")
 add("text-origin-url-invalid", env("text-origin-url-invalid", request={"origin": "url", "url": "https://example.com/x"}),
     note="text payload with origin url → invalid-request, permanent, no gateway call")
 add("url-auto", env("url-auto", payload=NONE_PAYLOAD, fidelity="url-only",
@@ -81,7 +82,7 @@ add("none-no-url", env("none-no-url", payload=NONE_PAYLOAD, fidelity="url-only")
 add("file-pdf", env("file-pdf", payload=file_payload("attachments/file-pdf/paper.pdf", PDF, "application/pdf"),
                     request={"title": "Paper", "url": "https://example.com/paper.pdf"}),
     payload_files={"attachments/file-pdf/paper.pdf": PDF.hex()},
-    note="file payload, origin null, provenance url → --file <snapshot> and NO --url (the file is authoritative)")
+    note="file payload, origin null, provenance url → --file <snapshot> and NO --url (the url lands in provenance.json request_url)")
 add("file-origin-audio", env("file-origin-audio", payload=file_payload("attachments/file-origin-audio/a.wav", AUDIO, "audio/wav"),
                              request={"origin": "audio", "url": "https://example.com/ep.wav"}),
     payload_files={"attachments/file-origin-audio/a.wav": AUDIO.hex()},
@@ -89,20 +90,20 @@ add("file-origin-audio", env("file-origin-audio", payload=file_payload("attachme
 add("wrong-instance", env("wrong-instance", instance="other"), note="not ours → other-instance, untouched")
 add("broken-schema", env("broken-schema", schema="nope/9"), note="→ quarantined")
 add("conflict-copy", env("conflict-copy"), file_name="test-producer:conflict-copy.sync-conflict-20261015-120000-ABCDEFG.json",
-    note="sync conflict copy → quarantined, never processed")
+    note="sync conflict copy → quarantined/conflict-copy, never processed")
 add("path-escape", env("path-escape", payload=file_payload("../../etc/passwd", b"x", "text/plain")), note="→ quarantined (path)")
 add("sha-mismatch", env("sha-mismatch", payload={"kind": "text", "text": TEXT, "path": None, "media_type": "text/plain",
                                                  "sha256": "0" * 64, "bytes": len(TEXT_B)}), note="→ quarantined / payload-mismatch")
 add("bookmark", env("bookmark", request={"tier": "bookmark"}), note="→ unsupported (D12)")
 add("incomplete", env("incomplete", complete=False), note="complete:false → quarantined (schema)")
 add("context-undeclared", env("context-undeclared", request={"context": "mc"}),
-    note="gateway exit 2 (context not in charter) → failed/contract, permanent")
+    note="passed through to the gateway; its exit 2 (context not in charter) → failed/contract, permanent")
 add("text-plain~2", env("text-plain~2", envelope_id="test-producer:text-plain~2", supersedes="test-producer:text-plain",
                         payload=text_payload(TEXT2), request={"context": "personal"}),
-    note="re-capture → --recapture --supersedes <revision:text-plain>; predecessor-pending while text-plain has no result")
+    note="re-capture → --recapture --supersedes <revision:text-plain>; deferred/predecessor-pending while text-plain has no result")
 add("text-plain~10", env("text-plain~10", envelope_id="test-producer:text-plain~10", supersedes="test-producer:text-plain~9",
                          payload=text_payload(TEXT2 + "again\n"), request={"context": "personal"}),
-    note="sorts after ~2 (numeric suffix order); its predecessor ~9 never appears → predecessor-pending, supersedes-unknown after 24 h")
+    note="sorts after ~2 (numeric suffix order); its predecessor ~9 never appears → deferred/predecessor-pending, supersedes-unknown after 24 h")
 
 (OUT / "envelopes.json").write_text(json.dumps(cases, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
@@ -132,11 +133,14 @@ argv = {
                               "<revision:text-plain>"], "stdin_sha256": sha(TEXT2_B), "stdin_bytes": len(TEXT2_B)},
 }
 argv_doc = {"_notes": ["argv = the arguments after `mnemon add`; the order is normative and tests compare lists.",
-                       "Placeholders: <envelope_id>; <provenance> = <ingest state>/payloads/<envelope_id>/provenance.json;",
+                       "Placeholders: <envelope_id>; <provenance> = <ingest state>/payloads/<envelope_id>/provenance.json",
+                       "(schema mnemon-provenance/1: envelope_id, producer, instance, created_at, fidelity, request_url, request, provenance);",
                        "<snapshot:REL> = absolute path of the payload snapshot under <ingest state>/payloads/<envelope_id>/;",
                        "<revision:NAME> = the `revision` recorded in NAME's result record.",
                        "`--context` appears only when request.context is set; optional metadata appears only when non-empty,",
                        "in the order --title --author --intent --source-type; `--recapture --supersedes` comes last.",
+                       "A recovery of a `started` result that has no gateway receipt re-dispatches exactly this argv (dispatch.json);",
+                       "with a receipt it dispatches `--capture-id <envelope_id>` alone.",
                        "Envelopes absent from `cases` never reach the gateway (see gateway-outcomes.json expected_without_gateway)."],
             "cases": argv}
 (OUT / "expected-argv.json").write_text(json.dumps(argv_doc, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
@@ -149,12 +153,12 @@ def lines(**kv):
     return [R + k + "=" + str(kv.get(k, "")) for k in order]
 
 
-REV1, REV2 = "2026-10-15_aaaaaaaa", "2026-10-15_aaaaaaaa-2"
+REV1, REV2 = "2026-10-15_aaaaaaaa", "2026-10-15_bbbbbbbb"
 outcomes = {
     "_notes": ["Scenario → what a stub gateway returns (exit code, stdout lines, optional stderr/sleep) and the ingest",
-               "result it must produce. `attempt_consumed` false means attempts stays unchanged and the item is `waiting`.",
-               "<envelope_id> in stdout is substituted per envelope. `default_scenario_by_case` drives the stub for the",
-               "contract fixtures; tests may override per case."],
+               "result it must produce. `attempt_consumed` false = the attempt is refunded and the stored state is `deferred`",
+               "with a deadline_at. <envelope_id> in stdout is substituted per envelope. `default_scenario_by_case` drives",
+               "the stub for the contract fixtures; tests may override per case."],
     "scenarios": {
         "extracted": {"exit": 0, "stdout": lines(capture_id="<envelope_id>", revision=REV1, path=f"Sources/{REV1}/", status="extracted",
                                                  title="Plain T", source_sha256=sha(TEXT_B), extract="ok"),
@@ -169,10 +173,11 @@ outcomes = {
                             "retryable": True, "attempt_consumed": True},
         "exit4-transient": {"exit": 4, "stdout": lines(capture_id="<envelope_id>", revision=REV1, path=f"Sources/{REV1}/", status="captured",
                                                        source_sha256=sha(TEXT_B), extract="missing", error_class="transient", retryable="true"),
-                            "state": "failed", "error_class": "transient", "retryable": True, "next_attempt_at": "future", "attempt_consumed": True},
+                            "state": "failed", "error_class": "transient", "retryable": True, "revision": REV1, "next_attempt_at": "future",
+                            "attempt_consumed": True},
         "exit4-permanent": {"exit": 4, "stdout": lines(capture_id="<envelope_id>", revision=REV1, path=f"Sources/{REV1}/", status="captured",
                                                        source_sha256=sha(TEXT_B), extract="invalid", error_class="invalid-output", retryable="false"),
-                            "state": "failed", "error_class": "invalid-output", "retryable": False, "attempt_consumed": True},
+                            "state": "failed", "error_class": "invalid-output", "retryable": False, "revision": REV1, "attempt_consumed": True},
         "exit4-malformed": {"exit": 4, "stdout": ["something went wrong"], "state": "failed", "error_class": "malformed-result",
                             "retryable": True, "attempt_consumed": True},
         "exit1-fetch": {"exit": 1, "stdout": lines(capture_id="<envelope_id>", status="failed", extract="none", error_class="fetch", retryable="true"),
@@ -181,19 +186,22 @@ outcomes = {
                               "state": "failed", "error_class": "unsupported", "retryable": False, "attempt_consumed": True},
         "exit1-archive-exists": {"exit": 1, "stdout": lines(capture_id="<envelope_id>", status="failed", extract="none", error_class="archive-exists", retryable="false"),
                                  "state": "failed", "error_class": "archive-exists", "retryable": False, "attempt_consumed": True},
+        "exit1-integrity": {"exit": 1, "stdout": lines(capture_id="<envelope_id>", revision=REV1, path=f"Sources/{REV1}/", status="integrity-error",
+                                                       source_sha256="", extract="none", error_class="evidence-mismatch", retryable="false"),
+                            "state": "failed", "error_class": "integrity-error", "retryable": False, "revision": REV1, "attempt_consumed": True},
         "exit2-contract": {"exit": 2, "stdout": [], "stderr": "ERROR: context 'mc' is not declared in charter (declared: personal)",
                            "state": "failed", "error_class": "contract", "retryable": False, "attempt_consumed": True},
-        "exit3-environment": {"exit": 3, "stdout": [], "state": "waiting", "error_class": "environment", "attempt_consumed": False},
-        "exit75-locked": {"exit": 75, "stdout": [], "state": "waiting", "error_class": "locked", "attempt_consumed": False},
+        "exit3-environment": {"exit": 3, "stdout": [], "state": "deferred", "error_class": "environment", "attempt_consumed": False},
+        "exit75-locked": {"exit": 75, "stdout": [], "state": "deferred", "error_class": "locked", "attempt_consumed": False},
         "other-exit": {"exit": 9, "stdout": [], "state": "failed", "error_class": "unknown-exit", "retryable": True, "attempt_consumed": True},
     },
-    "default_scenario_by_case": {"text-plain": "extracted", "text-with-url": "extracted", "url-auto": "extracted", "url-explicit": "duplicate",
+    "default_scenario_by_case": {"text-plain": "extracted", "text-with-url": "duplicate", "url-auto": "extracted", "url-explicit": "duplicate",
                                  "file-pdf": "extracted", "file-origin-audio": "exit4-transient", "context-undeclared": "exit2-contract",
                                  "text-plain~2": "extracted-recapture"},
     "expected_without_gateway": {"text-origin-url-invalid": "failed/invalid-request", "none-no-url": "needs_input",
                                  "wrong-instance": "other-instance", "broken-schema": "quarantined", "conflict-copy": "quarantined/conflict-copy",
                                  "path-escape": "quarantined", "sha-mismatch": "quarantined/payload-mismatch", "bookmark": "unsupported",
-                                 "incomplete": "quarantined", "text-plain~10": "waiting/predecessor-pending"},
+                                 "incomplete": "quarantined", "text-plain~10": "deferred/predecessor-pending"},
 }
 (OUT / "gateway-outcomes.json").write_text(json.dumps(outcomes, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 
@@ -208,6 +216,9 @@ Shared by the gateway suite and the ingest suite so the two halves cannot drift:
 - `gateway-outcomes.json` — gateway exit codes + `RESULT:` lines per scenario and the ingest result state they
   must produce; `default_scenario_by_case` maps envelopes to scenarios for the stub gateway;
   `expected_without_gateway` lists envelopes the consumer settles before calling the gateway.
+
+These are stub-interface fixtures: identity behaviour across envelopes (same text → one resource, an edited
+re-capture → a new resource) is proven by the real-chain test, not by the stub outcomes.
 
 Regenerate with `python3 tests/fixtures/contracts/generate.py` after editing the generator — never edit the
 JSON by hand (hashes are computed). The hygiene suite checks the committed files match the generator.

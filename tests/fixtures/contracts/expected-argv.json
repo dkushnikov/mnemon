@@ -1,11 +1,14 @@
 {
  "_notes": [
   "argv = the arguments after `mnemon add`; the order is normative and tests compare lists.",
-  "Placeholders: <envelope_id>; <provenance> = <ingest state>/payloads/<envelope_id>/provenance.json;",
+  "Placeholders: <envelope_id>; <provenance> = <ingest state>/payloads/<envelope_id>/provenance.json",
+  "(schema mnemon-provenance/1: envelope_id, producer, instance, created_at, fidelity, request_url, request, provenance);",
   "<snapshot:REL> = absolute path of the payload snapshot under <ingest state>/payloads/<envelope_id>/;",
   "<revision:NAME> = the `revision` recorded in NAME's result record.",
   "`--context` appears only when request.context is set; optional metadata appears only when non-empty,",
   "in the order --title --author --intent --source-type; `--recapture --supersedes` comes last.",
+  "A recovery of a `started` result that has no gateway receipt re-dispatches exactly this argv (dispatch.json);",
+  "with a receipt it dispatches `--capture-id <envelope_id>` alone.",
   "Envelopes absent from `cases` never reach the gateway (see gateway-outcomes.json expected_without_gateway)."
  ],
  "cases": {

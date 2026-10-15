@@ -1,9 +1,9 @@
 {
  "_notes": [
   "Scenario → what a stub gateway returns (exit code, stdout lines, optional stderr/sleep) and the ingest",
-  "result it must produce. `attempt_consumed` false means attempts stays unchanged and the item is `waiting`.",
-  "<envelope_id> in stdout is substituted per envelope. `default_scenario_by_case` drives the stub for the",
-  "contract fixtures; tests may override per case."
+  "result it must produce. `attempt_consumed` false = the attempt is refunded and the stored state is `deferred`",
+  "with a deadline_at. <envelope_id> in stdout is substituted per envelope. `default_scenario_by_case` drives",
+  "the stub for the contract fixtures; tests may override per case."
  ],
  "scenarios": {
   "extracted": {
@@ -28,8 +28,8 @@
    "exit": 0,
    "stdout": [
     "RESULT:capture_id=<envelope_id>",
-    "RESULT:revision=2026-10-15_aaaaaaaa-2",
-    "RESULT:path=Sources/2026-10-15_aaaaaaaa-2/",
+    "RESULT:revision=2026-10-15_bbbbbbbb",
+    "RESULT:path=Sources/2026-10-15_bbbbbbbb/",
     "RESULT:status=extracted",
     "RESULT:title=Plain T",
     "RESULT:source_sha256=252e502db2c449b2f59472fde3e9c35bae976c1902b8a1394f783c95fed49dcb",
@@ -39,7 +39,7 @@
    ],
    "state": "captured",
    "duplicate": false,
-   "revision": "2026-10-15_aaaaaaaa-2",
+   "revision": "2026-10-15_bbbbbbbb",
    "attempt_consumed": true
   },
   "duplicate": {
@@ -85,6 +85,7 @@
    "state": "failed",
    "error_class": "transient",
    "retryable": true,
+   "revision": "2026-10-15_aaaaaaaa",
    "next_attempt_at": "future",
    "attempt_consumed": true
   },
@@ -104,6 +105,7 @@
    "state": "failed",
    "error_class": "invalid-output",
    "retryable": false,
+   "revision": "2026-10-15_aaaaaaaa",
    "attempt_consumed": true
   },
   "exit4-malformed": {
@@ -170,6 +172,25 @@
    "retryable": false,
    "attempt_consumed": true
   },
+  "exit1-integrity": {
+   "exit": 1,
+   "stdout": [
+    "RESULT:capture_id=<envelope_id>",
+    "RESULT:revision=2026-10-15_aaaaaaaa",
+    "RESULT:path=Sources/2026-10-15_aaaaaaaa/",
+    "RESULT:status=integrity-error",
+    "RESULT:title=",
+    "RESULT:source_sha256=",
+    "RESULT:extract=none",
+    "RESULT:error_class=evidence-mismatch",
+    "RESULT:retryable=false"
+   ],
+   "state": "failed",
+   "error_class": "integrity-error",
+   "retryable": false,
+   "revision": "2026-10-15_aaaaaaaa",
+   "attempt_consumed": true
+  },
   "exit2-contract": {
    "exit": 2,
    "stdout": [],
@@ -182,14 +203,14 @@
   "exit3-environment": {
    "exit": 3,
    "stdout": [],
-   "state": "waiting",
+   "state": "deferred",
    "error_class": "environment",
    "attempt_consumed": false
   },
   "exit75-locked": {
    "exit": 75,
    "stdout": [],
-   "state": "waiting",
+   "state": "deferred",
    "error_class": "locked",
    "attempt_consumed": false
   },
@@ -204,7 +225,7 @@
  },
  "default_scenario_by_case": {
   "text-plain": "extracted",
-  "text-with-url": "extracted",
+  "text-with-url": "duplicate",
   "url-auto": "extracted",
   "url-explicit": "duplicate",
   "file-pdf": "extracted",
@@ -222,6 +243,6 @@
   "sha-mismatch": "quarantined/payload-mismatch",
   "bookmark": "unsupported",
   "incomplete": "quarantined",
-  "text-plain~10": "waiting/predecessor-pending"
+  "text-plain~10": "deferred/predecessor-pending"
  }
 }
