@@ -845,6 +845,10 @@ cmd_release() {
       echo "  installed: $home (release @ $prev; MNEMON_HOME=$MNEMON_HOME)"
     fi
     echo "  main:      $main_sha"
+    if [[ -z "$rollback" ]]; then
+      echo "  check:     git -C $MNEMON_ROOT status --porcelain --untracked-files=no   → $dirty   (before the lock)"
+      echo "  check:     git -C $MNEMON_ROOT merge-base --is-ancestor release main   → $ancestor   (before the lock)"
+    fi
     echo "  1. lock:   $lock (pid, timestamp, target $target_sha); removed last, also on failure"
     echo "  2. drain:  wait up to ${drain_timeout}s for processes matching: pgrep -f $drain_pattern"
     if [[ -n "$rollback" ]]; then
@@ -852,18 +856,28 @@ cmd_release() {
       echo "  4. print:  git -C $home push --force-with-lease origin release   (not run)"
       echo "  5. unlock: rm $lock"
     else
-      echo "  3. check:  git -C $MNEMON_ROOT status --porcelain --untracked-files=no   → $dirty"
-      echo "  4. fetch:  git -C $MNEMON_ROOT fetch origin"
-      echo "  5. check:  git -C $MNEMON_ROOT merge-base --is-ancestor release main   → $ancestor"
-      echo "  6. merge:  git -C $home merge --ff-only main   ($prev → $main_sha)"
-      echo "  7. smoke:  $home/bin/mnemon config path · $home/bin/mnemon version (reports $main_sha) · bash $home/tests/test_config.sh · $home/bin/mnemon doctor (no fail other than deps/qmd/writer)"
-      echo "  8. push:   git -C $home push origin release   (only after a green smoke)"
-      if $now; then echo "  9. ping:   node ping not implemented (program phase 4)"; fi
+      echo "  3. fetch:  git -C $MNEMON_ROOT fetch origin   (a warning when offline)"
+      echo "  4. merge:  git -C $home merge --ff-only main   ($prev → $main_sha)"
+      echo "  5. smoke:  $home/bin/mnemon config path · $home/bin/mnemon version (reports $main_sha) · bash $home/tests/test_config.sh · $home/bin/mnemon doctor (exit 0, or 1 with no fail other than deps/qmd/writer)"
+      echo "  6. push:   git -C $home push origin release   (only after a green smoke)"
+      if $now; then echo "  7. ping:   node ping not implemented (program phase 4)"; fi
       echo "  unlock:    rm $lock"
       echo "  rollback:"
       echo "$rollback_cmds"
     fi
     exit 0
+  fi
+
+  # --- refusals that need no lock: a dirty dev tree, a diverged release. Cheap
+  # and read-only, so they come before the lock and the drain — otherwise the
+  # lock is held for the whole drain and the refusal blames the drain, not the tree.
+  if [[ -z "$rollback" ]]; then
+    if [[ "$dirty" != clean ]]; then
+      die "release: dev tree $MNEMON_ROOT has uncommitted tracked changes — commit or stash first (nothing was locked or changed)"
+    fi
+    if [[ "$ancestor" != yes ]]; then
+      die "release: release has diverged from main (release=$(git -C "$MNEMON_ROOT" rev-parse --short release), main=$main_sha) — reconcile manually (nothing was locked or changed)"
+    fi
   fi
 
   # --- 1. lock (removed by trap on every exit) · 2. drain ---
@@ -879,24 +893,16 @@ cmd_release() {
     exit 0
   fi
 
-  # --- 3. dev tree clean ---
-  if [[ "$dirty" != clean ]]; then
-    die "release: dev tree $MNEMON_ROOT has uncommitted tracked changes — commit or stash first"
-  fi
-  # --- 4. fetch (non-fatal) ---
+  # --- 3. fetch (non-fatal; local branches are what the merge reads) ---
   if ! git -C "$MNEMON_ROOT" fetch origin >/dev/null 2>&1; then
     echo "mnemon release: warning — 'git fetch origin' failed (offline?); continuing with local refs" >&2
   fi
-  # --- 5. release must be an ancestor of main ---
-  if ! git -C "$MNEMON_ROOT" merge-base --is-ancestor release main 2>/dev/null; then
-    die "release: release has diverged from main (release=$(git -C "$MNEMON_ROOT" rev-parse --short release), main=$main_sha) — reconcile manually"
-  fi
-  # --- 6. ff-merge: moves the release branch and the installed worktree together ---
+  # --- 4. ff-merge: moves the release branch and the installed worktree together ---
   echo "release: $home  $prev → $main_sha (ff-only merge of main)"
   if ! git -C "$home" merge --ff-only main; then
     die "release: ff-merge failed — roll back with: git -C $home reset --hard $prev"
   fi
-  # --- 7. smoke on the updated worktree; a failure never publishes ---
+  # --- 5. smoke on the updated worktree; a failure never publishes ---
   if ! _release_smoke "$home" "$main_sha"; then
     {
       echo "mnemon release: smoke failed on $home @ $main_sha. Nothing was pushed. Roll back with:"
@@ -904,7 +910,7 @@ cmd_release() {
     } >&2
     exit 1
   fi
-  # --- 8. push: the local release stands either way, but nodes pull origin/release ---
+  # --- 6. push: the local release stands either way, but nodes pull origin/release ---
   local new_sha
   new_sha="$(git -C "$home" rev-parse --short HEAD)"
   if ! git -C "$home" push origin release >/dev/null 2>&1; then

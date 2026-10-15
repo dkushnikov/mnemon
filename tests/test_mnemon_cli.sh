@@ -542,10 +542,16 @@ assert_contains "$out" "2. drain:  wait up to 120s for processes matching: pgrep
 assert_contains "$out" "git -C $RWT merge --ff-only main" "dry-run prints the ff-merge step with real paths"
 assert_contains "$out" "$RWT/bin/mnemon doctor" "dry-run prints the smoke step"
 assert_contains "$out" "$RWT/bin/mnemon version (reports $(git -C "$REPO" rev-parse --short main))" "dry-run names the commit the smoke expects"
-assert_contains "$out" "8. push:   git -C $RWT push origin release   (only after a green smoke)" "dry-run prints the push step after the smoke"
+assert_contains "$out" "6. push:   git -C $RWT push origin release   (only after a green smoke)" "dry-run prints the push step after the smoke"
 smoke_at=$(printf '%s\n' "$out" | grep -n ' smoke:' | head -1 | cut -d: -f1)
 push_at=$(printf '%s\n' "$out" | grep -n ' push:' | head -1 | cut -d: -f1)
 [[ -n "$smoke_at" && -n "$push_at" && "$smoke_at" -lt "$push_at" ]] && pass "dry-run orders smoke before push" || fail "dry-run orders smoke before push" "smoke line $smoke_at, push line $push_at"
+# G3: the tree checks (dirty dev tree, release ⊂ main) need no lock — they are
+# listed, and run, before the lock and the drain
+check_at=$(printf '%s\n' "$out" | grep -n ' check: ' | head -1 | cut -d: -f1)
+lock_at=$(printf '%s\n' "$out" | grep -n ' lock: ' | head -1 | cut -d: -f1)
+[[ -n "$check_at" && -n "$lock_at" && "$check_at" -lt "$lock_at" ]] && pass "dry-run lists the tree checks before the lock" || fail "dry-run lists the tree checks before the lock" "check line $check_at, lock line $lock_at"
+assert_contains "$out" "(before the lock)" "dry-run says the tree checks run before the lock"
 assert_contains "$out" "unlock:    rm $LOCK" "dry-run prints the unlock step"
 assert_contains "$out" "mnemon release --rollback" "dry-run prints the rollback command"
 assert_contains "$out" "→ clean" "dry-run reports the dev tree as clean"
@@ -571,11 +577,23 @@ assert_contains "$out" "expected 'release'" "...and says why"
 mkdir -p "$TEST_TMPDIR/notarepo"
 run env MNEMON_HOME="$TEST_TMPDIR/notarepo" "$REPO/bin/mnemon" release --dry-run
 assert_eq "$rc" "1" "release refuses a MNEMON_HOME that is not a git worktree"
+# G3: the same refusals without --dry-run happen before the lock — the lock
+# acquire always prints "release: lock …", so its absence proves no lock was taken
+run env MNEMON_HOME="$REPO" "$REPO/bin/mnemon" release
+assert_eq "$rc" "1" "release (not dry-run) refuses a MNEMON_HOME that is not on branch release"
+assert_not_contains "$out" "release: lock" "...before taking the lock"
+run env MNEMON_HOME="$TEST_TMPDIR/notarepo" "$REPO/bin/mnemon" release
+assert_eq "$rc" "1" "release (not dry-run) refuses a MNEMON_HOME that is not a git worktree"
+assert_not_contains "$out" "release: lock" "...before taking the lock"
+[[ -e "$LOCK" ]] && fail "preflight refusals leave no lock file" "lock exists" || pass "preflight refusals leave no lock file"
 
 printf '# dirty\n' >> "$REPO/tests/test-helper.sh"
 run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
 assert_eq "$rc" "1" "release refuses a dirty dev tree"
 assert_contains "$out" "uncommitted tracked changes" "...naming the reason"
+assert_not_contains "$out" "release: lock" "...before taking the lock (G3)"
+assert_not_contains "$out" "drain" "...and before the drain"
+[[ -e "$LOCK" ]] && fail "a dirty-tree refusal leaves no lock file" "lock exists" || pass "a dirty-tree refusal leaves no lock file"
 g "$REPO" checkout -q -- tests/test-helper.sh
 
 # success: a new commit on main is promoted; required deps the smoke doctor
@@ -690,6 +708,25 @@ run env MNEMON_HOME="$TEST_TMPDIR/eng.ine/" "$REPO/bin/mnemon" release --drain-t
 assert_eq "$rc" "1" "symlink: a process started through the symlink spelling is detected"
 assert_contains "$out" "engine processes to finish ($BUSY_PID" "symlink: drain names it"
 wait "$BUSY_PID" 2>/dev/null || true
+
+# G3: a dirty dev tree is refused before the lock and the drain. With a busy
+# engine the old order took the lock, waited the whole --drain-timeout and then
+# blamed the drain, not the tree. The lock acquire always prints "release: lock …":
+# its absence from the output proves no lock file existed at any point.
+printf '# dirty again\n' >> "$REPO/tests/test-helper.sh"
+bash "$RWT/bin/busy.sh" &
+BUSY_PID=$!
+sleep 0.3
+run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --drain-timeout 2
+assert_eq "$rc" "1" "dirty tree + busy engine: refused"
+assert_contains "$out" "dev tree $REPO has uncommitted tracked changes" "...naming the dirty tree, not the drain"
+assert_not_contains "$out" "release: lock" "...before any lock was taken"
+assert_not_contains "$out" "drain" "...and before the drain"
+assert_not_contains "$out" "engine busy" "...so the drain timeout is never reached"
+[[ -e "$LOCK" ]] && fail "dirty tree + busy engine: no lock file left behind" "lock exists" || pass "dirty tree + busy engine: no lock file left behind"
+kill "$BUSY_PID" 2>/dev/null || true
+wait "$BUSY_PID" 2>/dev/null || true
+g "$REPO" checkout -q -- tests/test-helper.sh
 rm -f "$RWT/bin/busy.sh" "$TEST_TMPDIR/eng.ine"
 
 # with the engine idle again, the pending main commit releases cleanly; a stray
@@ -722,6 +759,8 @@ g "$RWT" commit -q -am "hotfix on release"
 run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
 assert_eq "$rc" "1" "release fails when release has diverged"
 assert_contains "$out" "release has diverged from main" "...with the specified message"
+assert_not_contains "$out" "release: lock" "...before taking the lock (G3)"
+[[ -e "$LOCK" ]] && fail "a diverged-release refusal leaves no lock file" "lock exists" || pass "a diverged-release refusal leaves no lock file"
 
 cd /
 rm -rf "$TEST_TMPDIR"
