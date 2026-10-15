@@ -100,4 +100,23 @@ PY
 assert_eq "$py39" "" "PEP 604 unions in annotations only in modules with 'from __future__ import annotations'"
 [[ -n "$py39" ]] && printf '%s\n' "$py39"
 
+# --- 6. the contract fixtures (tests/fixtures/contracts/) equal generate.py's output —
+#        the JSON files are generated, never hand-edited (capture contracts §5.3, §9.16)
+echo "--- contract fixtures ---"
+CONTRACTS="$MNEMON_ROOT/tests/fixtures/contracts"
+GEN_TMP="$(mktemp -d -t mnemon-fixtures-XXXX)"
+cp "$CONTRACTS/generate.py" "$GEN_TMP/"
+if python3 "$GEN_TMP/generate.py" >/dev/null 2>&1; then
+  for f in envelopes.json expected-argv.json gateway-outcomes.json README.md; do
+    if cmp -s "$GEN_TMP/$f" "$CONTRACTS/$f"; then
+      pass "tests/fixtures/contracts/$f equals generate.py's output"
+    else
+      fail "tests/fixtures/contracts/$f equals generate.py's output" "differs — edit generate.py and run: python3 tests/fixtures/contracts/generate.py"
+    fi
+  done
+else
+  fail "tests/fixtures/contracts/generate.py runs" "python3 generate.py failed in $GEN_TMP"
+fi
+rm -rf "$GEN_TMP"
+
 summary
