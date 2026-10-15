@@ -81,7 +81,7 @@ assert_eq "$(result title)" "only source" "...and falls back to source.md's norm
 echo "--- 6. fence argv and gate ---"
 run_gw --url "https://example.com/dry" --dry-run
 assert_eq "$rc" "0" "dry-run exits 0"
-for needle in '--restricted' '--tools ""' '--permission-prompts none' '--strict-mcp-config' '--json-schema'; do
+for needle in '--restricted' '--tools ""' '--permission-prompts none' '--strict-mcp-config' '--no-session-persistence' '--json-schema'; do
   assert_contains "$out" "$needle" "dry-run argv contains $needle"
 done
 for needle in '--allowedTools' '--settings' '--add-dir' 'no tool restrictions' '--mcp-config' '--permission-mode'; do
@@ -96,13 +96,14 @@ run_gw --url "https://example.com/argv" --capture-id a-1 --keep-run
 assert_eq "$rc" "0" "capture with --keep-run exits 0"
 argv_txt="$VSTATE/runs/a-1/attempt-1/argv.txt"
 assert_file_exists "$argv_txt" "--keep-run keeps argv.txt"
-for needle in '--restricted' '--tools ""' '--permission-prompts none' '--strict-mcp-config' '--json-schema'; do
+for needle in '--restricted' '--tools ""' '--permission-prompts none' '--strict-mcp-config' '--no-session-persistence' '--json-schema'; do
   assert_contains "$(cat "$argv_txt")" "$needle" "argv.txt contains $needle"
 done
 for needle in '--allowedTools' '--settings' '--add-dir' '--mcp-config'; do
   assert_not_contains "$(cat "$argv_txt")" "$needle" "argv.txt never contains $needle"
 done
-assert_eq "$(wc -l < "$STUB_DIR/call-1.argv" | tr -d ' ')" "15" "the stub received exactly the 15 fence arguments — no positional prompt"
+assert_eq "$(wc -l < "$STUB_DIR/call-1.argv" | tr -d ' ')" "16" "the stub received exactly the 16 fence arguments — no positional prompt"
+assert_eq "$(sed -n '8p' "$STUB_DIR/call-1.argv")" "--no-session-persistence" "...--no-session-persistence right after --strict-mcp-config (no transcript under ~/.claude/projects)"
 assert_eq "$(tail -1 "$STUB_DIR/call-1.argv")" "sonnet" "...the last argument is the model"
 assert_eq "$(head -1 "$STUB_DIR/call-1.stdin")" "NON-INTERACTIVE EXTRACTION REQUEST. You are a function: read the sections below and return only the structured fields of the output schema. No questions, no commentary, no tool use." "the prompt arrives on stdin"
 assert_contains "$(cat "$STUB_DIR/call-1.stdin")" "=== CONTENT ===" "...with the content inline"

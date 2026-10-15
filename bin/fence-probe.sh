@@ -27,7 +27,9 @@
 #   4 mcp             .mcp.json in the cwd naming a server that would write a sentinel on start:
 #                     no sentinel, no mcp__ tool events                              (mandatory)
 #   5 session         two consecutive runs: the second does not see a canary the first was told
-#                     to remember                                                    (mandatory)
+#                     to remember; and, under the real HOME, no file appeared under
+#                     ~/.claude/projects/<slug of the probe cwd>/ (--no-session-persistence:
+#                     a run leaves no transcript of the prompt and content)        (mandatory)
 #
 # A pass of every mandatory probe writes ${XDG_STATE_HOME:-~/.local/state}/mnemon/fence-probes.json:
 #   {"<claude --version>": {"pass": true, "date": "<UTC>", "model": "<model>",
@@ -76,9 +78,38 @@ SKIP_REASON_USER="user-level files cannot be planted under the operator's real H
 # the scratch directory is the cwd only, HOME and XDG_* stay the operator's (§12 A9).
 run_claude() {
   local cwd="$1" outf="$2"; shift 2
-  ( cd "$cwd" && claude -p --restricted --tools "" --permission-prompts none --strict-mcp-config \
+  ( cd "$cwd" && claude -p --restricted --tools "" --permission-prompts none --strict-mcp-config --no-session-persistence \
       --output-format stream-json --verbose --json-schema "$SCHEMA" --max-turns 4 --model "$MODEL" "$@" \
       > "$outf" 2> "$outf.err" ) || true
+}
+
+# Session files Claude Code would write for a working directory live under
+# ~/.claude/projects/<slug>/ where the slug is the cwd path with every `/` replaced by `-`.
+# The path is taken as the process sees it — normalized, both the logical and the physical
+# (symlinks resolved, /var → /private/var on macOS) form — and a second slug form with every
+# non-alphanumeric character replaced is checked too, so a stricter slug rule cannot hide a
+# transcript. project_files <cwd> lists the files under every candidate directory, sorted.
+project_slug_dirs() {
+  local cwd="$1" p s logical physical plain alnum printed=" "
+  logical="$(cd "$cwd" && pwd)"
+  physical="$(cd "$cwd" && pwd -P)"
+  for p in "$logical" "$physical"; do
+    plain="${p//\//-}"
+    alnum="$(printf '%s' "$p" | tr -c 'A-Za-z0-9\n' '-')"
+    for s in "$plain" "$alnum"; do
+      case "$printed" in *" $s "*) continue ;; esac
+      printed="$printed$s "
+      printf '%s\n' "$HOME/.claude/projects/$s"
+    done
+  done
+  return 0
+}
+project_files() {
+  local d
+  while IFS= read -r d; do
+    if [[ -d "$d" ]]; then find "$d" -type f 2>/dev/null; fi
+  done < <(project_slug_dirs "$1") | sort
+  return 0
 }
 
 # tool names seen in the event stream (assistant content blocks of type tool_use)
@@ -154,16 +185,22 @@ echo "fence-probe 4 mcp: $ok (tool events: ${uses:-none})" >&2
 
 # --- 5. session persistence ----------------------------------------------------------------
 p5="$ROOT/p5"; mkdir -p "$p5"
+files_before="$(project_files "$p5")"
 prompt_for "Remember the secret word CANARY-SESSION-7731 for the next request. Put it in the author field now." > "$p5/prompt-1.md"
 run_claude "$p5" "$p5/out-1.jsonl" < "$p5/prompt-1.md"
 prompt_for "What secret word were you told to remember in the previous request? If you know one, put it in the author field; otherwise leave author empty." > "$p5/prompt-2.md"
 run_claude "$p5" "$p5/out-2.jsonl" < "$p5/prompt-2.md"
 so2="$(structured_of "$p5/out-2.jsonl")"
+files_after="$(project_files "$p5")"
 ok=true
 printf '%s' "$so2" | grep -q 'CANARY-SESSION-7731' && ok=false
 [[ -n "$so2" && "$so2" != "null" ]] || ok=false
+# --no-session-persistence, checked by effect under the real HOME: no file appeared under
+# ~/.claude/projects/<slug of the probe cwd>/ (the transcript would hold the prompt and content)
+new_files="$(comm -13 <(printf '%s\n' "$files_before") <(printf '%s\n' "$files_after") | sed '/^$/d')"
+[[ -z "$new_files" ]] || ok=false
 record session "$ok"
-echo "fence-probe 5 session: $ok" >&2
+echo "fence-probe 5 session: $ok (new project files: ${new_files:-none})" >&2
 
 # --- record ---------------------------------------------------------------------------------
 if [[ -n "$FAILED" ]]; then

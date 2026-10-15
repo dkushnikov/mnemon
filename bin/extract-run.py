@@ -9,9 +9,13 @@ Builds exactly this argv — never a positional prompt, never --settings, --add-
 --allowedTools, --permission-mode or --dangerously-skip-permissions:
 
     claude -p --restricted --tools "" --permission-prompts none --strict-mcp-config \
+           --no-session-persistence \
            --output-format json --json-schema <schema> --max-turns N --model M [--max-budget-usd X]
 
-writes it to <attempt-dir>/argv.txt (one shell-style line, `""` for the empty --tools value) and
+(--no-session-persistence: an extraction run is a function call, not a session — without it
+every run leaves a transcript of the prompt, reader context and captured content included,
+under ~/.claude/projects/<slug of the attempt dir>/; probe 5 of bin/fence-probe.sh asserts
+that none appears), writes it to <attempt-dir>/argv.txt (one shell-style line, `""` for the empty --tools value) and
 <attempt-dir>/argv.json (the list, for the receipt's `argv`), runs it with the attempt dir as the
 working directory, the prompt on stdin, stdout → result.json and
 stderr → stderr.txt, in a new session (its own process group). On `--timeout` the whole group is
@@ -112,7 +116,7 @@ def main() -> int:
         schema = json.dumps(json.load(fh), separators=(",", ":"), ensure_ascii=False)
 
     argv = [args.claude, "-p", "--restricted", "--tools", "", "--permission-prompts", "none",
-            "--strict-mcp-config", "--output-format", "json", "--json-schema", schema,
+            "--strict-mcp-config", "--no-session-persistence", "--output-format", "json", "--json-schema", schema,
             "--max-turns", str(args.max_turns), "--model", args.model]
     if args.max_budget_usd:
         argv += ["--max-budget-usd", str(args.max_budget_usd)]

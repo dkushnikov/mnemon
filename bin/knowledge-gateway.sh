@@ -304,7 +304,7 @@ cap_dry_run() {
   $RECAPTURE && echo "Recapture: yes (supersedes ${SUPERSEDES:-the latest revision})"
   echo "Vault state: $MNEMON_VAULT_STATE_DIR"
   echo "=== EXTRACTOR ARGV ==="
-  local argv='claude -p --restricted --tools "" --permission-prompts none --strict-mcp-config --output-format json --json-schema <extract/1> --max-turns 4 --model '"$MODEL"
+  local argv='claude -p --restricted --tools "" --permission-prompts none --strict-mcp-config --no-session-persistence --output-format json --json-schema <extract/1> --max-turns 4 --model '"$MODEL"
   [[ -n "${EXTRACT_MAX_USD:-}" ]] && argv="$argv --max-budget-usd $EXTRACT_MAX_USD"
   echo "$argv"
   echo "(working directory: <vault state>/runs/<capture_id>/attempt-1; prompt on stdin; timeout ${EXTRACT_TIMEOUT:-900}s; inline limit ${EXTRACT_INLINE_MAX_BYTES:-400000} bytes)"
