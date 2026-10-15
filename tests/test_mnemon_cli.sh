@@ -39,11 +39,28 @@ run "$MNEMON"
 assert_eq "$rc" "2" "no command exits 2"
 run "$MNEMON" --nope status
 assert_eq "$rc" "2" "unknown global option exits 2"
-for c in ingest scan monitor; do
+for c in scan monitor; do
   run "$MNEMON" "$c"
   assert_eq "$rc" "2" "$c exits 2"
   assert_contains "$out" "mnemon $c: not implemented yet (program phase 4)" "$c reports not implemented"
 done
+run "$MNEMON" ingest
+assert_eq "$rc" "2" "ingest without an inbox dir exits 2 (a usage error needs no config)"
+assert_contains "$out" "inbox-dir" "ingest names the missing argument"
+run "$MNEMON" ingest --help
+assert_eq "$rc" "0" "ingest --help exits 0 without a config"
+assert_contains "$out" "--max-attempts" "ingest --help documents its options"
+if [[ -f "$MNEMON_ROOT/bin/fence-probe.sh" ]]; then
+  echo "  ○ skipped: bin/fence-probe.sh is present (the real probe is never run by this suite)"
+else
+  run "$MNEMON" fence-probe
+  assert_eq "$rc" "2" "fence-probe without bin/fence-probe.sh exits 2"
+  assert_contains "$out" "mnemon fence-probe: bin/fence-probe.sh not present in this engine" "...with the message"
+fi
+run "$MNEMON" help
+assert_contains "$out" "ingest <inbox-dir>" "help lists ingest"
+assert_contains "$out" "fence-probe" "help lists fence-probe"
+assert_contains "$out" "scan | monitor             Reserved" "help keeps scan and monitor reserved"
 run "$MNEMON" version
 assert_eq "$rc" "0" "version exits 0"
 assert_contains "$out" "mnemon " "version prints the name"
@@ -337,7 +354,7 @@ assert_contains "$out" "ok state — $XDG_STATE_HOME/mnemon/alpha (absent, paren
 mkdir -p "$XDG_STATE_HOME/mnemon/alpha"
 run "$MNEMON" doctor
 assert_contains "$out" "ok state — $XDG_STATE_HOME/mnemon/alpha" "doctor: ok state when the dir exists"
-assert_not_contains "$out" "(absent" "...without the absent note"
+assert_not_contains "$out" "ok state — $XDG_STATE_HOME/mnemon/alpha (absent" "...without the absent note"
 rm -rf "$XDG_STATE_HOME"
 assert_contains "$out" "warn engine — MNEMON_HOME not set" "doctor: warn engine without MNEMON_HOME"
 assert_contains "$out" "ok writer — writer_host not set" "doctor: ok writer when unset"
@@ -479,6 +496,118 @@ assert_contains "$out" "ok engine-lock — none ($LOCK)" "no lock: doctor ok"
 run "$MNEMON" help
 assert_eq "$rc" "0" "no lock: help exits 0 again"
 
+# --- doctor: the capture ledger (capture contracts §7) — fence, vault-state, vault-lock, captures, ingest ---
+echo "--- doctor: fence ---"
+# fence — a stub claude with --version / --help variants and a probe record (observational)
+FSTUB="$TEST_TMPDIR/fencestub"; mkdir -p "$FSTUB"
+make_claude() {  # make_claude <--version line> <--help text>
+  printf '#!/bin/sh\ncase "$1" in --version) echo "%s" ;; --help) echo "%s" ;; esac\nexit 0\n' "$1" "$2" > "$FSTUB/claude"
+  chmod +x "$FSTUB/claude"
+}
+PROBES="$XDG_STATE_HOME/mnemon/fence-probes.json"
+mkdir -p "$(dirname "$PROBES")"
+rm -f "$PROBES"
+make_claude "2.1.300 (Claude Code)" "Options: --restricted  --tools <list>"
+run env PATH="$FSTUB:$PATH" "$MNEMON" doctor
+assert_contains "$out" "warn fence — claude 2.1.300 has no probe record; run: mnemon fence-probe" "doctor: fence warns when no probe record exists for the running version"
+printf '{"2.1.300": {"pass": true, "date": "2026-10-15", "probes": {}}}\n' > "$PROBES"
+run env PATH="$FSTUB:$PATH" "$MNEMON" doctor
+assert_contains "$out" "ok fence — claude 2.1.300, --restricted available, probed 2026-10-15" "doctor: fence ok with a pass record for the exact version"
+printf '{"2.1.300 (Claude Code)": {"pass": true, "date": "2026-10-16", "probes": {}}}\n' > "$PROBES"
+run env PATH="$FSTUB:$PATH" "$MNEMON" doctor
+assert_contains "$out" "ok fence — claude 2.1.300, --restricted available, probed 2026-10-16" "doctor: a record keyed by the full --version line counts too"
+printf '{"2.1.300": {"pass": false, "date": "2026-10-15", "probes": {}}}\n' > "$PROBES"
+run env PATH="$FSTUB:$PATH" "$MNEMON" doctor
+assert_contains "$out" "warn fence — claude 2.1.300 failed its fence probe on 2026-10-15; run: mnemon fence-probe" "doctor: a failed probe record warns"
+printf '{"2.1.299": {"pass": true, "date": "2026-10-15", "probes": {}}}\n' > "$PROBES"
+run env PATH="$FSTUB:$PATH" "$MNEMON" doctor
+assert_contains "$out" "warn fence — claude 2.1.300 has no probe record; run: mnemon fence-probe" "doctor: a record for another version does not count"
+make_claude "2.1.200 (Claude Code)" "Options: --tools <list>"
+run env PATH="$FSTUB:$PATH" "$MNEMON" doctor
+assert_eq "$rc" "1" "doctor fails when claude lacks --restricted"
+assert_contains "$out" "fail fence — claude 2.1.200 lacks --restricted (>= 2.1.296 required)" "doctor: fence fails without --restricted"
+make_claude "" ""
+run env PATH="$FSTUB:$PATH" "$MNEMON" doctor
+assert_contains "$out" "warn fence — claude --version printed no version token" "doctor: a claude that prints no version warns, never fails"
+if env PATH=/usr/bin:/bin sh -c 'command -v claude' >/dev/null 2>&1; then
+  echo "  ○ skipped fence-without-claude: claude is on /usr/bin:/bin"
+else
+  run env PATH="/usr/bin:/bin" "$MNEMON" doctor
+  assert_contains "$out" "warn fence — claude not on PATH (see deps)" "doctor: fence warns (deps fails) when claude is missing"
+fi
+rm -f "$PROBES"
+
+echo "--- doctor: vault-state, vault-lock ---"
+# D6: <XDG_STATE_HOME>/mnemon/vaults/<sha256(physical vault path)[:16]>
+VSTATE_A="$(python3 -c 'import hashlib, os, sys; print(os.path.join(os.environ["XDG_STATE_HOME"], "mnemon", "vaults", hashlib.sha256(os.path.realpath(sys.argv[1]).encode("utf-8")).hexdigest()[:16]))' "$VAULT_A")"
+run "$MNEMON" doctor
+assert_contains "$out" "ok vault-state — $VSTATE_A (absent, parent writable)" "doctor: vault-state ok when absent and creatable"
+[[ -e "$VSTATE_A" ]] && fail "doctor creates no vault state dir" "created" || pass "doctor creates no vault state dir"
+assert_contains "$out" "ok vault-lock — free (no $VSTATE_A/lock yet)" "doctor: vault-lock free when no lock file exists"
+[[ -e "$VSTATE_A/lock" ]] && fail "doctor creates no lock file" "created" || pass "doctor creates no lock file"
+assert_contains "$out" "ok captures — none (no $VSTATE_A/captures yet)" "doctor: captures none without a ledger"
+assert_contains "$out" "ok ingest — none (no $VSTATE_A/ingest yet)" "doctor: ingest none without inbox state"
+mkdir -p "$VSTATE_A" && chmod 0700 "$VSTATE_A"
+run "$MNEMON" doctor
+assert_contains "$out" "ok vault-state — $VSTATE_A" "doctor: vault-state ok when present with mode 0700"
+assert_not_contains "$out" "vault-state — $VSTATE_A (absent" "...without the absent note"
+chmod 0755 "$VSTATE_A"
+run "$MNEMON" doctor
+assert_contains "$out" "warn vault-state — $VSTATE_A mode 0755, expected 0700" "doctor: vault-state warns on a loose mode"
+chmod 0700 "$VSTATE_A"
+touch "$VSTATE_A/lock"
+run "$MNEMON" doctor
+assert_contains "$out" "ok vault-lock — free ($VSTATE_A/lock)" "doctor: vault-lock free when the file exists unlocked"
+python3 - "$VSTATE_A/lock" <<'PY' &
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR)
+fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+time.sleep(30)
+PY
+HOLDER=$!
+sleep 0.5
+run "$MNEMON" doctor
+assert_contains "$out" "warn vault-lock — held ($VSTATE_A/lock) — a capture or an ingest pass is running" "doctor: vault-lock held while another process holds flock"
+assert_eq "$(printf '%s\n' "$out" | grep -c '^fail vault-lock' || true)" "0" "...and a held vault lock is a warning, not a failure"
+kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null || true
+run "$MNEMON" doctor
+assert_contains "$out" "ok vault-lock — free ($VSTATE_A/lock)" "doctor: vault-lock free again once released"
+
+echo "--- doctor: captures, ingest ---"
+mkdir -p "$VSTATE_A/captures" "$VAULT_A/Sources/2026-10-15_aaaaaaaa" "$VAULT_A/Sources/2026-10-15_bbbbbbbb"
+printf -- '---\ntype: source\n---\nbody\n' > "$VAULT_A/Sources/2026-10-15_aaaaaaaa/source.md"
+receipt() { printf '{"schema":"mnemon-capture-receipt/1","capture_id":"%s","state":"%s","revision":%s}\n' "$1" "$2" "$3" > "$VSTATE_A/captures/$1.json"; }
+receipt c-ok extracted '"2026-10-15_aaaaaaaa"'
+run "$MNEMON" doctor
+assert_contains "$out" "ok captures — 1 receipt(s), none failed" "doctor: captures ok with a complete receipt whose files exist"
+receipt c-failed failed null
+receipt c-xfailed extract-failed '"2026-10-15_aaaaaaaa"'
+receipt c-gone source-published '"2026-10-15_zzzzzzzz"'
+receipt c-nosrc extracted '"2026-10-15_bbbbbbbb"'
+printf 'not a receipt\n' > "$VSTATE_A/captures/junk.json"
+run "$MNEMON" doctor
+assert_contains "$out" "warn captures — 2 failed/extract-failed receipt(s) — finish with: mnemon add --resume c-failed; 2 receipt(s) point at missing files; 1 unreadable receipt(s)" "doctor: captures warns about failed receipts (with the --resume hint), missing files and unreadable receipts"
+assert_eq "$(printf '%s\n' "$out" | grep -c '^fail captures' || true)" "0" "...as a warning, never a failure"
+rm -rf "$VSTATE_A/captures" "$VAULT_A/Sources/2026-10-15_aaaaaaaa" "$VAULT_A/Sources/2026-10-15_bbbbbbbb"
+IRES="$VSTATE_A/ingest/abcd1234/results"
+mkdir -p "$IRES"
+printf '{"inbox": "/srv/inbox-a", "instance": "alpha"}\n' > "$VSTATE_A/ingest/abcd1234/inbox.json"
+result() { printf '{"schema":"mnemon-ingest-result/1","envelope_id":"%s","state":"%s"}\n' "$1" "$2" > "$IRES/$1.json"; }
+result p:1 captured
+run "$MNEMON" doctor
+assert_contains "$out" "ok ingest — 1 result(s), nothing pending" "doctor: ingest ok when every result is settled"
+result p:2 failed; result p:3 failed; result p:4 exhausted; result p:5 incomplete; result p:6 deferred; result p:7 quarantined
+run "$MNEMON" doctor
+assert_contains "$out" "warn ingest — /srv/inbox-a: failed 2, exhausted 1, incomplete 1, deferred 1" "doctor: ingest warns with per-inbox counts, naming the inbox from inbox.json"
+mkdir -p "$VSTATE_A/ingest/ef012345/results"
+printf '{"schema":"mnemon-ingest-result/1","envelope_id":"q:1","state":"deferred"}\n' > "$VSTATE_A/ingest/ef012345/results/q:1.json"
+run "$MNEMON" doctor
+assert_contains "$out" "; ef012345: deferred 1" "doctor: an inbox without inbox.json is named by its key"
+run "$MNEMON" doctor --json
+names=$(printf '%s' "$out" | jget '" ".join(c["name"] for c in d["checks"])')
+assert_contains "$names" "engine-lock fence writer pending-writes vault-state vault-lock captures ingest" "doctor --json lists the ledger checks after the existing ones"
+rm -rf "$VSTATE_A"
+
 # --- subcommand wiring ---
 echo "--- subcommands ---"
 run "$MNEMON" status
@@ -511,6 +640,56 @@ assert_eq "$rc" "2" "triage-urls.py without --vault is an error (no hardcoded va
 run "$MNEMON" --instance nosuch reindex
 assert_eq "$rc" "2" "config-dependent subcommand fails with the loader's status (2: missing instance)"
 assert_contains "$out" "instances/nosuch.yaml" "...naming the missing instance file"
+run "$MNEMON" --instance nosuch ingest "$TEST_TMPDIR"
+assert_eq "$rc" "2" "ingest with a missing instance fails with the loader's status"
+
+# --- dispatch: add under bin/vault-lock.py, fence-probe, ingest (capture contracts §7) ---
+# A copy of the dispatcher next to stub scripts: the gateway prints its argv, vault-lock.py
+# records that it ran and execs its command, fence-probe.sh and mnemon-ingest.py echo.
+echo "--- dispatch: vault-lock.py, fence-probe, ingest ---"
+ENG="$TEST_TMPDIR/eng-copy"
+mkdir -p "$ENG/bin"
+cp "$MNEMON_ROOT/bin/mnemon" "$MNEMON_ROOT/bin/mnemon-config.sh" "$ENG/bin/"
+printf '#!/bin/sh\necho "gateway-stub: $*"\nexit 0\n' > "$ENG/bin/knowledge-gateway.sh"
+chmod +x "$ENG/bin/knowledge-gateway.sh"
+run "$ENG/bin/mnemon" add --url https://example.com/a
+assert_eq "$rc" "0" "add without bin/vault-lock.py falls back to the direct exec"
+assert_contains "$out" "mnemon add: bin/vault-lock.py not present in this engine — running the gateway without the vault lock" "...with a stderr note"
+assert_contains "$out" "gateway-stub: source-add --url https://example.com/a" "...and the gateway runs with the arguments"
+run "$ENG/bin/mnemon" add --url https://example.com/a --dry-run
+assert_not_contains "$out" "not present" "add --dry-run: no wrapper, no note (a dry run takes no lock)"
+assert_contains "$out" "gateway-stub: source-add --url https://example.com/a --dry-run" "...straight to the gateway"
+cat > "$ENG/bin/vault-lock.py" <<'PY'
+import os, sys
+args = sys.argv[1:]
+sep = args.index("--")
+with open(os.environ["VL_LOG"], "a", encoding="utf-8") as fh:
+    fh.write(" ".join(args[:sep]) + "\n")
+os.execv(args[sep + 1], args[sep + 1:])
+PY
+VL_LOG="$TEST_TMPDIR/vault-lock.log"
+run env VL_LOG="$VL_LOG" "$ENG/bin/mnemon" add --url https://example.com/b --title T
+assert_eq "$rc" "0" "add with bin/vault-lock.py present exits 0"
+assert_eq "$(cat "$VL_LOG")" "--vault $VAULT_A" "add runs python3 bin/vault-lock.py --vault <vault> -- <gateway> source-add …"
+assert_contains "$out" "gateway-stub: source-add --url https://example.com/b --title T" "...which execs the gateway with the same arguments"
+assert_not_contains "$out" "not present" "...and prints no fallback note"
+run env VL_LOG="$VL_LOG" "$ENG/bin/mnemon" --instance beta add --url https://example.com/b2
+assert_eq "$(tail -1 "$VL_LOG")" "--vault $VAULT_B" "add locks the selected instance's vault"
+run env VL_LOG="$VL_LOG" "$ENG/bin/mnemon" add --url https://example.com/c --dry-run
+assert_eq "$(grep -c . "$VL_LOG")" "2" "add --dry-run bypasses vault-lock.py"
+assert_contains "$out" "gateway-stub: source-add --url https://example.com/c --dry-run" "...and reaches the gateway directly"
+printf '#!/bin/sh\necho "fence-probe-stub: $*"\nexit 0\n' > "$ENG/bin/fence-probe.sh"
+chmod +x "$ENG/bin/fence-probe.sh"
+run "$ENG/bin/mnemon" fence-probe --quick
+assert_eq "$rc" "0" "fence-probe with bin/fence-probe.sh present execs it"
+assert_contains "$out" "fence-probe-stub: --quick" "...passing its arguments"
+printf 'import os, sys\nprint("ingest-stub:", os.environ.get("MNEMON_INSTANCE"), os.environ.get("MNEMON_CONFIG") == os.environ.get("MNEMON_CONFIG_FILE"), sys.argv[1:])\n' > "$ENG/bin/mnemon-ingest.py"
+run "$ENG/bin/mnemon" --instance beta ingest /some/inbox --limit 2
+assert_eq "$rc" "0" "ingest resolves the instance and execs bin/mnemon-ingest.py"
+assert_contains "$out" "ingest-stub: beta True ['/some/inbox', '--limit', '2']" "...with the resolved pair exported and the arguments passed through"
+run "$ENG/bin/mnemon" ingest /some/inbox --instance beta
+assert_eq "$rc" "2" "ingest refuses a selector after the command"
+assert_contains "$out" "--instance belongs before the command" "...with the hint"
 
 # --- release (temp dev repo + temp release worktree + temp bare origin) ---
 echo "--- release ---"
