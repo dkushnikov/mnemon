@@ -1,7 +1,9 @@
 {
  "_notes": [
-  "Scenario → what a stub gateway returns (exit, stdout lines) and the ingest result it must produce.",
-  "`attempt_consumed` false means attempts stays unchanged and the item is `waiting`."
+  "Scenario → what a stub gateway returns (exit code, stdout lines, optional stderr/sleep) and the ingest",
+  "result it must produce. `attempt_consumed` false means attempts stays unchanged and the item is `waiting`.",
+  "<envelope_id> in stdout is substituted per envelope. `default_scenario_by_case` drives the stub for the",
+  "contract fixtures; tests may override per case."
  ],
  "scenarios": {
   "extracted": {
@@ -20,6 +22,24 @@
    "state": "captured",
    "duplicate": false,
    "revision": "2026-10-15_aaaaaaaa",
+   "attempt_consumed": true
+  },
+  "extracted-recapture": {
+   "exit": 0,
+   "stdout": [
+    "RESULT:capture_id=<envelope_id>",
+    "RESULT:revision=2026-10-15_aaaaaaaa-2",
+    "RESULT:path=Sources/2026-10-15_aaaaaaaa-2/",
+    "RESULT:status=extracted",
+    "RESULT:title=Plain T",
+    "RESULT:source_sha256=252e502db2c449b2f59472fde3e9c35bae976c1902b8a1394f783c95fed49dcb",
+    "RESULT:extract=ok",
+    "RESULT:error_class=",
+    "RESULT:retryable="
+   ],
+   "state": "captured",
+   "duplicate": false,
+   "revision": "2026-10-15_aaaaaaaa-2",
    "attempt_consumed": true
   },
   "duplicate": {
@@ -86,11 +106,26 @@
    "retryable": false,
    "attempt_consumed": true
   },
+  "exit4-malformed": {
+   "exit": 4,
+   "stdout": [
+    "something went wrong"
+   ],
+   "state": "failed",
+   "error_class": "malformed-result",
+   "retryable": true,
+   "attempt_consumed": true
+  },
   "exit1-fetch": {
    "exit": 1,
    "stdout": [
     "RESULT:capture_id=<envelope_id>",
+    "RESULT:revision=",
+    "RESULT:path=",
     "RESULT:status=failed",
+    "RESULT:title=",
+    "RESULT:source_sha256=",
+    "RESULT:extract=none",
     "RESULT:error_class=fetch",
     "RESULT:retryable=true"
    ],
@@ -103,12 +138,35 @@
    "exit": 1,
    "stdout": [
     "RESULT:capture_id=<envelope_id>",
+    "RESULT:revision=",
+    "RESULT:path=",
     "RESULT:status=failed",
+    "RESULT:title=",
+    "RESULT:source_sha256=",
+    "RESULT:extract=none",
     "RESULT:error_class=unsupported",
     "RESULT:retryable=false"
    ],
    "state": "failed",
    "error_class": "unsupported",
+   "retryable": false,
+   "attempt_consumed": true
+  },
+  "exit1-archive-exists": {
+   "exit": 1,
+   "stdout": [
+    "RESULT:capture_id=<envelope_id>",
+    "RESULT:revision=",
+    "RESULT:path=",
+    "RESULT:status=failed",
+    "RESULT:title=",
+    "RESULT:source_sha256=",
+    "RESULT:extract=none",
+    "RESULT:error_class=archive-exists",
+    "RESULT:retryable=false"
+   ],
+   "state": "failed",
+   "error_class": "archive-exists",
    "retryable": false,
    "attempt_consumed": true
   },
@@ -135,15 +193,6 @@
    "error_class": "locked",
    "attempt_consumed": false
   },
-  "timeout": {
-   "exit": null,
-   "sleep": 5,
-   "stdout": [],
-   "state": "failed",
-   "error_class": "timeout",
-   "retryable": true,
-   "attempt_consumed": true
-  },
   "other-exit": {
    "exit": 9,
    "stdout": [],
@@ -161,17 +210,18 @@
   "file-pdf": "extracted",
   "file-origin-audio": "exit4-transient",
   "context-undeclared": "exit2-contract",
-  "text-plain~2": "extracted"
+  "text-plain~2": "extracted-recapture"
  },
  "expected_without_gateway": {
   "text-origin-url-invalid": "failed/invalid-request",
   "none-no-url": "needs_input",
   "wrong-instance": "other-instance",
   "broken-schema": "quarantined",
-  "conflict-copy": "quarantined",
+  "conflict-copy": "quarantined/conflict-copy",
   "path-escape": "quarantined",
   "sha-mismatch": "quarantined/payload-mismatch",
   "bookmark": "unsupported",
-  "incomplete": "quarantined"
+  "incomplete": "quarantined",
+  "text-plain~10": "waiting/predecessor-pending"
  }
 }

@@ -1,11 +1,12 @@
 {
  "_notes": [
-  "argv = arguments after `mnemon add`; placeholders: <envelope_id>, <fidelity> (the envelope's fidelity),",
-  "<context> (the resolved context: request.context or the instance default `personal`),",
-  "<snapshot:REL> (absolute path of the payload snapshot under the ingest state dir),",
-  "<revision:NAME> (the `revision` recorded in NAME's result record).",
-  "Optional flags appear only when the request field is non-empty, in the order: --title --author --intent --source-type.",
-  "The order of the fixed part is normative; tests compare argv as lists."
+  "argv = the arguments after `mnemon add`; the order is normative and tests compare lists.",
+  "Placeholders: <envelope_id>; <provenance> = <ingest state>/payloads/<envelope_id>/provenance.json;",
+  "<snapshot:REL> = absolute path of the payload snapshot under <ingest state>/payloads/<envelope_id>/;",
+  "<revision:NAME> = the `revision` recorded in NAME's result record.",
+  "`--context` appears only when request.context is set; optional metadata appears only when non-empty,",
+  "in the order --title --author --intent --source-type; `--recapture --supersedes` comes last.",
+  "Envelopes absent from `cases` never reach the gateway (see gateway-outcomes.json expected_without_gateway)."
  ],
  "cases": {
   "text-plain": {
@@ -19,9 +20,11 @@
     "--import-ref",
     "<envelope_id>",
     "--producer-fidelity",
-    "<fidelity>",
+    "exact",
+    "--provenance-file",
+    "<provenance>",
     "--context",
-    "<context>",
+    "personal",
     "--title",
     "Plain T",
     "--author",
@@ -29,7 +32,6 @@
     "--intent",
     "why"
    ],
-   "context": "personal",
    "stdin_sha256": "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
    "stdin_bytes": 14
   },
@@ -46,11 +48,10 @@
     "--import-ref",
     "<envelope_id>",
     "--producer-fidelity",
-    "<fidelity>",
-    "--context",
-    "<context>"
+    "exact",
+    "--provenance-file",
+    "<provenance>"
    ],
-   "context": "personal",
    "stdin_sha256": "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
    "stdin_bytes": 14
   },
@@ -65,13 +66,12 @@
     "--import-ref",
     "<envelope_id>",
     "--producer-fidelity",
-    "<fidelity>",
-    "--context",
-    "<context>",
+    "url-only",
+    "--provenance-file",
+    "<provenance>",
     "--intent",
     "read later"
    ],
-   "context": "personal",
    "stdin_sha256": null,
    "stdin_bytes": 0
   },
@@ -88,13 +88,12 @@
     "--import-ref",
     "<envelope_id>",
     "--producer-fidelity",
-    "<fidelity>",
-    "--context",
-    "<context>",
+    "url-only",
+    "--provenance-file",
+    "<provenance>",
     "--source-type",
     "article"
    ],
-   "context": "personal",
    "stdin_sha256": null,
    "stdin_bytes": 0
   },
@@ -109,13 +108,12 @@
     "--import-ref",
     "<envelope_id>",
     "--producer-fidelity",
-    "<fidelity>",
-    "--context",
-    "<context>",
+    "exact",
+    "--provenance-file",
+    "<provenance>",
     "--title",
     "Paper"
    ],
-   "context": "personal",
    "stdin_sha256": null,
    "stdin_bytes": 0
   },
@@ -125,8 +123,6 @@
     "audio",
     "--file",
     "<snapshot:attachments/file-origin-audio/a.wav>",
-    "--url",
-    "https://example.com/ep.wav",
     "--capture-id",
     "<envelope_id>",
     "--import-source",
@@ -134,11 +130,10 @@
     "--import-ref",
     "<envelope_id>",
     "--producer-fidelity",
-    "<fidelity>",
-    "--context",
-    "<context>"
+    "exact",
+    "--provenance-file",
+    "<provenance>"
    ],
-   "context": "personal",
    "stdin_sha256": null,
    "stdin_bytes": 0
   },
@@ -153,11 +148,12 @@
     "--import-ref",
     "<envelope_id>",
     "--producer-fidelity",
-    "<fidelity>",
+    "exact",
+    "--provenance-file",
+    "<provenance>",
     "--context",
-    "<context>"
+    "mc"
    ],
-   "context": "mc",
    "stdin_sha256": "35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
    "stdin_bytes": 14
   },
@@ -172,14 +168,15 @@
     "--import-ref",
     "<envelope_id>",
     "--producer-fidelity",
-    "<fidelity>",
+    "exact",
+    "--provenance-file",
+    "<provenance>",
     "--context",
-    "<context>",
+    "personal",
     "--recapture",
     "--supersedes",
     "<revision:text-plain>"
    ],
-   "context": "personal",
    "stdin_sha256": "252e502db2c449b2f59472fde3e9c35bae976c1902b8a1394f783c95fed49dcb",
    "stdin_bytes": 21
   }

@@ -1,4 +1,4 @@
-# Contract fixtures (spec `docs/specs/2026-10-15-capture-contracts.md` §5.3–5.4)
+# Contract fixtures (spec `docs/specs/2026-10-15-capture-contracts.md` §5.3–5.5)
 
 Shared by the gateway suite and the ingest suite so the two halves cannot drift:
 
@@ -10,4 +10,5 @@ Shared by the gateway suite and the ingest suite so the two halves cannot drift:
   must produce; `default_scenario_by_case` maps envelopes to scenarios for the stub gateway;
   `expected_without_gateway` lists envelopes the consumer settles before calling the gateway.
 
-Regenerate only by editing the generator kept next to the spec history (hashes are computed, not typed).
+Regenerate with `python3 tests/fixtures/contracts/generate.py` after editing the generator — never edit the
+JSON by hand (hashes are computed). The hygiene suite checks the committed files match the generator.

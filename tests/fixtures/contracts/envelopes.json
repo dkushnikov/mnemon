@@ -62,7 +62,7 @@
     "title": null,
     "author": null,
     "intent": null,
-    "context": "personal",
+    "context": null,
     "source_type": null,
     "tier": "full"
    },
@@ -81,7 +81,7 @@
    "complete": true
   },
   "payload_files": {},
-  "note": "text + provenance url → --origin text --url; the gateway never fetches"
+  "note": "text + provenance url, no context → --origin text --url; no --context (the gateway's resolver decides)"
  },
  {
   "name": "text-origin-url-invalid",
@@ -123,7 +123,7 @@
    "complete": true
   },
   "payload_files": {},
-  "note": "text payload with origin url → invalid-request, permanent"
+  "note": "text payload with origin url → invalid-request, permanent, no gateway call"
  },
  {
   "name": "url-auto",
@@ -207,7 +207,7 @@
    "complete": true
   },
   "payload_files": {},
-  "note": "kind none + origin url → --origin url --url --source-type"
+  "note": "kind none + origin url → --origin url --url … --source-type"
  },
  {
   "name": "none-no-url",
@@ -249,7 +249,7 @@
    "complete": true
   },
   "payload_files": {},
-  "note": "nothing to capture → needs_input"
+  "note": "schema-valid envelope with nothing to capture → needs_input, no gateway call"
  },
  {
   "name": "file-pdf",
@@ -268,7 +268,7 @@
    "supersedes": null,
    "request": {
     "origin": null,
-    "url": null,
+    "url": "https://example.com/paper.pdf",
     "title": "Paper",
     "author": null,
     "intent": null,
@@ -293,7 +293,7 @@
   "payload_files": {
    "attachments/file-pdf/paper.pdf": "255044462d312e370a25e2e3cfd30a312030206f626a203c3c202f54797065202f436174616c6f67203e3e20656e646f626a0a747261696c6572203c3c202f526f6f74203120302052203e3e0a2525454f460a"
   },
-  "note": "file payload, origin null → --file <snapshot>; origin auto by the gateway"
+  "note": "file payload, origin null, provenance url → --file <snapshot> and NO --url (the file is authoritative)"
  },
  {
   "name": "file-origin-audio",
@@ -337,7 +337,7 @@
   "payload_files": {
    "attachments/file-origin-audio/a.wav": "524946462400000057415645666d7420000000000000000000000000000000000000000000000000"
   },
-  "note": "file payload + origin audio → --origin audio --file <snapshot> --url (provenance)"
+  "note": "file payload + origin audio → --origin audio --file <snapshot>, NO --url"
  },
  {
   "name": "wrong-instance",
@@ -631,7 +631,7 @@
    "complete": false
   },
   "payload_files": {},
-  "note": "complete:false → quarantined"
+  "note": "complete:false → quarantined (schema)"
  },
  {
   "name": "context-undeclared",
@@ -673,7 +673,7 @@
    "complete": true
   },
   "payload_files": {},
-  "note": "gateway exit 2 → failed/contract, permanent"
+  "note": "gateway exit 2 (context not in charter) → failed/contract, permanent"
  },
  {
   "name": "text-plain~2",
@@ -715,6 +715,48 @@
    "complete": true
   },
   "payload_files": {},
-  "note": "re-capture → --recapture --supersedes <revision:text-plain>"
+  "note": "re-capture → --recapture --supersedes <revision:text-plain>; predecessor-pending while text-plain has no result"
+ },
+ {
+  "name": "text-plain~10",
+  "file": "test-producer:text-plain~10.json",
+  "envelope": {
+   "schema": "mnemon-envelope/1",
+   "envelope_id": "test-producer:text-plain~10",
+   "producer": {
+    "id": "test-producer",
+    "kind": "fixture",
+    "host": "node-a",
+    "version": "1"
+   },
+   "instance": "t",
+   "created_at": "2026-10-15T12:00:00+00:00",
+   "supersedes": "test-producer:text-plain~9",
+   "request": {
+    "origin": null,
+    "url": null,
+    "title": null,
+    "author": null,
+    "intent": null,
+    "context": "personal",
+    "source_type": null,
+    "tier": "full"
+   },
+   "payload": {
+    "kind": "text",
+    "text": "hello\r\n\nworld\nedited\nagain\n",
+    "path": null,
+    "media_type": "text/plain",
+    "sha256": "5233639d6be69a5cca80eac24f441ed0d88c5a4d373b65e90ee2b2e445fd0c10",
+    "bytes": 27
+   },
+   "fidelity": "exact",
+   "provenance": {
+    "fixture": "text-plain~10"
+   },
+   "complete": true
+  },
+  "payload_files": {},
+  "note": "sorts after ~2 (numeric suffix order); its predecessor ~9 never appears → predecessor-pending, supersedes-unknown after 24 h"
  }
 ]
