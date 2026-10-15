@@ -3,7 +3,8 @@
   "Scenario → what a stub gateway returns (exit code, stdout lines, optional stderr/sleep) and the ingest",
   "result it must produce. `attempt_consumed` false = the attempt is refunded and the stored state is `deferred`",
   "with a deadline_at. <envelope_id> in stdout is substituted per envelope. `default_scenario_by_case` drives",
-  "the stub for the contract fixtures; tests may override per case."
+  "the stub for the contract fixtures; tests may override per case. A duplicate reports revision, path and the",
+  "source hash of the existing folder, and the ingest records that revision (the predecessor rule needs it)."
  ],
  "scenarios": {
   "extracted": {
@@ -49,14 +50,15 @@
     "RESULT:revision=2026-10-12_aaaaaaaa",
     "RESULT:path=Sources/2026-10-12_aaaaaaaa/",
     "RESULT:status=skipped-duplicate",
-    "RESULT:title=",
-    "RESULT:source_sha256=",
+    "RESULT:title=Plain T",
+    "RESULT:source_sha256=35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
     "RESULT:extract=ok",
     "RESULT:error_class=",
     "RESULT:retryable="
    ],
    "state": "captured",
    "duplicate": true,
+   "revision": "2026-10-12_aaaaaaaa",
    "attempt_consumed": true
   },
   "exit0-malformed": {
@@ -182,14 +184,15 @@
     "RESULT:title=",
     "RESULT:source_sha256=",
     "RESULT:extract=none",
-    "RESULT:error_class=evidence-mismatch",
+    "RESULT:error_class=evidence-missing",
     "RESULT:retryable=false"
    ],
    "state": "failed",
    "error_class": "integrity-error",
    "retryable": false,
    "revision": "2026-10-15_aaaaaaaa",
-   "attempt_consumed": true
+   "attempt_consumed": true,
+   "note": "source_sha256 is empty because the evidence could not be verified (missing); a mismatch reports the recomputed body hash"
   },
   "exit2-contract": {
    "exit": 2,
