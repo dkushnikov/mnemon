@@ -1,6 +1,6 @@
 # Extractor fence — run the gateway's `claude -p` with the least tools it needs
 
-**Status:** proposed · 2026-09-08 · owner: Dima (separate session) · scope: `bin/knowledge-gateway.sh`, `tests/test_gateway.sh`
+**Status:** proposed · 2026-09-08 · owner: maintainer (separate session) · scope: `bin/knowledge-gateway.sh`, `tests/test_gateway.sh`
 
 ## Resume prompt
 

@@ -27,7 +27,7 @@ revision_history:
 > 6. **Calibration loop** — override-tracking в `_claude/triage-overrides.jsonl`, future runs surface drift в header. Self-tuning per-domain bars over time.
 
 > [!implementation] Что строим
-> `~/Mnemon/bin/triage-urls.py` — standalone Python CLI с `evaluate` и `apply` subcommands. Reuses defuddle (Tier 2 fetch), `claude -p` (Tier 3 only), `knowledge-gateway.sh` (capture + bookmark execution).
+> `~/Code/mnemon/bin/triage-urls.py` — standalone Python CLI с `evaluate` и `apply` subcommands. Reuses defuddle (Tier 2 fetch), `claude -p` (Tier 3 only), `knowledge-gateway.sh` (capture + bookmark execution).
 > + Modify `knowledge-gateway.sh` to add `--source-type bookmark --skip-extract` path (~2h).
 > Effort: **~3-4 days** MVP (Tiers 1+2 + cluster + output doc + executor + calibration loop). Tier 3 LLM incremental.
 
@@ -111,7 +111,7 @@ Each subsequent triage run reads this log and surfaces drift patterns в header:
     → suggest moving mc/ai to medium-bar bottom (currently bookmark@3, consider capture@3)
 ```
 
-Drift suggestions are read-only — Dima decides whether to amend bar table. The system never auto-amends config.
+Drift suggestions are read-only — the maintainer decides whether to amend bar table. The system never auto-amends config.
 
 ### D3 — Tiered adaptive evaluation depth
 
@@ -140,7 +140,7 @@ Drift suggestions are read-only — Dima decides whether to amend bar table. The
   - Defuddle fetch failed AND URL pattern suggests substance
   - Cluster cardinality ambiguous (2-3 items, on borderline)
 - **Cap: 30 URLs per run** to bound cost; excess degrade to `needs-investigation` bucket in output
-- MVP ships without Tier 3 (Tier 2 makes confident verdict for "investigate" bucket; Dima manually reviews those)
+- MVP ships without Tier 3 (Tier 2 makes confident verdict for "investigate" bucket; the maintainer manually reviews those)
 
 **Estimated runtime for 101 URLs (MVP, no Tier 3):**
 - 35 auto-skip @ Tier 1: ~3 min
@@ -176,7 +176,7 @@ Drift suggestions are read-only — Dima decides whether to amend bar table. The
 
 **Apply subcommand:**
 ```bash
-~/Mnemon/bin/triage-urls.py apply [--vault PATH] [--dry-run]
+~/Code/mnemon/bin/triage-urls.py apply [--vault PATH] [--dry-run]
 ```
 
 Behavior:
@@ -278,12 +278,12 @@ triage_note: "<1-line Tier-2 verdict reasoning>"
 ## File touch surface
 
 **Created (Mnemon repo):**
-- `~/Mnemon/bin/triage-urls.py` (main script с `evaluate` + `apply` subcommands)
-- `~/Mnemon/templates/triage-prompt.md` (Tier 3 LLM template — incremental)
-- `~/Mnemon/docs/specs/2026-05-31-content-aware-url-triage.md` (this spec)
+- `~/Code/mnemon/bin/triage-urls.py` (main script с `evaluate` + `apply` subcommands)
+- `~/Code/mnemon/templates/triage-prompt.md` (Tier 3 LLM template — incremental)
+- `~/Code/mnemon/docs/specs/2026-05-31-content-aware-url-triage.md` (this spec)
 
 **Modified (Mnemon repo):**
-- `~/Mnemon/bin/knowledge-gateway.sh` (+ `--source-type bookmark --skip-extract` path, ~10-15 LoC)
+- `~/Code/mnemon/bin/knowledge-gateway.sh` (+ `--source-type bookmark --skip-extract` path, ~10-15 LoC)
 
 **Created/modified (vault `_claude/`):**
 
@@ -367,7 +367,7 @@ V2 spec, ready for review. v2 integrates Nestor council review + own engineering
 
 | Component | What we reuse |
 |---|---|
-| URL normalization | Algorithm from triage doc rebuild (strip tracking, lowercase). Refactor: extract to `~/Mnemon/bin/lib-url.py`, import in both `triage-urls.py` and (eventually) sourced into `knowledge-gateway.sh` to prevent parsing drift (Gemini stage-1 catch). |
+| URL normalization | Algorithm from triage doc rebuild (strip tracking, lowercase). Refactor: extract to `~/Code/mnemon/bin/lib-url.py`, import in both `triage-urls.py` and (eventually) sourced into `knowledge-gateway.sh` to prevent parsing drift (Gemini stage-1 catch). |
 | Knowledge dedup | Same source.md URL scan from `knowledge-reindex.py` |
 | Content fetch | `defuddle parse` (NEW dependency for triage; gateway uses WebFetch via claude — different path) |
 | LLM eval | `claude -p` subprocess (same pattern as gateway extract) — Tier 3 incremental |
@@ -376,7 +376,7 @@ V2 spec, ready for review. v2 integrates Nestor council review + own engineering
 
 ## Appendix C — v1 → v2 review history
 
-**v1 written:** 2026-05-31, ~3 hours, after brainstorming dialogue with Dima.
+**v1 written:** 2026-05-31, ~3 hours, after brainstorming dialogue with the maintainer.
 
 **Review process:** Nestor council via `pal.consensus` — deliberative mode, arch preset (Opus 4.7 + Gemini 3.1-pro + GPT-5.5-pro), all-neutral stances. Stage 1: 3 first-round answers. Stage 2: 3 parallel anonymised cross-critiques. Plus own engineering:architecture pass for session-aware qualifications.
 

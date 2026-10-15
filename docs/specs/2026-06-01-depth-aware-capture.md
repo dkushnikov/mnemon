@@ -8,7 +8,7 @@ sibling_spec: "[[2026-05-31-content-aware-url-triage]]"
 author: Atlas (Knowledge session 2026-06-01)
 revision_history:
   - "v1: initial design after brainstorming (Q1-Q3) + Atlas→Mnemon location correction"
-  - "v2: integrated VAST check + Review 1 (gpt-5.5-pro) + Nestor council (Opus 4.7 + Gemini 3.1-pro + GPT-5.5-pro, deliberative arch, stage-1 + stage-2 cross-critique, degraded 2/3 on stage-2). Three forks decided by Dima. See Appendix C."
+  - "v2: integrated VAST check + Review 1 (gpt-5.5-pro) + Nestor council (Opus 4.7 + Gemini 3.1-pro + GPT-5.5-pro, deliberative arch, stage-1 + stage-2 cross-critique, degraded 2/3 on stage-2). Three forks decided by the maintainer. See Appendix C."
 ---
 
 # Depth-Aware Capture — Design Spec (v2)
@@ -44,7 +44,7 @@ revision_history:
 > 6. **[Must-fix, был deferred] Cross-spec false-skip + injection-isolation.** triage Tier-2 зовёт probe перед confident `skip` на тонком/SPA. Fetched-контент — untrusted: instruction-isolation (fenced) на extract-шаге.
 
 > [!implementation] Что строим
-> `~/Mnemon/bin/kb-probe-deeper.py` (детерминированное обнаружение + same-entity confidence/evidence, JSON) · gateway preflight-ветка (probe→fetch→build composite→manifest, зеркало `--render`) · `lib-url.py` alias-нормализация + dedup-расширение · triage Tier-2 probe-хук (D6) · injection-isolation в extract-шаге. Reuse: defuddle, WebFetch, `render-url.sh`, `media-extract.py`(не трогаем).
+> `~/Code/mnemon/bin/kb-probe-deeper.py` (детерминированное обнаружение + same-entity confidence/evidence, JSON) · gateway preflight-ветка (probe→fetch→build composite→manifest, зеркало `--render`) · `lib-url.py` alias-нормализация + dedup-расширение · triage Tier-2 probe-хук (D6) · injection-isolation в extract-шаге. Reuse: defuddle, WebFetch, `render-url.sh`, `media-extract.py`(не трогаем).
 > **[FORK 2] Async background-enrichment — НЕ в v1** (escape hatch, см. Deferred).
 > Effort: **~3 дня** (вырос с 1.5-2 после council must-fixes: манифест, alias-dedup, triage-хук, security).
 
@@ -215,9 +215,9 @@ Rejected candidates: <url> (medium, no backlink). External refs (не свёрн
 ---
 
 ## File touch surface
-**Created (Mnemon):** `~/Mnemon/bin/kb-probe-deeper.py` · этот спек.
+**Created (Mnemon):** `~/Code/mnemon/bin/kb-probe-deeper.py` · этот спек.
 **Modified (Mnemon):** `knowledge-gateway.sh` (preflight-ветка + `--depth` + extract injection-isolation) · `lib-url.py` (alias+dedup) · `triage-urls.py` (Tier-2 probe-хук, D6a — кросс-спек).
-**Modified (mnemon-plugin):** `/source-add` skill (`--depth`, ask-on-ambiguous).
+**Modified (plugins/mnemon, formerly the mnemon-plugin repo):** `/source-add` skill (`--depth`, ask-on-ambiguous).
 **Cross-spec:** triage-спек получает поправку Tier-2 (D6a) — нужно синхронизировать оба спека.
 
 ## Deferred / out of scope
@@ -235,7 +235,7 @@ Rejected candidates: <url> (medium, no backlink). External refs (не свёрн
 ## Open / waiting
 - Same-entity `high`-порог — тюнить по false-fold rate (см. Vision-триггер b).
 - Объёмные капы — старт: ≤8k слов композит, byte-cap/цель TBD по факту.
-- Канонический `/source-add` skill (vault-local vs mnemon-plugin) — уточнить перед impl.
+- Канонический `/source-add` skill (vault-local vs plugins/mnemon) — уточнить перед impl.
 - `lib-url.py` — существует ли уже (triage-спек планировал его создать); если нет — создаём здесь.
 
 ## Status
@@ -250,7 +250,7 @@ v2 spec approved (Дима: «верю тебе»). Council confidence: high (Op
 - ✅ **D6a triage false-skip** — `triage-urls.py apply_depth_probe_boost`: probe на skip-boundary (substance≤2, thin) → high-conf → escalate skip→capture. `MNEMON_TRIAGE_DEPTH_PROBE=0` отключает.
 - ✅ **D6b injection-isolation** — fetched-контент помечен untrusted в extract-prompt.
 - ✅ Тесты: `tests/test_depth.sh` (lib_url, thin/SPA, D6a-gate, D4-dedup) PASS; gateway regression **69/0**.
-- ⬜ **Остаток (не блокирует прямой захват):** `/source-add` `--depth`/ask-on-ambiguous в mnemon-plugin repo · live-E2E gateway-capture (в dev пропущен, чтобы не плодить дубль openviking) · same-entity для GitLab/HF/arXiv (deferred, v1=GitHub) · exact commit_sha вместо ref в manifest (v2).
+- ⬜ **Остаток (не блокирует прямой захват):** `/source-add` `--depth`/ask-on-ambiguous в plugins/mnemon (ранее mnemon-plugin repo) · live-E2E gateway-capture (в dev пропущен, чтобы не плодить дубль openviking) · same-entity для GitLab/HF/arXiv (deferred, v1=GitHub) · exact commit_sha вместо ref в manifest (v2).
 
 ---
 
