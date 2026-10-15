@@ -100,7 +100,7 @@ Each skill runs the installed engine's dispatcher. From the shell, the same and 
 | `mnemon reindex` | Rebuild the vault's `index.md` from `Sources/` (not the qmd index) |
 | `mnemon triage` | Content-aware URL triage |
 | `mnemon audit` | Archive audit |
-| `mnemon init <name> --vault <path> [--archive <dir>] [--collection <name>] [--reader-context <path>] [--charter <path>] [--writer-host <host>] [--default]` | Create an instance |
+| `mnemon init <name> --vault <path> [--archive <dir>] [--collection <name>] [--search-provider grep\|qmd] [--reader-context <path> \| --reader-context-path <path>] [--charter <path>] [--writer-host <host>] [--default]` | Create an instance and scaffold its vault (never overwrites). `--reader-context` copies a profile into the vault, `--reader-context-path` references one in place; with neither, an existing `_meta/reader-context.md` or `reader-context.md` in the vault is used |
 | `mnemon doctor [--json]` | Check dependencies and instance health |
 | `mnemon config get <key> \| path \| list \| dump` | Inspect configuration |
 | `mnemon release [--dry-run] [--now] [--drain-timeout <s>] [--rollback <ref>]` | Maintainers: lock → drain → fast-forward `main` → `release` → smoke → push; `--rollback` resets the engine under the same lock |

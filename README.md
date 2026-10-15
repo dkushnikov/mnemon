@@ -97,6 +97,8 @@ Claude detects existing identity artifacts (from [Obsidian Seed](https://github.
 mnemon init personal --vault ~/path/to/vault --reader-context ~/path/to/existing/reader-context.md --default
 ```
 
+`--reader-context` copies the file into the vault; `--reader-context-path <path>` points the instance at it where it is. A vault that already contains `_meta/reader-context.md` or `reader-context.md` is picked up without either flag. `--search-provider qmd` declares the [QMD](https://github.com/tobi/qmd) index for the instance (default `grep`).
+
 Then from any Claude Code session:
 
 ```

@@ -145,6 +145,64 @@ assert_contains "$out" "Vault: $VAULT_ODD" "status names the odd vault"
 run "$MNEMON" --instance odd audit
 assert_eq "$rc" "0" "audit (python, via lib_config) resolves the odd vault"
 
+# A8: --search-provider, --reader-context-path, and an existing vault's own reader context
+echo "--- init: existing vault (A8) ---"
+run "$MNEMON" init sp --vault "$TEST_TMPDIR/vault-sp" --search-provider qmd --non-interactive
+assert_eq "$rc" "0" "init --search-provider qmd exits 0"
+assert_contains "$(cat "$CFG_DIR/instances/sp.yaml")" "search_provider: qmd" "--search-provider qmd is written bare (greppable)"
+run "$MNEMON" --instance sp config get search_provider
+assert_eq "$out" "qmd" "config get search_provider → qmd"
+run "$MNEMON" config get search_provider
+assert_eq "$out" "grep" "without the flag the search provider is grep"
+run "$MNEMON" init sp2 --vault "$TEST_TMPDIR/vault-sp2" --search-provider sqlite --non-interactive
+assert_eq "$rc" "2" "init rejects an unknown --search-provider"
+[[ -e "$TEST_TMPDIR/vault-sp2" ]] && fail "a rejected --search-provider scaffolds nothing" "vault-sp2 exists" || pass "a rejected --search-provider scaffolds nothing"
+
+printf '# profile kept elsewhere\n' > "$TEST_TMPDIR/elsewhere-rc.md"
+run "$MNEMON" init rp --vault "$TEST_TMPDIR/vault-rp" --reader-context-path "$TEST_TMPDIR/elsewhere-rc.md" --non-interactive
+assert_eq "$rc" "0" "init --reader-context-path exits 0"
+assert_contains "$out" "referenced in place, nothing copied" "--reader-context-path says it copies nothing"
+assert_contains "$(cat "$CFG_DIR/instances/rp.yaml")" "reader_context_path: \"$TEST_TMPDIR/elsewhere-rc.md\"" "reader_context_path points at the given file"
+[[ -e "$TEST_TMPDIR/vault-rp/reader-context.md" ]] && fail "--reader-context-path places no template in the vault" "exists" || pass "--reader-context-path places no template in the vault"
+run "$MNEMON" --instance rp config get reader_context_path
+assert_eq "$out" "$TEST_TMPDIR/elsewhere-rc.md" "config get reader_context_path → the referenced file"
+run "$MNEMON" --instance rp doctor
+assert_contains "$out" "ok reader-context — $TEST_TMPDIR/elsewhere-rc.md" "doctor finds the referenced reader context"
+run "$MNEMON" init rp2 --vault "$TEST_TMPDIR/vault-rp2" --reader-context-path "$TEST_TMPDIR/nope.md" --non-interactive
+assert_eq "$rc" "1" "init --reader-context-path refuses a missing file"
+assert_contains "$out" "no such file: $TEST_TMPDIR/nope.md" "...naming it"
+[[ -e "$TEST_TMPDIR/vault-rp2" ]] && fail "a missing --reader-context-path refuses before the scaffold" "exists" || pass "a missing --reader-context-path refuses before the scaffold"
+run "$MNEMON" init rp3 --vault "$TEST_TMPDIR/vault-rp3" --reader-context "$TEST_TMPDIR/rc.md" --reader-context-path "$TEST_TMPDIR/elsewhere-rc.md" --non-interactive
+assert_eq "$rc" "2" "--reader-context together with --reader-context-path is a usage error"
+assert_contains "$out" "exclude each other" "...and says so"
+
+# an existing vault with its own _meta/reader-context.md: pointed at, template not placed
+mkdir -p "$TEST_TMPDIR/vault-ex/_meta"
+printf '# existing meta profile\n' > "$TEST_TMPDIR/vault-ex/_meta/reader-context.md"
+run "$MNEMON" init ex --vault "$TEST_TMPDIR/vault-ex" --non-interactive
+assert_eq "$rc" "0" "init on an existing vault exits 0"
+assert_contains "$out" "existing _meta/reader-context.md (kept; template not placed)" "init reports the existing _meta/reader-context.md"
+assert_contains "$(cat "$CFG_DIR/instances/ex.yaml")" "reader_context_path: \"$TEST_TMPDIR/vault-ex/_meta/reader-context.md\"" "reader_context_path points at the existing _meta file"
+[[ -e "$TEST_TMPDIR/vault-ex/reader-context.md" ]] && fail "no template next to an existing _meta/reader-context.md" "exists" || pass "no template placed next to an existing _meta/reader-context.md"
+assert_eq "$(cat "$TEST_TMPDIR/vault-ex/_meta/reader-context.md")" "# existing meta profile" "the existing _meta profile is untouched"
+run "$MNEMON" --instance ex doctor
+assert_contains "$out" "ok reader-context — $TEST_TMPDIR/vault-ex/_meta/reader-context.md" "doctor finds the _meta reader context"
+# an existing vault with reader-context.md at its root: kept and pointed at
+mkdir -p "$TEST_TMPDIR/vault-ex2"
+printf '# existing root profile\n' > "$TEST_TMPDIR/vault-ex2/reader-context.md"
+run "$MNEMON" init ex2 --vault "$TEST_TMPDIR/vault-ex2" --non-interactive
+assert_eq "$rc" "0" "init on a vault with a root reader-context.md exits 0"
+assert_contains "$out" "existing reader-context.md (kept)" "init reports the existing root reader-context.md"
+assert_eq "$(cat "$TEST_TMPDIR/vault-ex2/reader-context.md")" "# existing root profile" "the existing root profile is untouched"
+run "$MNEMON" --instance ex2 config get reader_context_path
+assert_eq "$out" "$TEST_TMPDIR/vault-ex2/reader-context.md" "reader_context_path points at the existing root file"
+# an explicit --reader-context still copies, even next to a _meta profile
+run "$MNEMON" init ex3 --vault "$TEST_TMPDIR/vault-ex" --reader-context "$TEST_TMPDIR/rc.md" --non-interactive
+assert_eq "$rc" "0" "init --reader-context on a vault with a _meta profile exits 0"
+assert_eq "$(cat "$TEST_TMPDIR/vault-ex/reader-context.md")" "# my reader context" "--reader-context copies into the vault regardless of _meta/reader-context.md"
+run "$MNEMON" --instance ex3 config get reader_context_path
+assert_eq "$out" "$TEST_TMPDIR/vault-ex/reader-context.md" "...and reader_context_path points at the copy"
+
 # bad input
 run "$MNEMON" init adhoc --vault "$TEST_TMPDIR/vault-x" --non-interactive
 assert_eq "$rc" "1" "init adhoc is refused (reserved name)"
@@ -356,8 +414,7 @@ QSTUB="$TEST_TMPDIR/qmdstub"; mkdir -p "$QSTUB"
 QMD_LOG="$TEST_TMPDIR/qmd.log"
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n[ "$1 $2" = "collection list" ] && echo "kb-q /some/vault hybrid"\nexit 0\n' "$QMD_LOG" > "$QSTUB/qmd"
 chmod +x "$QSTUB/qmd"
-run "$MNEMON" init qinst --vault "$TEST_TMPDIR/vault-q" --collection kb-q --non-interactive
-sed -i '' 's/^search_provider: grep/search_provider: qmd/' "$CFG_DIR/instances/qinst.yaml"
+run "$MNEMON" init qinst --vault "$TEST_TMPDIR/vault-q" --collection kb-q --search-provider qmd --non-interactive
 QCACHE="$TEST_TMPDIR/cache"
 run env XDG_CACHE_HOME="$QCACHE" PATH="$QSTUB:$PATH" "$MNEMON" --instance qinst doctor
 assert_contains "$out" "ok qmd — $QSTUB/qmd" "doctor: ok qmd when search_provider is qmd and qmd is on PATH"

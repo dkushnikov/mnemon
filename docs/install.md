@@ -57,7 +57,9 @@ claude plugin marketplace add "$MNEMON_HOME"
 claude plugin install mnemon@mnemon
 ```
 
-Then build your reader profile: `cd <vault> && claude` and say "Follow mnemon-seed.md". If you already have a `reader-context.md`, pass `--reader-context <path>` to `mnemon init` instead.
+Then build your reader profile: `cd <vault> && claude` and say "Follow mnemon-seed.md". If you already have a `reader-context.md`, pass `--reader-context <path>` (copied into the vault) or `--reader-context-path <path>` (referenced where it is) to `mnemon init` instead.
+
+**An existing vault.** `mnemon init` never overwrites vault files. When the vault already holds `_meta/reader-context.md` or `reader-context.md`, `init` points `reader_context_path` at that file instead of placing the template (with neither reader flag given). `--search-provider grep|qmd` (default `grep`) declares the instance's search backend — `qmd` makes `mnemon add` refresh the qmd index after a capture and `mnemon doctor` require qmd (see Dependencies).
 
 Why a worktree rather than a second clone: one object store, `git -C ~/Code/mnemon worktree list` shows exactly which commit the engine runs, and `mnemon release` can fast-forward it in place. A plain clone of `release` works just as well (that is Variant B).
 
@@ -116,7 +118,7 @@ Bind a vault to its instance so Claude Code sessions started there never need `-
 { "env": { "MNEMON_INSTANCE": "work" } }
 ```
 
-Useful commands: `mnemon config list` (all instances), `mnemon config path` (the file in use), `mnemon config get vault_path`, `mnemon config dump`. `mnemon init <name> … --default` makes an instance the default; in a shell, `MNEMON_INSTANCE=work mnemon status` does the same for one command. Other `init` options: `--reader-context <path>` (reuse an existing profile), `--charter <path>` and `--writer-host <host>` (see `mnemon init --help`).
+Useful commands: `mnemon config list` (all instances), `mnemon config path` (the file in use), `mnemon config get vault_path`, `mnemon config dump`. `mnemon init <name> … --default` makes an instance the default; in a shell, `MNEMON_INSTANCE=work mnemon status` does the same for one command. Other `init` options: `--search-provider grep|qmd` (default `grep`), `--reader-context <path>` (copies an existing profile into the vault as `reader-context.md`), `--reader-context-path <path>` (points `reader_context_path` at a profile that stays where it is — nothing is copied; not together with `--reader-context`), `--charter <path>` and `--writer-host <host>` (see `mnemon init --help`).
 
 **Legacy config.** A single `~/.config/mnemon/mnemon.yaml` keeps working with a warning. Move to instances with `mnemon init <name> --vault <path> --default` and remove the old file once `mnemon doctor` is clean. `setup.sh` (the previous one-shot installer) still performs a single-vault install but is deprecated in favour of `mnemon init`.
 

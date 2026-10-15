@@ -36,9 +36,13 @@ Commands:
   triage <input> [...]       Content-aware URL triage against the vault
   audit [--cutoff DATE]      Archive consistency audit
   init <name> --vault <path> [--archive <dir>] [--collection <name>]
-       [--reader-context <path>] [--charter <path>] [--writer-host <host>]
-       [--default] [--force] [--non-interactive]
-                             Create an instance config and scaffold its vault
+       [--search-provider grep|qmd] [--reader-context <path> | --reader-context-path <path>]
+       [--charter <path>] [--writer-host <host>] [--default] [--force] [--non-interactive]
+                             Create an instance config and scaffold its vault (never
+                             overwrites vault files). --reader-context copies a profile
+                             into the vault; --reader-context-path points at one in place;
+                             with neither, an existing _meta/reader-context.md or
+                             reader-context.md in the vault is used, else the template
   doctor [--instance <name>] [--json]
                              Health checks: ok|warn|fail <check> — <detail>
   config get <key> | path | list | dump
@@ -212,14 +216,16 @@ _yaml_set() {
 # ---------------------------------------------------------------------------
 
 cmd_init() {
-  local name="" vault="" archive="" collection="" reader_src="" charter="" writer_host=""
-  local set_default=false force=false non_interactive=false
+  local name="" vault="" archive="" collection="" reader_src="" reader_path="" charter="" writer_host=""
+  local search_provider="grep" set_default=false force=false non_interactive=false
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --vault)           [[ $# -lt 2 ]] && usage_error "init: --vault requires a path"; vault="$2"; shift 2 ;;
       --archive)         [[ $# -lt 2 ]] && usage_error "init: --archive requires a dir"; archive="$2"; shift 2 ;;
       --collection)      [[ $# -lt 2 ]] && usage_error "init: --collection requires a name"; collection="$2"; shift 2 ;;
+      --search-provider) [[ $# -lt 2 ]] && usage_error "init: --search-provider requires grep or qmd"; search_provider="$2"; shift 2 ;;
       --reader-context)  [[ $# -lt 2 ]] && usage_error "init: --reader-context requires a path"; reader_src="$2"; shift 2 ;;
+      --reader-context-path) [[ $# -lt 2 ]] && usage_error "init: --reader-context-path requires a path"; reader_path="$2"; shift 2 ;;
       --charter)         [[ $# -lt 2 ]] && usage_error "init: --charter requires a path"; charter="$2"; shift 2 ;;
       --writer-host)     [[ $# -lt 2 ]] && usage_error "init: --writer-host requires a host"; writer_host="$2"; shift 2 ;;
       --default)         set_default=true; shift ;;
@@ -236,6 +242,13 @@ cmd_init() {
   local name_re='^[A-Za-z0-9][A-Za-z0-9._-]*$'
   [[ "$name" =~ $name_re ]] || die "init: invalid instance name '$name' (letters, digits, . _ - ; must start with a letter or digit)"
   [[ "$name" != "$MNEMON_ADHOC_INSTANCE" ]] || die "init: '$MNEMON_ADHOC_INSTANCE' is reserved for configs loaded by path"
+  case "$search_provider" in
+    grep|qmd) ;;
+    *) usage_error "init: --search-provider must be grep or qmd (got '$search_provider')" ;;
+  esac
+  if [[ -n "$reader_src" && -n "$reader_path" ]]; then
+    usage_error "init: --reader-context (copy a profile into the vault) and --reader-context-path (point at one in place) exclude each other"
+  fi
 
   if [[ -z "$vault" ]]; then
     if ! $non_interactive && [[ -t 0 ]]; then
@@ -260,6 +273,10 @@ cmd_init() {
   if [[ -n "$reader_src" ]]; then
     reader_src="$(_abs_path "$reader_src")"
     [[ -f "$reader_src" ]] || die "init: reader context not found: $reader_src"
+  fi
+  if [[ -n "$reader_path" ]]; then
+    reader_path="$(_abs_path "$reader_path")"
+    [[ -f "$reader_path" ]] || die "init: --reader-context-path: no such file: $reader_path"
   fi
   if [[ -n "$archive" ]]; then
     # the user's explicit choice: create it now, or refuse before the vault is touched
@@ -289,8 +306,24 @@ cmd_init() {
   echo "  ✓ Sources/ Synthesis/ _meta/"
   _copy_if_missing "$MNEMON_ROOT/vault-template/CLAUDE.md" "$vault/CLAUDE.md" "CLAUDE.md"
   _copy_if_missing "$MNEMON_ROOT/vault-template/_meta/Protocol.md" "$vault/_meta/Protocol.md" "_meta/Protocol.md"
+  # Reader context — what reader_context_path will point at: an explicit flag
+  # wins (--reader-context copies, --reader-context-path references); otherwise an
+  # existing profile in the vault is used as it is; only a vault without one gets
+  # the template.
+  local reader_context="$vault/reader-context.md"
   if [[ -n "$reader_src" ]]; then
     _copy_if_missing "$reader_src" "$vault/reader-context.md" "reader-context.md (from $reader_src)"
+  elif [[ -n "$reader_path" ]]; then
+    echo "  ○ reader context: $reader_path (referenced in place, nothing copied)"
+    reader_context="$reader_path"
+  elif [[ -f "$vault/_meta/reader-context.md" ]]; then
+    echo "  ○ reader context: existing _meta/reader-context.md (kept; template not placed)"
+    if [[ -f "$vault/reader-context.md" ]]; then
+      echo "    (the vault also has reader-context.md — pass --reader-context-path to choose it)"
+    fi
+    reader_context="$vault/_meta/reader-context.md"
+  elif [[ -f "$vault/reader-context.md" ]]; then
+    echo "  ○ reader context: existing reader-context.md (kept)"
   else
     _copy_if_missing "$MNEMON_ROOT/reader-context.md.template" "$vault/reader-context.md" "reader-context.md (generic — edit to personalize)"
   fi
@@ -305,6 +338,8 @@ cmd_init() {
   sed -e "s|{{instance}}|$(_sed_esc "$(_yaml_esc "$name")")|g" \
       -e "s|{{vault_path}}|$(_sed_esc "$(_yaml_esc "$vault")")|g" \
       "$template" > "$tmp"
+  _yaml_set "$tmp" search_provider "$search_provider" raw
+  _yaml_set "$tmp" reader_context_path "$reader_context"
   if [[ -n "$collection" ]];  then _yaml_set "$tmp" qmd_collection "$collection"; fi
   if [[ -n "$archive" ]]; then
     echo "$archive_note"
