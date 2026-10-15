@@ -2097,10 +2097,17 @@ cap_sidecar_recover() {
   local state
   state="$(cap_receipt_get "$CAPTURE_ID" '.report_state // ""')"
   [[ -n "$state" ]] || return 0
+  local scratch=""
   [[ -n "${ATTEMPT_DIR:-}" && -d "$ATTEMPT_DIR" ]] || ATTEMPT_DIR="$(cap_receipt_get "$CAPTURE_ID" '.attempt_dir // ""')"
-  [[ -n "$ATTEMPT_DIR" && -d "$ATTEMPT_DIR" ]] || ATTEMPT_DIR="$(mktemp -d -t mnemon-sidecar.XXXXXX)"
+  if [[ -z "$ATTEMPT_DIR" || ! -d "$ATTEMPT_DIR" ]]; then
+    # a final receipt's attempt dir is gone: the frozen bytes come from the receipt's reports
+    scratch="$CAP_STATE/.sidecar-$$"
+    mkdir -p "$scratch"
+    ATTEMPT_DIR="$scratch"
+  fi
   REPORT_STATUS=pending
   cap_sidecar_publish
+  [[ -n "$scratch" ]] && rm -rf "$scratch"
   if [[ "$REPORT_STATUS" == "conflict" ]]; then
     cap_integrity_exit report-conflict "the archive sidecar $(cap_receipt_get "$CAPTURE_ID" '.report_path // ""') does not match the frozen report (report_sha256) of this capture; the revision is retained, the sidecar is never overwritten (operator)"
   fi
