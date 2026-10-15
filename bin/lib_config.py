@@ -45,6 +45,10 @@ EXPORTS = (
 )
 
 
+# The loader only reads small files; a longer wait means a hung mount, not work.
+LOADER_TIMEOUT = 15
+
+
 class ConfigError(RuntimeError):
     """The bash loader refused: the message is its stderr, ready to print."""
 
@@ -64,7 +68,12 @@ def load_config(config_path: str | None = None, env: dict | None = None) -> dict
     argv = ["bash", "-c", script, "mnemon-config"]
     if config_path:
         argv.append(str(config_path))
-    proc = subprocess.run(argv, capture_output=True, text=True, env=child_env)
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, errors="replace",
+                              env=child_env, timeout=LOADER_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise ConfigError(f"mnemon config loader did not finish within {LOADER_TIMEOUT}s "
+                          "(a config on a stalled mount?)") from None
     if proc.returncode != 0:
         raise ConfigError(proc.stderr.strip() or "mnemon config loader failed")
     if proc.stderr:
