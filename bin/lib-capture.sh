@@ -178,11 +178,15 @@ elif cmd == "yaml-allow":
                 out.append(line)
     sys.stdout.write("\n".join(out) + ("\n" if out else ""))
 elif cmd == "nested":
+    # <file> <block> <key>: `  key: value` inside the top-level `block:` of the frontmatter — read
+    # only between the opening `---` and the closing `---`/`...` line, never from the body (§12 A6)
     block, key = a[1], a[2]
     inside = False
     with open(a[0], "r", encoding="utf-8", errors="replace") as fh:
-        for line in fh.read().split("\n"):
-            if line == "---" and inside is not False:
+        lines = fh.read().split("\n")
+    if lines and lines[0] == "---":
+        for line in lines[1:]:
+            if line == "---" or line == "...":
                 break
             if line.startswith(block + ":"):
                 inside = True; continue
@@ -398,6 +402,8 @@ cap_find_revisions() {   # <resource_id> <resource_sha256> <url-for-legacy>
       [[ -n "$d" ]] || continue
       d="$(dirname "$d")"
       [[ -n "$(_mnemon_yaml_literal resource_sha256 "$d/source.md")" ]] && continue
+      # grep found the line anywhere in the file; the match counts only as a frontmatter field (§12 A6)
+      [[ "$(_mnemon_yaml_literal url "$d/source.md")" == "$url" ]] || continue
       name="$(basename "$d")"
       printf '%s 0 %s true\n' "${name:0:10}" "$name"
     done < <(grep -rlE --include="source.md" "url: \"?${url_re}\"?[[:space:]]*$" "$VAULT_PATH/Sources" 2>/dev/null || true)
@@ -1018,7 +1024,9 @@ cap_result() {
   if [[ -n "$rev" ]]; then
     path="Sources/$rev/"
     title="$(cap_title_from_files "$rev")"
-    if [[ -f "$VAULT_PATH/Sources/$rev/source.md" && "$status" != "skipped-duplicate" ]]; then
+    # recomputed from the folder — for a duplicate too (§12 A6: the ingest records it and its
+    # predecessor rule needs the revision that comes with it)
+    if [[ -f "$VAULT_PATH/Sources/$rev/source.md" ]]; then
       sha="$(cap_py body-sha256 "$VAULT_PATH/Sources/$rev/source.md")"; [[ "$sha" == "none" ]] && sha=""
     fi
   fi

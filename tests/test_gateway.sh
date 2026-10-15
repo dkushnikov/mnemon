@@ -354,11 +354,23 @@ printf 'foreign\n' > "$(rget "$(cat "$FXD/url-auto.id")~a" '.raw_path')"
 run_gw --capture-id "$(cat "$FXD/url-auto.id")~a"
 assert_eq "$rc" "1" "exit1-archive-exists: exit 1"
 compare_shape exit1-archive-exists "$(cat "$FXD/url-auto.id")~a"
+# the fixture's integrity scenario is the missing source (evidence unverified: empty source_sha256, A6)
 rev_tp="$(rget "$(cat "$FXD/text-plain.id")" '.revision')"
-printf 'edited\n' >> "$VAULT/Sources/$rev_tp/source.md"
+mv "$VAULT/Sources/$rev_tp/source.md" "$TEST_TMPDIR/source.md.away"
 run_gw --capture-id "$(cat "$FXD/text-plain.id")"
-assert_eq "$rc" "1" "exit1-integrity: exit 1"
+assert_eq "$rc" "1" "exit1-integrity: exit 1 (source.md missing)"
 compare_shape exit1-integrity "$(cat "$FXD/text-plain.id")"
+mv "$TEST_TMPDIR/source.md.away" "$VAULT/Sources/$rev_tp/source.md"
+# A6: frontmatter readers stop at the closing ---; a body that mimics frontmatter lines is never read
+mkdir -p "$VAULT/Sources/2026-10-01_legacy01"
+printf -- '---\ntype: source\norigin: url\nurl: "https://example.com/legacy-a6"\ntitle: "Legacy"\n---\nbody text\ncapture:\n  text_sha256: "0000000000000000000000000000000000000000000000000000000000000000"\nurl: "https://example.com/only-in-a-body"\n' > "$VAULT/Sources/2026-10-01_legacy01/source.md"
+printf -- '---\ntype: extract\ntitle: "Legacy"\nstatus: extracted\n---\n### Summary\n' > "$VAULT/Sources/2026-10-01_legacy01/extract.md"
+run_gw --url "https://example.com/legacy-a6" --capture-id a6-alias
+assert_eq "$(result status)" "skipped-duplicate" "a legacy folder matched by its frontmatter url is a duplicate"
+assert_eq "$(result source_sha256)" "$(body_sha "$VAULT/Sources/2026-10-01_legacy01/source.md")" "...reporting the existing folder's recomputed source hash (A6)"
+assert_eq "$(rget a6-alias '.text_sha256')" "null" "...the alias receipt takes no text hash from a capture: block that sits in the body (A6)"
+run_gw --url "https://example.com/only-in-a-body" --capture-id a6-fresh
+assert_eq "$(result status)" "extracted" "a url that appears only in a legacy folder's body is no match: captured fresh (A6)"
 # exit2-contract
 run_case context-undeclared
 assert_eq "$rc" "2" "exit2-contract: exit 2"
