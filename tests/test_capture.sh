@@ -89,7 +89,7 @@ assert_eq "$(shasum -a 256 "$staged" | cut -c1-64)" "$(rget rec-1 '.raw_sha256')
 c1="$(curl_calls)"
 run_gw --capture-id rec-1
 assert_eq "$rc" "0" "replay after-raw-staged → exit 0"
-assert_eq "$(curl_calls)" "$c1" "...no refetch (curl not called again)"
+assert_eq "$(curl_calls)" "$c1" "...no refetch (capture-fetch.py not called again)"
 assert_eq "$(result replayed)" "true" "...RESULT:replayed=true"
 assert_file_exists "$ARCHIVE/$(rget rec-1 '.revision').html" "...raw renamed into place"
 assert_eq "$(rget rec-1 '.raw_published')" "true" "...raw_published reconciled"
@@ -211,7 +211,7 @@ assert_eq "$(cat "$STUB_DIR/call-1.cwd")" "$VSTATE/runs/fail-1/attempt-3" "...in
 
 # failed/convert with a published raw → the retry converts the retained raw, curl not called
 stub_reset
-STUB_CURL=empty STUB_DEFUDDLE=fail run_gw --url "https://example.com/conv" --capture-id conv-1
+STUB_FETCH=empty STUB_DEFUDDLE=fail run_gw --url "https://example.com/conv" --capture-id conv-1
 assert_eq "$rc" "1" "both converters empty → exit 1"
 assert_eq "$(result error_class)" "convert" "...error_class convert"
 assert_eq "$(result retryable)" "true" "...retryable"
@@ -220,14 +220,14 @@ assert_file_exists "$ARCHIVE/$(rget conv-1 '.revision').html" "...raw retained"
 c1="$(curl_calls)"
 STUB_DEFUDDLE=ok run_gw --capture-id conv-1
 assert_eq "$rc" "0" "retry converts the retained raw"
-assert_eq "$(curl_calls)" "$c1" "...without calling curl"
+assert_eq "$(curl_calls)" "$c1" "...without calling capture-fetch.py"
 assert_contains "$(cat "$VAULT/Sources/$(rget conv-1 '.revision')/source.md")" "from defuddle" "...body from the conversion of the retained raw"
 
 # a staged raw that cannot be renamed into place (the archive dir turns read-only after the
 # download) is a loud fetch failure: the receipt never claims raw_published, the staged copy and
 # its hash are kept, and the replay finishes the rename without a refetch
 stub_reset
-STUB_CURL_HOOK="chmod 555 '$ARCHIVE'" run_gw --url "https://example.com/ro-archive" --capture-id ro-1
+STUB_FETCH_HOOK="chmod 555 '$ARCHIVE'" run_gw --url "https://example.com/ro-archive" --capture-id ro-1
 chmod 755 "$ARCHIVE"
 assert_eq "$rc" "1" "a raw rename that fails → exit 1 (never a silent traceback)"
 assert_eq "$(result error_class)" "fetch" "...error_class fetch"
@@ -248,7 +248,7 @@ assert_eq "$(staging_left)" "0" "...no staging left"
 # exit 1 convert with the raw published, and the replay re-converts the retained raw
 stub_reset
 n_ro="$(nfolders)"
-STUB_CURL_HOOK="chmod 555 '$VAULT/Sources'" run_gw --url "https://example.com/ro-sources" --capture-id ro-2
+STUB_FETCH_HOOK="chmod 555 '$VAULT/Sources'" run_gw --url "https://example.com/ro-sources" --capture-id ro-2
 chmod 755 "$VAULT/Sources"
 assert_eq "$rc" "1" "a source publication that fails → exit 1"
 assert_eq "$(result error_class)" "convert" "...error_class convert"
@@ -270,8 +270,10 @@ unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT
 assert_eq "$(rget rk-1 '.raw_kind')" "rendered" "crash after-raw-published on a --render capture: the receipt already records raw_kind rendered"
 STUB_RENDER=ok run_gw --capture-id rk-1
 assert_eq "$rc" "0" "...the replay exits 0"
-assert_contains "$(cat "$VAULT/Sources/$(rget rk-1 '.revision')/source.md")" '  method: "render-text"' "...reconverted as rendered text (method render-text)"
-assert_contains "$(cat "$VAULT/Sources/$(rget rk-1 '.revision')/source.md")" 'rendered text content' "...with the rendered text as the body"
+assert_contains "$(cat "$VAULT/Sources/$(rget rk-1 '.revision')/source.md")" '  method: "render+' "...reconverted through the converter as a rendered raw (method render+<converter>)"
+assert_contains "$(cat "$VAULT/Sources/$(rget rk-1 '.revision')/source.md")" '  raw_kind: rendered' "...raw_kind rendered in the published source"
+assert_file_exists "$ARCHIVE/$(rget rk-1 '.revision').html" "...the raw of a rendered page is its post-JS HTML (<revision>.html)"
+assert_contains "$(cat "$ARCHIVE/$(rget rk-1 '.revision').html")" 'rendered text content' "...holding the rendered DOM"
 
 # ---------------------------------------------------------------------------------------------
 echo "--- 3. publication ---"
@@ -622,8 +624,8 @@ assert_eq "$rc $(result status) $(result replayed)" "0 skipped-duplicate true" "
 # ---------------------------------------------------------------------------------------------
 echo "--- 8. url chain ---"
 src0="$VAULT/Sources/$rev0/source.md"
-assert_contains "$(cat "$src0")" "from defuddle" "stub curl html → defuddle output is the body"
-assert_contains "$(cat "$src0")" '  method: "curl+defuddle"' "...capture.method curl+defuddle"
+assert_contains "$(cat "$src0")" "from defuddle" "stub fetch html → defuddle output is the body"
+assert_contains "$(cat "$src0")" '  method: "direct+defuddle"' "...capture.method direct+defuddle (the fetch method + the converter, §3.5)"
 assert_contains "$(cat "$src0")" 'title: "Stub & Page Title"' "an acquired <title> with a newline is normalized, not rejected"
 assert_contains "$(cat "$src0")" '  fidelity: converted' "...fidelity converted"
 assert_contains "$(cat "$src0")" '  raw_kind: response' "...raw_kind response"
@@ -631,9 +633,9 @@ assert_contains "$(cat "$src0")" "archive: \"$rev0.html\"" "...archive: name = r
 assert_eq "$(grep '^  raw_sha256:' "$src0" | tr -d '" ' | cut -d: -f2)" "$(shasum -a 256 "$ARCHIVE/$rev0.html" | cut -c1-64)" "raw <revision>.html with matching raw_sha256 in archive_dir"
 STUB_DEFUDDLE=fail run_gw --url "https://example.com/pandoc" --capture-id pan-1
 assert_eq "$rc" "0" "defuddle failing → pandoc"
-assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" '  method: "curl+pandoc"' "...method curl+pandoc"
-assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" "World **bold** from curl" "...pandoc body"
-STUB_CURL=pdf run_gw --url "https://example.com/report" --capture-id pdf-url
+assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" '  method: "direct+pandoc"' "...method direct+pandoc"
+assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" "World **bold** from fetch" "...pandoc body"
+STUB_FETCH=pdf run_gw --url "https://example.com/report" --capture-id pdf-url
 assert_eq "$rc" "0" "a URL answering application/pdf without .pdf → the pdf row"
 assert_file_exists "$ARCHIVE/$(result revision).pdf" "...raw stored as .pdf"
 assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" '  method: "pdftotext"' "...converted with pdftotext"
@@ -739,28 +741,28 @@ assert_file_exists "$ARCHIVE/$(result revision).md" "...raw retained as <revisio
 # then media-extract.py transcribes the PUBLISHED raw
 stub_reset
 c1="$(curl_calls)"
-STUB_CURL=audio run_gw --origin audio --url "https://example.com/ep.mp3?dl=1" --capture-id audio-1 --keep-run
+STUB_FETCH=audio run_gw --origin audio --url "https://example.com/ep.mp3?dl=1" --capture-id audio-1 --keep-run
 assert_eq "$rc" "0" "audio by URL exits 0"
 reva="$(result revision)"
-assert_eq "$(curl_calls)" "$((c1 + 1))" "...the gateway downloaded the audio itself (one curl call)"
+assert_eq "$(curl_calls)" "$((c1 + 1))" "...the gateway downloaded the audio through capture-fetch.py --expect audio (one call, no curl)"
 assert_file_exists "$ARCHIVE/$reva.mp3" "...published as <revision>.mp3 (the extension from the URL path)"
 assert_eq "$(cat "$ARCHIVE/$reva.mp3")" "RIFFstubaudio" "...with the downloaded bytes"
-assert_eq "$(cat "$STUB_DIR/media-calls")" "audio url= file=$ARCHIVE/$reva.mp3" "...and media-extract.py transcribed the published raw (audio --file <raw>), never a URL"
+assert_eq "$(cat "$STUB_DIR/media-calls")" "audio url= file=$ARCHIVE/$reva.mp3 timeout=3600" "...and media-extract.py transcribed the published raw (audio --file <raw>) under transcribe_timeout, never a URL"
 assert_contains "$(cat "$VAULT/Sources/$reva/source.md")" '  method: "whisper:tiny"' "...method from media.json"
 assert_contains "$(cat "$VAULT/Sources/$reva/source.md")" '  raw_kind: file' "...raw_kind file"
 assert_contains "$(cat "$VAULT/Sources/$reva/source.md")" 'transcript line one' "...the transcript is the body"
 # a crash after the download: the retry transcribes the recorded raw without refetching
 stub_reset
 export MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-raw-published
-STUB_CURL=audio run_gw --origin audio --url "https://example.com/ep2.mp3" --capture-id audio-crash
+STUB_FETCH=audio run_gw --origin audio --url "https://example.com/ep2.mp3" --capture-id audio-crash
 unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT
 assert_eq "$(rget audio-crash '.raw_published') $(rget audio-crash '.raw_kind')" "true file" "crash after the audio download: the raw is recorded and published"
 [[ -f "$STUB_DIR/media-calls" ]] && fail "no transcription before the crash" "ran" || pass "...and nothing was transcribed yet"
 c1="$(curl_calls)"
 run_gw --capture-id audio-crash
 assert_eq "$rc" "0" "the retry exits 0"
-assert_eq "$(curl_calls)" "$c1" "...without refetching (curl not called)"
-assert_eq "$(cat "$STUB_DIR/media-calls")" "audio url= file=$ARCHIVE/$(rget audio-crash '.revision').mp3" "...transcribing the recorded raw"
+assert_eq "$(curl_calls)" "$c1" "...without refetching (capture-fetch.py not called)"
+assert_eq "$(cat "$STUB_DIR/media-calls")" "audio url= file=$ARCHIVE/$(rget audio-crash '.revision').mp3 timeout=3600" "...transcribing the recorded raw"
 assert_contains "$(cat "$VAULT/Sources/$(rget audio-crash '.revision')/source.md")" '  method: "whisper:tiny"' "...method whisper"
 # audio by --file: a copy of the given file is published first, the published copy is transcribed
 stub_reset
@@ -769,7 +771,7 @@ run_gw --origin audio --file "$TEST_TMPDIR/talk.M4A" --capture-id audio-file
 assert_eq "$rc" "0" "audio by --file exits 0"
 revf2="$(result revision)"
 assert_file_exists "$ARCHIVE/$revf2.m4a" "...published as <revision>.m4a (lowercased extension)"
-assert_eq "$(cat "$STUB_DIR/media-calls")" "audio url= file=$ARCHIVE/$revf2.m4a" "...media-extract.py transcribed the published copy, not the original"
+assert_eq "$(cat "$STUB_DIR/media-calls")" "audio url= file=$ARCHIVE/$revf2.m4a timeout=3600" "...media-extract.py transcribed the published copy, not the original"
 # youtube: captions → the transcript is the raw; the whisper fallback publishes the downloaded audio as the raw
 stub_reset
 run_gw --url "https://youtube.com/watch?v=abc123xyz00" --capture-id yt-1
@@ -795,7 +797,7 @@ unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT
 stub_reset
 run_gw --capture-id yt-w2
 assert_eq "$rc" "0" "a youtube whisper capture crashed after its raw publication replays"
-assert_eq "$(cat "$STUB_DIR/media-calls")" "audio url= file=$ARCHIVE/$(rget yt-w2 '.revision').wav" "...by transcribing the retained audio (no youtube run)"
+assert_eq "$(cat "$STUB_DIR/media-calls")" "audio url= file=$ARCHIVE/$(rget yt-w2 '.revision').wav timeout=3600" "...by transcribing the retained audio (no youtube run)"
 
 # ---------------------------------------------------------------------------------------------
 echo "--- 15. flat parsers on the new format ---"
@@ -835,6 +837,407 @@ print(m.parse_field(open(sys.argv[2], encoding="utf-8").read(), "title"))
 PY
 )"
 assert_eq "$rl" 'a "quoted" \ title' "knowledge-reindex parse_field decodes exactly \\\" and \\\\"
+
+# =============================================================================================
+# Phase 2 — the capture layer's gateway side (docs/specs/2026-10-15-capture-layer.md §4, §7)
+# =============================================================================================
+echo "--- p2.1 identity under canonical v1 (§7.2) ---"
+stub_reset
+run_gw --url "https://example.com/post?utm_source=a" --capture-id can-1
+assert_eq "$rc $(result status)" "0 extracted" "a url capture under canonical identity exits 0"
+revc="$(result revision)"
+assert_eq "$(result canonical_url)" "https://example.com/post" "RESULT:canonical_url strips the tracking parameter"
+assert_eq "$(fm "$VAULT/Sources/$revc/source.md" canonical_url)" '"https://example.com/post"' "source.md carries canonical_url (the computed identity)"
+assert_eq "$(fm "$VAULT/Sources/$revc/source.md" url)" '"https://example.com/post?utm_source=a"' "...and the literal url"
+assert_eq "$(capfm "$VAULT/Sources/$revc/source.md" canonical_version)" "1" "...capture.canonical_version 1"
+assert_eq "$(rget can-1 '.request.schema') $(rget can-1 '.request.resource_key') $(rget can-1 '.request.render') $(rget can-1 '.request.external') $(rget can-1 '.request.site') $(rget can-1 '.request.requested_version') $(rget can-1 '.request.canonical_version')" "mnemon-request/2 https://example.com/post auto off null null 1" "the receipt binds a mnemon-request/2: the canonical key and the new fields at their defaults"
+assert_eq "$(rget can-1 '.request_schema') $(rget can-1 '.canonical_url') $(rget can-1 '.canonical_version')" "mnemon-request/2 https://example.com/post 1" "...and records request_schema / canonical_url / canonical_version"
+assert_eq "$(rget can-1 '.resource_sha256')" "$(printf 'url:https://example.com/post' | shasum -a 256 | cut -c1-64)" "resource_sha256 = sha256(\"url:\" + canonical_url)"
+assert_eq "$revc" "$(date +%Y-%m-%d)_$(printf 'https://example.com/post' | shasum -a 256 | cut -c1-8)" "the folder label = sha256(canonical_url)[:8]"
+python3 - "$(receipt can-1)" "$FIX/reports/receipts/request-v2-page.json" <<'PY' && pass "the receipt's key set equals receipts/request-v2-page.json (top level, request, capture_report, calls[])" || fail "receipt key set == the frozen fixture" "differs"
+import json, sys
+got, fx = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+assert set(got) == set(fx), sorted(set(got) ^ set(fx))
+assert set(got["request"]) == set(fx["request"]), sorted(set(got["request"]) ^ set(fx["request"]))
+assert set(got["capture_report"]) == set(fx["capture_report"])
+assert got["calls"] and set(got["calls"][0]) == set(fx["calls"][0]), got["calls"]
+assert set(got["capture_report"]["fetch"]) == set(fx["capture_report"]["fetch"]), sorted(set(got["capture_report"]["fetch"]) ^ set(fx["capture_report"]["fetch"]))
+assert set(got["capture_report"]["text"]) == set(fx["capture_report"]["text"]), sorted(set(got["capture_report"]["text"]) ^ set(fx["capture_report"]["text"]))
+PY
+c1="$(fetch_calls)"
+run_gw --url "https://example.com/post?utm_source=b#intro" --capture-id can-2
+assert_eq "$rc $(result status) $(result revision)" "0 skipped-duplicate $revc" "another tracking parameter and a fragment → the same resource (skipped-duplicate)"
+assert_eq "$(result canonical_url)" "https://example.com/post" "...canonical_url reported"
+assert_eq "$(fetch_calls)" "$c1" "...nothing fetched"
+assert_eq "$(rget can-2 '.resolved_to_revision')" "$revc" "...an alias receipt resolved to it"
+run_gw --url "https://example.com/post?utm_source=a" --capture-id can-1
+assert_eq "$rc $(result replayed)" "0 true" "a full-request replay of the /2 receipt with the literal URL is bound"
+run_gw --url "https://example.com/post?utm_source=zzz" --capture-id can-1
+assert_eq "$rc" "2" "...while another literal URL (even with the same canonical key) is a different request: url is a bound field (A4)"
+run_gw --url "https://example.com/post?utm_source=a" --capture-id can-1 --no-render
+assert_eq "$rc" "2" "a /2 request replayed with --no-render where the receipt bound render: auto → exit 2"
+assert_contains "$err" "capture-id reuse with a different request" "...the binding message"
+run_gw --url "https://example.com/post?utm_source=a" --capture-id can-1 --no-external
+assert_eq "$rc $(result replayed)" "0 true" "...--no-external is the receipt's external: off (the instance says off): bound"
+
+# a managed phase-1 folder (literal identity, a mnemon-request/1 receipt) is found by the canonical lookup
+lit="https://example.com/legacy-managed?utm_source=x"
+lrid="$(printf '%s' "$lit" | shasum -a 256 | cut -c1-8)"
+lrsha="$(printf 'url:%s' "$lit" | shasum -a 256 | cut -c1-64)"
+lrev="2026-10-01_$lrid"
+ltsha="$(printf 'legacy body\n' | shasum -a 256 | cut -c1-64)"
+mkdir -p "$VAULT/Sources/$lrev"
+printf -- '---\ntype: source\nsource_type: article\ncontent_format: text\norigin: url\nurl: "%s"\ncaptured: 2026-10-01\ncaptured_by: agent\ncapture_id: "p1-managed"\nresource_kind: url\nresource_sha256: "%s"\nresource_id: "%s"\nrevision: "%s"\ncontext: "personal"\ncapture:\n  method: "curl+defuddle"\n  fidelity: converted\n  raw_store: none\n  raw_kind: response\n  text_sha256: "%s"\n  text_bytes: 12\n  completeness: unknown\n---\nlegacy body\n' "$lit" "$lrsha" "$lrid" "$lrev" "$ltsha" > "$VAULT/Sources/$lrev/source.md"
+python3 - "$FIX/reports/receipts/request-v1.json" "$(receipt p1-managed)" "$lit" "$lrsha" "$lrid" "$lrev" "$VAULT" "$ltsha" <<'PY'
+import hashlib, json, sys
+fx, out, lit, rsha, rid, rev, vault, tsha = sys.argv[1:]
+r = json.load(open(fx))
+r["capture_id"] = "p1-managed"
+r["request"]["resource_key"] = lit; r["request"]["url"] = lit
+r["request_sha256"] = hashlib.sha256(json.dumps(r["request"], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+r.update({"resource_sha256": rsha, "resource_id": rid, "revision": rev, "vault": vault, "state": "source-published", "text_sha256": tsha,
+          "text_bytes": 12, "extract_sha256": None, "finalized_at": None, "raw_store": "none", "raw_path": None, "raw_kind": "none",
+          "raw_sha256": None, "raw_bytes": None, "raw_published": False, "attempt_dir": None, "argv": None, "cost_usd": None, "duration_ms": None})
+json.dump(r, open(out, "w"), indent=1)
+PY
+stub_reset
+run_gw --url "https://example.com/legacy-managed?utm_source=y"
+assert_eq "$rc $(result status) $(result revision) $(result capture_id)" "0 extracted $lrev p1-managed" "a managed phase-1 folder found by the canonical lookup is RESUMED under its own receipt when it has no extract.md"
+assert_eq "$(stub_calls)" "1" "...one extraction"
+assert_eq "$(rget p1-managed '.state') $(rget p1-managed '.request.schema') $(rget p1-managed '.request.resource_key')" "extracted mnemon-request/1 $lit" "...the /1 receipt finished under its own schema, its identity never recomputed"
+assert_eq "$(rget p1-managed '.calls | length') $(rget p1-managed '.calls[0].kind') $(rget p1-managed '.cost_usd')" "1 single 0.012" "...its extraction recorded as one reconciled single call (A3)"
+run_gw --capture-id p1-managed
+assert_eq "$rc $(result status) $(result replayed)" "0 extracted true" "an ID-only replay of a /1 receipt → replayed=true"
+run_gw --url "$lit" --capture-id p1-managed
+assert_eq "$rc $(result replayed)" "0 true" "a full-request replay of a /1 receipt with the original literal URL is bound (no exit 2)"
+run_gw --url "$lit" --capture-id p1-managed --no-render
+assert_eq "$rc" "2" "...a new flag off its default (--no-render) on a /1 replay is a binding mismatch"
+assert_contains "$err" "phase-1 request (mnemon-request/1)" "...named as such"
+run_gw --url "https://example.com/legacy-managed"
+assert_eq "$rc $(result status) $(result revision)" "0 skipped-duplicate $lrev" "the complete managed folder is a verified duplicate under canonical equality (no utm, no match by label)"
+printf 'edited\n' >> "$VAULT/Sources/$lrev/source.md"
+run_gw --url "https://example.com/legacy-managed"
+assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error evidence-mismatch" "...an edited body is refused integrity-error"
+python3 - "$VAULT/Sources/$lrev/source.md" <<'PY'
+import sys
+p = sys.argv[1]; d = open(p, "rb").read(); assert d.endswith(b"edited\n"); open(p, "wb").write(d[:-7])
+PY
+run_gw --url "https://example.com/legacy-managed?utm_source=q" --recapture --capture-id can-rc
+assert_eq "$rc $(result status)" "0 extracted" "--recapture of a canonical duplicate exits 0"
+assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" supersedes)" "\"$lrev\"" "...supersedes the phase-1 folder across different labels"
+[[ "$(result revision)" != *"_$lrid"* ]] && pass "...under its own (canonical) label" || fail "own label" "$(result revision)"
+
+# three candidates: one superseded, two heads with different dates → the later date wins
+h="https://example.com/heads"; hrid="$(printf '%s' "$h" | shasum -a 256 | cut -c1-8)"; hsha="$(printf 'url:%s' "$h" | shasum -a 256 | cut -c1-64)"
+for spec in "2026-09-01_$hrid|2026-09-01|" "2026-09-05_$hrid|2026-09-05|2026-09-01_$hrid" "2026-09-03_$hrid|2026-09-03|"; do
+  hf="${spec%%|*}"; rest="${spec#*|}"; hd="${rest%%|*}"; hs="${rest#*|}"
+  mkdir -p "$VAULT/Sources/$hf"
+  sup_line=""; [[ -n "$hs" ]] && sup_line="supersedes: \"Sources/$hs/extract\""$'\n'
+  printf -- '---\ntype: source\norigin: url\nurl: "%s"\ncaptured: %s\ncapture_id: "h-%s"\nresource_sha256: "%s"\nrevision: "%s"\n%s---\nbody\n' "$h" "$hd" "$hd" "$hsha" "$hf" "$sup_line" > "$VAULT/Sources/$hf/source.md"
+  printf -- '---\ntype: extract\ntitle: "H"\nstatus: extracted\n---\n### Summary\n' > "$VAULT/Sources/$hf/extract.md"
+done
+run_gw --url "$h?utm_campaign=x"
+assert_eq "$(result status) $(result revision)" "skipped-duplicate 2026-09-05_$hrid" "three candidates (one superseded through the Sources/…/extract form, two heads): the head with the later captured date wins"
+# candidates that supersede each other → integrity-error / supersedes-cycle (A2), never "no resource"
+cy="https://example.com/cycle"; cyrid="$(printf '%s' "$cy" | shasum -a 256 | cut -c1-8)"; cysha="$(printf 'url:%s' "$cy" | shasum -a 256 | cut -c1-64)"
+for spec in "2026-09-01_$cyrid|2026-09-02_$cyrid" "2026-09-02_$cyrid|2026-09-01_$cyrid"; do
+  cf="${spec%%|*}"; cs="${spec#*|}"
+  mkdir -p "$VAULT/Sources/$cf"
+  printf -- '---\ntype: source\norigin: url\nurl: "%s"\ncaptured: %s\ncapture_id: "c-%s"\nresource_sha256: "%s"\nrevision: "%s"\nsupersedes: "%s"\n---\nbody\n' "$cy" "${cf:0:10}" "${cf:0:10}" "$cysha" "$cf" "$cs" > "$VAULT/Sources/$cf/source.md"
+done
+n_cy="$(nfolders)"
+run_gw --url "$cy" --capture-id cy-1
+assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error supersedes-cycle" "candidates that supersede each other: integrity-error/supersedes-cycle"
+assert_eq "$(nfolders)" "$n_cy" "...and no folder was created"
+assert_contains "$err" "2026-09-01_$cyrid" "...naming the folders"
+rm -rf "$VAULT/Sources/2026-09-01_$cyrid" "$VAULT/Sources/2026-09-02_$cyrid"
+# a header without a closing delimiter is reported, never silently truncated (A2)
+mkdir -p "$VAULT/Sources/2026-09-09_ma1f0rm3"
+printf -- '---\ntype: source\nurl: "https://example.com/malformed"\nno closing delimiter here\n' > "$VAULT/Sources/2026-09-09_ma1f0rm3/source.md"
+run_gw --url "https://example.com/malformed-probe" --capture-id mf-1
+assert_eq "$rc" "0" "a capture with a malformed sibling header still runs"
+assert_contains "$err" "malformed-frontmatter 2026-09-09_ma1f0rm3" "...the malformed header is reported on stderr (malformed-frontmatter <folder>)"
+rm -rf "$VAULT/Sources/2026-09-09_ma1f0rm3"
+# an invalid URL is a usage error
+run_gw --url "ftp://example.com/x" --capture-id bad-url
+assert_eq "$rc" "2" "an invalid url (ftp) → exit 2"
+assert_contains "$err" "invalid url" "...naming it"
+run_gw --url "https://user:pw@example.com/x" --dry-run
+assert_eq "$rc" "2" "a url with userinfo → exit 2"
+
+# ---------------------------------------------------------------------------------------------
+echo "--- p2.2 the fetch chain's outcomes through the gateway (§7.4, §7.11 gateway half) ---"
+for spec in blocked-botwall:blocked:false:bot-wall:render blocked-login:blocked:false:login:direct rate-limit:blocked:true:rate-limit:direct fail:fetch:true:null:direct; do
+  m="${spec%%:*}"; rest="${spec#*:}"; cls="${rest%%:*}"; rest="${rest#*:}"; rt="${rest%%:*}"; rest="${rest#*:}"; kind="${rest%%:*}"; stage="${rest#*:}"
+  stub_reset
+  STUB_FETCH="$m" run_gw --url "https://example.com/mode-$m" --capture-id "m-$m"
+  assert_eq "$rc $(result status) $(result error_class) $(result retryable)" "1 failed $cls $rt" "stub mode $m → failed/$cls, retryable $rt (the report's class and flag)"
+  assert_eq "$(result revision)" "" "...nothing published"
+  assert_eq "$(rget "m-$m" '.capture_report.fetch.acquisition.kind') $(rget "m-$m" '.stage')" "$kind $stage" "...the fetch report is in the receipt (acquisition.kind $kind) with the failing stage"
+  assert_eq "$(staging_left)" "0" "...no staged raw left"
+done
+assert_eq "$(result canonical_url)" "https://example.com/mode-fail" "RESULT:canonical_url is reported for a failed url capture too"
+STUB_FETCH=js-shell-noenv run_gw --url "https://example.com/noenv" --capture-id m-noenv
+assert_eq "$rc $(result error_class) $(result retryable)" "3 environment true" "a js-shell with no renderer and no external fetcher → exit 3 environment (retryable)"
+assert_eq "$(rget m-noenv '.state')" "failed" "...receipt failed"
+stub_reset
+STUB_FETCH=timeout run_gw --url "https://example.com/slow" --capture-id m-timeout
+assert_eq "$rc $(result status) $(result error_class) $(result retryable)" "1 failed timeout true" "exit 124 of capture-fetch.py → failed/timeout, retryable (D11)"
+assert_eq "$(rget m-timeout '.stage') $(rget m-timeout '.capture_report.fetch.stage') $(rget m-timeout '.capture_report.fetch.error_class')" "render render timeout" "...the stage from the report into the receipt"
+assert_contains "$(grep -- '--acquire-timeout' "$STUB_DIR/fetch-calls" | head -1)" "--acquire-timeout 300 --render-timeout 90" "...the deadlines of §5 were passed down"
+# a timeout after the raw was published → the retained raw is reconverted, not refetched
+stub_reset
+export MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-raw-published
+run_gw --url "https://example.com/slow-after" --capture-id m-after
+unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT
+c1="$(fetch_calls)"
+STUB_FETCH=timeout run_gw --capture-id m-after
+assert_eq "$rc $(result status)" "0 extracted" "a replay after the raw was published reconverts the retained raw"
+assert_eq "$(fetch_calls)" "$c1" "...never refetched (a timeout of the fetch chain cannot even happen)"
+# a paywall teaser with text is published as completeness blocked, never escalated
+stub_reset
+STUB_FETCH=blocked-paywall run_gw --url "https://example.com/teaser" --capture-id m-paywall
+assert_eq "$rc $(result status)" "0 extracted" "a paywall teaser with real text is published"
+srcp="$VAULT/Sources/$(result revision)/source.md"
+assert_eq "$(capfm "$srcp" completeness) $(capfm "$srcp" blocked_kind) $(capfm "$srcp" acquisition)" "blocked paywall paywall" "...completeness blocked, blocked_kind paywall, acquisition paywall"
+assert_eq "$(result completeness) $(result acquisition)" "blocked paywall" "...RESULT:completeness=blocked, RESULT:acquisition=paywall"
+assert_eq "$(grep -cE -- '(^| )--render( |$)' "$STUB_DIR/fetch-calls")" "0" "...no forced render, one chain call"
+# the external stage: egress recorded, method <vendor>+<converter>
+stub_reset
+STUB_FETCH=external run_gw --url "https://example.com/vendor" --capture-id m-ext
+assert_eq "$rc $(result status)" "0 extracted" "a vendor-relayed page is published"
+srce="$VAULT/Sources/$(result revision)/source.md"
+assert_eq "$(capfm "$srce" egress) $(capfm "$srce" fetch) $(fm "$srce" egress)" "external firecrawl external" "...capture.egress external, fetch firecrawl, egress: external in the metadata"
+assert_contains "$(capfm "$srce" method)" '"firecrawl+' "...method <vendor>+<converter>"
+# the rendered stage: http_status null, raw_kind rendered
+stub_reset
+STUB_FETCH=rendered run_gw --url "https://example.com/spa-page" --capture-id m-rend
+srcr="$VAULT/Sources/$(result revision)/source.md"
+assert_eq "$(capfm "$srcr" raw_kind) $(capfm "$srcr" http_status) $(capfm "$srcr" fetch)" "rendered null render" "a rendered page: raw_kind rendered, http_status null (never invented), fetch render"
+assert_eq "$(grep -c '^final_url:' "$srcr")" "0" "...and no final_url (the render stage knows none)"
+# the fetch report lands in the receipt BEFORE the raw is published (D2, D15)
+stub_reset
+export MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-raw-staged
+run_gw --url "https://example.com/report-first" --capture-id m-rep
+unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT
+assert_eq "$(rget m-rep '.raw_published') $(rget m-rep '.capture_report.fetch.schema') $(rget m-rep '.capture_report.text')" "false mnemon-fetch/1 null" "crash after-raw-staged: the fetch report is already in the receipt, the conversion report not yet"
+run_gw --capture-id m-rep
+assert_eq "$rc $(rget m-rep '.capture_report.text.schema')" "0 mnemon-capture-text/2" "...the replay converts the retained raw (with the receipt's fetch report) and records the /2 conversion report"
+# the capture: block of a plain page
+src1="$VAULT/Sources/$(rget m-rep '.revision')/source.md"
+assert_eq "$(capfm "$src1" fetch) $(capfm "$src1" converter) $(capfm "$src1" acquisition) $(capfm "$src1" completeness)" "direct defuddle ok unknown" "capture: fetch direct, converter defuddle, acquisition ok, completeness as the converter reports it"
+assert_eq "$(capfm "$src1" reference_lines) $(capfm "$src1" eligible_lines) $(capfm "$src1" missing_lines) $(capfm "$src1" glued_lines) $(capfm "$src1" headings_missing) $(capfm "$src1" repairs)" "0 0 0 0 0 \"none\"" "...the counts and repairs: none"
+assert_eq "$(capfm "$src1" canonical_version) $(capfm "$src1" http_status)" "1 200" "...canonical_version 1, http_status 200"
+assert_eq "$(fm "$src1" final_url)" '"https://example.com/report-first"' "...final_url from the fetch report"
+assert_eq "$(grep -c '^  egress:' "$src1") $(grep -c '^  blocked_kind:' "$src1")" "0 0" "...egress and blocked_kind only when they apply"
+# the flags and the policy reach capture-fetch.py
+stub_reset
+run_gw --url "https://example.com/flags-pass" --no-render --capture-id m-flags
+line="$(head -1 "$STUB_DIR/fetch-calls")"
+assert_contains "$line" "--no-render" "--no-render is passed through"
+assert_contains "$line" "--no-external" "...and implies --no-external (A12)"
+assert_contains "$line" '"mode":"off"' "...the --external JSON says off"
+assert_contains "$line" '"thin_words":60' "...the --policy JSON carries thin_words"
+assert_contains "$line" '"connect_timeout":15' "...and the fetch_timeout split"
+assert_contains "$line" '--kind page' "...and the URL's kind"
+assert_eq "$(rget m-flags '.request.render') $(rget m-flags '.request.external')" "off off" "...the receipt binds render off / external off"
+sed 's/^instance: captest/instance: captest-ext/; $a\
+external_fetch: auto\
+external_fetchers: jina,firecrawl\
+fetch_user_agent: "test-agent/1.0"\
+acquire_timeout: 45' "$CONFIG" > "$TEST_TMPDIR/ext.yaml"
+stub_reset
+"$GW" source-add --config "$TEST_TMPDIR/ext.yaml" --url "https://example.com/ext-auto" --capture-id m-extauto >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || true
+out="$(cat "$TEST_TMPDIR/run.out")"
+line="$(head -1 "$STUB_DIR/fetch-calls")"
+assert_contains "$line" '"mode":"auto","fetchers":["jina","firecrawl"]' "external_fetch: auto with its fetcher order reaches the --external JSON"
+assert_contains "$line" '"user_agent":"test-agent/1.0"' "...fetch_user_agent reaches the policy"
+assert_contains "$line" "--acquire-timeout 45" "...acquire_timeout from the config"
+assert_eq "$(rget m-extauto '.request.external')" "auto" "...the receipt binds external auto"
+stub_reset
+"$GW" source-add --config "$TEST_TMPDIR/ext.yaml" --url "https://example.com/ext-off" --no-external --capture-id m-extoff >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || true
+assert_contains "$(head -1 "$STUB_DIR/fetch-calls")" "--no-external" "--no-external overrides an instance that allows external fetchers"
+assert_eq "$(rget m-extoff '.request.external')" "off" "...and binds external off"
+
+# the frozen conversion report as the gateway's input (the consumer test of reports/text.json)
+cat > "$STUBS/capture-text-fixture.py" <<STUB
+#!/usr/bin/env bash
+# capture-text.py stub answering the frozen /2 report fixture and a fixed body
+out=""; report=""; prev=""
+for a in "\$@"; do case "\$prev" in --out) out="\$a" ;; --report) report="\$a" ;; esac; prev="\$a"; done
+printf '%s\\n' "\$*" >> "$STUB_DIR/text-calls"
+printf '# An example post\\n\\nbody from the frozen fixture\\n' > "\$out"
+cp "$FIX/reports/text.json" "\$report"
+STUB
+chmod +x "$STUBS/capture-text-fixture.py"
+stub_reset
+MNEMON_CAPTURE_TEXT_CMD="$STUBS/capture-text-fixture.py" run_gw --url "https://example.com/fixture-text" --capture-id fx-text
+assert_eq "$rc $(result status)" "0 extracted" "a capture whose converter answers the frozen text.json fixture"
+srcf="$VAULT/Sources/$(result revision)/source.md"
+assert_eq "$(capfm "$srcf" converter) $(capfm "$srcf" completeness) $(capfm "$srcf" method)" "pandoc complete \"direct+pandoc\"" "...converter pandoc, completeness complete, method direct+pandoc"
+assert_eq "$(capfm "$srcf" reference_lines) $(capfm "$srcf" eligible_lines) $(capfm "$srcf" missing_lines) $(capfm "$srcf" glued_lines) $(capfm "$srcf" headings_missing)" "212 96 0 0 0" "...reference/eligible/missing/glued/headings counts from the report"
+assert_eq "$(capfm "$srcf" repairs)" '"svg_diagrams=1,svg_icons=4,next_images=2,comment_sections=1"' "...repairs key=n,… (non-zero html and markdown counts)"
+assert_eq "$(fm "$srcf" published)" '"2026-09-01"' "...published: from the article:published_time candidate (source_type article)"
+assert_eq "$(result completeness) $(result acquisition)" "complete ok" "...RESULT:completeness=complete, RESULT:acquisition=ok"
+assert_contains "$(head -1 "$STUB_DIR/text-calls")" "--raw-kind response --kind page --fetch-report $VSTATE/runs/fx-text/attempt-1/fetch.json" "...the converter received the raw kind, the URL kind and the receipt's fetch report"
+assert_eq "$(jq -c '.capture_report.text == input' "$(receipt fx-text)" "$FIX/reports/text.json")" "true" "...the receipt holds the report verbatim"
+assert_eq "$(rget fx-text '.published_candidates | length')" "1" "...and the eligible dated candidates"
+
+# ---------------------------------------------------------------------------------------------
+echo "--- p2.3 published: gating (§7.8, A12) ---"
+STUB_FETCH_HTML_META='<meta property="article:published_time" content="2026-09-01T10:00:00Z">' run_gw --url "https://example.com/dated-article" --capture-id pub-1
+assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" published)" '"2026-09-01"' "an article with article:published_time → published: (the date part)"
+STUB_FETCH_HTML_META='<meta property="article:published_time" content="2026-09-01T10:00:00Z">' run_gw --url "https://example.com/dated-site" --source-type website --capture-id pub-2
+assert_eq "$(grep -c '^published:' "$VAULT/Sources/$(result revision)/source.md")" "0" "...never for a website"
+STUB_FETCH_PUBLISHED="2026-02-02|jsonld:WebSite" run_gw --url "https://example.com/dated-website-node" --capture-id pub-3
+assert_eq "$(grep -c '^published:' "$VAULT/Sources/$(result revision)/source.md")" "0" "a WebSite JSON-LD datePublished is never published:"
+STUB_FETCH_PUBLISHED="2026-03-03|jsonld:BlogPosting" run_gw --url "https://example.com/dated-blog" --capture-id pub-4
+assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" published)" '"2026-03-03"' "a BlogPosting JSON-LD date → published:"
+STUB_FETCH_PUBLISHED="2026-04-04|citation_date" run_gw --url "https://example.com/dated-citation-article" --capture-id pub-5
+assert_eq "$(grep -c '^published:' "$VAULT/Sources/$(result revision)/source.md")" "0" "citation_date is not an article's source"
+STUB_FETCH_PUBLISHED="2026-04-04|citation_date" run_gw --url "https://example.com/dated-paper" --source-type paper --capture-id pub-6
+assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" published)" '"2026-04-04"' "...but a paper's"
+STUB_FETCH_PUBLISHED="2026-03-03|article:published_time" STUB_FETCH_HTML_META='<meta property="article:published_time" content="2026-09-01">' run_gw --url "https://example.com/dated-twice" --capture-id pub-7
+assert_eq "$(grep -c '^published:' "$VAULT/Sources/$(result revision)/source.md")" "0" "two distinct eligible dates → published: omitted (A12)"
+assert_eq "$(rget pub-7 '.published_candidates | length')" "2" "...both candidates recorded in the receipt"
+
+# ---------------------------------------------------------------------------------------------
+echo "--- p2.4 arXiv (§7.9 gateway half) ---"
+export STUB_BODY_FROM_TEMPLATE=1   # the paper template's Body headings
+stub_reset
+run_gw --url "https://arxiv.org/abs/2401.12345v1" --capture-id arx-1
+assert_eq "$rc $(result status)" "0 extracted" "an arXiv abstract URL with a version is captured"
+srca="$VAULT/Sources/$(result revision)/source.md"
+assert_eq "$(result canonical_url)" "https://arxiv.org/abs/2401.12345" "...canonical abs/<id> (the paper is the resource)"
+assert_eq "$(fm "$srca" source_type)" "paper" "...source_type defaults to paper"
+assert_eq "$(fm "$srca" arxiv_id) $(fm "$srca" arxiv_version) $(fm "$srca" arxiv_requested_version)" '"2401.12345" 1 1' "...arxiv_id / arxiv_version / arxiv_requested_version in the frontmatter"
+assert_eq "$(fm "$srca" author)" '"Ada Lovelace, Charles Babbage"' "...author from the citation_author metadata"
+assert_eq "$(fm "$srca" published)" '"2026-01-02"' "...published from citation_date (paper)"
+assert_eq "$(rget arx-1 '.request.requested_version')" "1" "...requested_version bound in the request"
+assert_contains "$(head -1 "$STUB_DIR/fetch-calls")" "--kind arxiv" "...capture-fetch.py called with --kind arxiv"
+assert_eq "$(grep -c -- '--landing-file' "$STUB_DIR/depth-calls" 2>/dev/null || echo 0)" "0" "...no depth fold for arXiv"
+run_gw --url "https://arxiv.org/pdf/2401.12345v2" --capture-id arx-2
+assert_eq "$rc $(result status)" "0 skipped-duplicate" "another version of a captured paper without --recapture → skipped-duplicate"
+assert_contains "$err" "arXiv version 1" "...naming the captured version"
+run_gw --url "https://arxiv.org/html/2401.12345v2" --recapture --capture-id arx-3
+assert_eq "$rc $(result status)" "0 extracted" "...--recapture captures the other version"
+assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" supersedes) $(fm "$VAULT/Sources/$(result revision)/source.md" arxiv_version)" "\"$(rget arx-1 '.revision')\" 2" "...with supersedes and the fetched version"
+STUB_FETCH=pdf run_gw --url "https://arxiv.org/abs/2402.00001" --capture-id arx-pdf
+assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" content_format) $(capfm "$VAULT/Sources/$(result revision)/source.md" method)" 'pdf "pdftotext"' "a paper served as PDF takes the pdf row"
+assert_file_exists "$ARCHIVE/$(result revision).pdf" "...raw as <revision>.pdf"
+assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" arxiv_id)" '"2402.00001"' "...with the arXiv metadata from the fetch report"
+unset STUB_BODY_FROM_TEMPLATE
+
+# ---------------------------------------------------------------------------------------------
+echo "--- p2.5 the depth fold after the landing fetch (§4.2, A8) ---"
+stub_reset
+STUB_DEPTH=fold run_gw --url "https://example.com/thin2" --capture-id depth-2
+assert_eq "$rc $(result status)" "0 extracted" "a folded landing is captured"
+srcd2="$VAULT/Sources/$(result revision)/source.md"
+dcall="$(depth_calls | head -1)"
+assert_contains "$dcall" "--landing-file $ARCHIVE/." "the fold ran on the STAGED landing raw (--landing-file)"
+assert_contains "$dcall" "--budget-s " "...under the remaining acquisition budget"
+assert_contains "$dcall" '--context {"final_url":"https://example.com/thin2","http_status":200,"acquisition":"ok","render":"auto","external":"off","budget_s":' "...with the frozen acquisition context (A8)"
+assert_eq "$(fetch_calls)" "1" "...after exactly one landing fetch (no second fetch for the fold)"
+assert_eq "$(capfm "$srcd2" raw_kind) $(capfm "$srcd2" method) $(capfm "$srcd2" acquisition) $(capfm "$srcd2" fetch)" 'composite "depth-composite" ok direct' "...raw_kind composite, method depth-composite, the landing's acquisition and fetch"
+assert_contains "$(cat "$srcd2")" "from defuddle" "...the landing part went through the converter"
+assert_contains "$(cat "$srcd2")" "# Folded: https://example.com/deeper" "...followed by the folded target's header"
+assert_contains "$(cat "$srcd2")" "folded body" "...and its text, assembled once"
+assert_eq "$(fm "$srcd2" declared_canonical_url)" '"https://example.com/thin-declared"' "the manifest's page-declared canonical merges as declared_canonical_url"
+assert_eq "$(fm "$srcd2" canonical_url)" '"https://example.com/thin2"' "...while canonical_url stays the computed identity"
+assert_eq "$(grep -c '^canonical_url:' "$srcd2")" "1" "...one canonical_url line"
+STUB_DEPTH=timeout run_gw --url "https://example.com/thin3" --capture-id depth-3
+assert_eq "$rc $(result status) $(capfm "$VAULT/Sources/$(result revision)/source.md" raw_kind)" "0 extracted response" "a fold that times out publishes the landing alone"
+
+# ---------------------------------------------------------------------------------------------
+echo "--- p2.6 media (§7.12 gateway half) ---"
+stub_reset
+stub_file_mime audio/mpeg
+c1="$(fetch_calls)"
+STUB_FETCH=audio run_gw --origin audio --url "https://example.com/stream" --capture-id snf-1
+stub_file_off
+assert_eq "$rc $(result status)" "0 extracted" "URL audio with no extension is captured"
+assert_file_exists "$ARCHIVE/$(result revision).mp3" "...named <revision>.mp3 by the content sniff (stub file → audio/mpeg)"
+assert_eq "$(fetch_calls)" "$((c1 + 1))" "...through one capture-fetch.py call (no curl)"
+assert_contains "$(head -1 "$STUB_DIR/fetch-calls")" "--expect audio" "...with --expect audio"
+assert_eq "$(ls "$ARCHIVE" | grep -c '\.audio$')" "0" "...and .audio is never written"
+assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" archive)" "\"$(result revision).mp3\"" "...archive: names the sniffed file"
+stub_reset
+STUB_FETCH=audio STUB_FETCH_EXT=m4a run_gw --origin audio --url "https://example.com/stream2" --capture-id snf-2
+assert_file_exists "$ARCHIVE/$(result revision).m4a" "the report's sniffed ext wins when capture-fetch.py reports one"
+# youtube captions: the track's language and the video's original language in the frontmatter
+stub_reset
+run_gw --url "https://www.youtube.com/watch?v=lang0000000" --capture-id yt-lang
+srcy="$VAULT/Sources/$(result revision)/source.md"
+assert_eq "$(fm "$srcy" transcript_language) $(fm "$srcy" original_language)" '"en" "pt"' "transcript_language / original_language from media.json"
+assert_eq "$(rget yt-lang '.media_meta.title') $(rget yt-lang '.media_meta.language') $(rget yt-lang '.media_meta.original_language') $(rget yt-lang '.media_meta.channel')" "Stub Video en pt Stub Channel" "...media_meta recorded in the receipt"
+assert_contains "$(cat "$STUB_DIR/media-calls")" "timeout=3600" "...media-extract.py ran under transcribe_timeout"
+run_gw --url "https://youtu.be/lang0000000?si=abc&t=10" --capture-id yt-lang-dup
+assert_eq "$rc $(result status)" "0 skipped-duplicate" "a youtu.be form of the same video is the same resource (canonical youtube)"
+run_gw --url "https://www.youtube.com/embed/lang0000000" --dry-run
+assert_contains "$out" "Origin: youtube" "...an embed form routes to the media path by kind"
+# the whisper replay: the receipt's media_meta is authoritative (D12); media_meta recorded before the raw checkpoint (A6)
+stub_reset
+export MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-raw-staged
+STUB_YT=whisper run_gw --url "https://youtube.com/watch?v=whisper00002" --capture-id yt-w3
+unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT
+assert_eq "$(rget yt-w3 '.media_meta.title') $(rget yt-w3 '.raw_published')" "Stub Video false" "crash after-raw-staged: media_meta is already recorded before the raw checkpoint (A6)"
+stub_reset
+run_gw --capture-id yt-w3
+assert_eq "$rc $(result status)" "0 extracted" "the whisper replay transcribes the retained audio"
+srcw="$VAULT/Sources/$(result revision)/source.md"
+assert_eq "$(cat "$STUB_DIR/media-calls")" "audio url= file=$ARCHIVE/$(rget yt-w3 '.revision').wav timeout=3600" "...by a transcription-only run"
+assert_eq "$(fm "$srcw" video_title) $(fm "$srcw" upload_date) $(fm "$srcw" duration)" '"Stub Video" "20260101" "0:10:00"' "...video_title / upload_date / duration re-merged from the receipt, not the filename title of the transcription run"
+# the media helper's exit codes
+stub_reset
+STUB_MEDIA=timeout run_gw --url "https://youtube.com/watch?v=hangs000000" --capture-id yt-hang
+assert_eq "$rc $(result error_class) $(result retryable)" "1 timeout true" "media-extract.py exit 124 → timeout, retryable"
+assert_eq "$(rget yt-hang '.stage')" "download" "...the stage from error.json"
+STUB_MEDIA=env run_gw --url "https://youtube.com/watch?v=noenv000000" --capture-id yt-env
+assert_eq "$rc $(result error_class)" "3 environment" "media-extract.py exit 3 → environment (exit 3)"
+
+# ---------------------------------------------------------------------------------------------
+echo "--- p2.7 the archive sidecar transaction (A6) ---"
+stub_reset
+run_gw --url "https://example.com/sidecar" --capture-id sc-1
+revs="$(result revision)"
+assert_file_exists "$ARCHIVE/$revs.report.json" "the sidecar is published next to the raw"
+assert_eq "$(shasum -a 256 "$ARCHIVE/$revs.report.json" | cut -c1-64)" "$(rget sc-1 '.report_sha256')" "...its bytes hash to the receipt's report_sha256"
+assert_eq "$(rget sc-1 '.report_state') $(rget sc-1 '.report_path') $(result report)" "published $ARCHIVE/$revs.report.json ok" "...report_state published, report_path, RESULT:report=ok"
+python3 - "$ARCHIVE/$revs.report.json" <<'PY' && pass "...canonical JSON bytes (sorted keys, no whitespace, one trailing newline)" || fail "canonical bytes" "differ"
+import json, sys
+d = open(sys.argv[1], "rb").read()
+obj = json.loads(d)
+assert d == (json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
+PY
+stub_reset
+export MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-source-published
+run_gw --url "https://example.com/sidecar-crash" --capture-id sc-2
+unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT
+rev2="$(rget sc-2 '.revision')"
+assert_eq "$(rget sc-2 '.report_state')" "pending" "crash between the source rename and the sidecar: report_state pending (frozen before the source was published)"
+[[ -f "$ARCHIVE/$rev2.report.json" ]] && fail "no sidecar yet" "exists" || pass "...no sidecar yet"
+run_gw --capture-id sc-2
+assert_eq "$rc $(result status) $(result report)" "0 extracted ok" "the replay rewrites the sidecar from the frozen report"
+assert_eq "$(shasum -a 256 "$ARCHIVE/$rev2.report.json" | cut -c1-64)" "$(rget sc-2 '.report_sha256')" "...with the frozen hash (idempotent, the receipt is the authority)"
+assert_eq "$(rget sc-2 '.report_state')" "published" "...report_state published"
+printf '{"tampered":true}\n' > "$ARCHIVE/$rev2.report.json"
+run_gw --capture-id sc-2
+assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error report-conflict" "a sidecar with another hash → integrity-error/report-conflict (never overwritten)"
+assert_eq "$(cat "$ARCHIVE/$rev2.report.json")" '{"tampered":true}' "...the foreign sidecar is untouched"
+assert_file_exists "$VAULT/Sources/$rev2/source.md" "...the revision is retained"
+rm -f "$ARCHIVE/$rev2.report.json"
+run_gw --capture-id sc-2
+assert_eq "$rc $(result status) $(result report)" "0 extracted ok" "...a missing sidecar is re-published on the next replay"
+# a sidecar failure after the source exists never fails the capture
+stub_reset
+chmod 555 "$ARCHIVE"
+STUB_FETCH_HOOK="chmod 755 '$ARCHIVE'; mkdir -p '$ARCHIVE'" run_gw --url "https://example.com/sidecar-ro" --capture-id sc-3 || true
+chmod 755 "$ARCHIVE"
+printf 'x\n' > "$TEST_TMPDIR/sc3.txt"
+run_gw_stdin "$TEST_TMPDIR/sc3.txt" --origin text --capture-id sc-text
+assert_eq "$rc $(result status)" "0 extracted" "a text origin has no capture-layer report"
+assert_eq "$(rget sc-text '.report_state') $(printf '%s\n' "$out" | grep -c '^RESULT:report=')" "null 0" "...so no sidecar transaction and no RESULT:report line"
 
 cleanup_capture_test
 summary

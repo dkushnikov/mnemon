@@ -6,6 +6,11 @@ Reports three gaps:
   B — `archive:` pointing to a file that is not in the archive dir (dangling)
   C — orphan archives: files in the archive dir no source references
 
+Phase 2 of the capture layer adds two archive members per revision that no `archive:` field
+names: the sidecar `<revision>.report.json` (the frozen capture report) and the bundle
+directory `<revision>.site/` of a site capture (named by `archive:`). A sidecar whose revision
+folder exists is not an orphan; a bundle is one archive entry like a file.
+
 Read-only. Usage: archive-audit.py [--config PATH] [--cutoff YYYY-MM-DD]
 The config is read through the engine's loader (bin/mnemon-config.sh via
 lib_config): with --config that file, otherwise the resolved instance
@@ -73,6 +78,11 @@ def main():
     orig_files = set()
     if archive_dir and os.path.isdir(archive_dir):
         orig_files = {f for f in os.listdir(archive_dir) if not f.startswith(".")}
+    # sidecars belong to their revision folder, never to an `archive:` field
+    revisions = {s["dir"] for s in sources}
+    sidecars = {f for f in orig_files if f.endswith(".report.json")}
+    orig_files -= sidecars
+    orphan_sidecars = sorted(f for f in sidecars if f[: -len(".report.json")] not in revisions)
 
     # An archive value is "real" if it names a file (not the unarchivable marker).
     def real_archive(s):
@@ -83,7 +93,7 @@ def main():
     gap_b = [s for s in sources
              if real_archive(s) and os.path.basename(s["archive"]) not in orig_files]
     referenced = {os.path.basename(s["archive"]) for s in sources if real_archive(s)}
-    gap_c = sorted(orig_files - referenced)
+    gap_c = sorted(orig_files - referenced) + orphan_sidecars
 
     print(f"Vault: {vault}")
     print(f"Archive dir: {archive_dir or '(none)'}")
