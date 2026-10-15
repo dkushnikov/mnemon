@@ -697,12 +697,17 @@ _release_drain() {
 
 # Smoke = engine health only: config resolves, version reports the new commit,
 # tests/test_config.sh passes, doctor has no fail line other than the
-# environmental deps/qmd/writer. MNEMON_SMOKE_CMD replaces the checks (tests only).
+# environmental deps/qmd/writer. MNEMON_SMOKE_CMD replaces the checks — a test
+# hook, honoured only together with MNEMON_TEST_HOOKS=1 so a stray variable in a
+# production environment can never stand in for the smoke.
 _release_smoke() {
   local home="$1" new_sha="$2" ok=true out log bad
   if [[ -n "${MNEMON_SMOKE_CMD:-}" ]]; then
-    echo "release: smoke — MNEMON_SMOKE_CMD override: $MNEMON_SMOKE_CMD"
-    if bash -c "$MNEMON_SMOKE_CMD"; then return 0; else return 1; fi
+    if [[ "${MNEMON_TEST_HOOKS:-}" == 1 ]]; then
+      echo "release: smoke — MNEMON_SMOKE_CMD override (MNEMON_TEST_HOOKS=1): $MNEMON_SMOKE_CMD"
+      if bash -c "$MNEMON_SMOKE_CMD"; then return 0; else return 1; fi
+    fi
+    echo "mnemon release: ignoring MNEMON_SMOKE_CMD — a test hook, honoured only with MNEMON_TEST_HOOKS=1; running the real smoke" >&2
   fi
   echo "release: smoke — $home/bin/mnemon config path"
   if out="$("$home/bin/mnemon" config path 2>&1)"; then echo "  $out"; else printf '%s\n' "$out" | sed 's/^/  /'; ok=false; fi
@@ -849,12 +854,18 @@ cmd_release() {
     } >&2
     exit 1
   fi
-  # --- 8. push (non-fatal) ---
+  # --- 8. push: the local release stands either way, but nodes pull origin/release ---
+  local new_sha
+  new_sha="$(git -C "$home" rev-parse --short HEAD)"
   if ! git -C "$home" push origin release >/dev/null 2>&1; then
-    echo "mnemon release: warning — 'git push origin release' failed (offline?); push later with: git -C $home push origin release" >&2
+    {
+      echo "mnemon release: released locally to $home, push failed: nodes will not see $new_sha"
+      echo "  origin/release did not move (offline? no access?) — push by hand before nodes pull: git -C $home push origin release"
+    } >&2
+    exit 3
   fi
   if $now; then echo "node ping not implemented (program phase 4)"; fi
-  echo "released $(git -C "$home" rev-parse --short HEAD) → $home"
+  echo "released $new_sha → $home"
 }
 
 # ---------------------------------------------------------------------------

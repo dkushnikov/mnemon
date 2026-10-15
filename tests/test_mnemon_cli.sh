@@ -552,8 +552,9 @@ PREV_FULL=$(git -C "$RWT" rev-parse HEAD)
 printf '# second change\n' >> "$REPO/tests/test-helper.sh"
 g "$REPO" commit -q -am "second change on main"
 NEW_MAIN=$(git -C "$REPO" rev-parse --short main)
-run env MNEMON_SMOKE_CMD=false MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
+run env MNEMON_TEST_HOOKS=1 MNEMON_SMOKE_CMD=false MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
 assert_eq "$rc" "1" "a failing smoke fails the release"
+assert_contains "$out" "MNEMON_SMOKE_CMD override (MNEMON_TEST_HOOKS=1): false" "the smoke override is honoured with MNEMON_TEST_HOOKS=1"
 assert_contains "$out" "smoke failed on $RWT @ $NEW_MAIN. Nothing was pushed" "smoke failure says nothing was pushed"
 assert_contains "$out" "mnemon release --rollback $PREV_REL" "smoke failure prints the rollback command"
 assert_contains "$out" "git -C $RWT reset --hard $PREV_REL" "smoke failure prints the reset"
@@ -623,11 +624,30 @@ assert_contains "$out" "engine processes to finish ($BUSY_PID" "symlink: drain n
 wait "$BUSY_PID" 2>/dev/null || true
 rm -f "$RWT/bin/busy.sh" "$TEST_TMPDIR/eng.ine"
 
-# with the engine idle again, the pending main commit releases cleanly
-run env PATH="$STUBBIN:$PATH" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
-assert_eq "$rc" "0" "release succeeds once the engine is idle"
+# with the engine idle again, the pending main commit releases cleanly; a stray
+# MNEMON_SMOKE_CMD without MNEMON_TEST_HOOKS=1 is ignored (F5), the real smoke runs
+run env PATH="$STUBBIN:$PATH" MNEMON_SMOKE_CMD=false MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
+assert_eq "$rc" "0" "release succeeds once the engine is idle (MNEMON_SMOKE_CMD without MNEMON_TEST_HOOKS is ignored)"
+assert_contains "$out" "ignoring MNEMON_SMOKE_CMD" "...with a one-line notice"
+assert_contains "$out" "release: smoke — $RWT/bin/mnemon config path" "...and the real smoke ran"
 assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$(git -C "$REPO" rev-parse main)" "release worktree at the new main"
 assert_eq "$(git -C "$ORIGIN" rev-parse release)" "$(git -C "$REPO" rev-parse main)" "origin/release pushed after the green smoke"
+
+# F5: a failed push is not a warning — the local release stands but nodes will not see it: exit 3
+printf '# third change\n' >> "$REPO/tests/test-helper.sh"
+g "$REPO" commit -q -am "third change on main"
+THIRD_MAIN=$(git -C "$REPO" rev-parse --short main)
+BEFORE_PUSH=$(git -C "$ORIGIN" rev-parse release)
+git -C "$REPO" remote set-url origin "$TEST_TMPDIR/no-such-origin.git"
+run env PATH="$STUBBIN:$PATH" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
+assert_eq "$rc" "3" "a failed push exits 3"
+assert_contains "$out" "released locally to $RWT, push failed: nodes will not see $THIRD_MAIN" "push failure names the engine and the sha nodes will miss"
+assert_contains "$out" "git -C $RWT push origin release" "push failure prints the push to retry by hand"
+assert_not_contains "$out" "released $THIRD_MAIN →" "push failure does not claim a release"
+assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$(git -C "$REPO" rev-parse main)" "the local release stays after a failed push"
+assert_eq "$(git -C "$ORIGIN" rev-parse release)" "$BEFORE_PUSH" "origin/release did not move"
+[[ -e "$LOCK" ]] && fail "lock removed after a failed push" "lock exists" || pass "lock removed after a failed push"
+git -C "$REPO" remote set-url origin "$ORIGIN"
 
 printf '# hotfix on release\n' >> "$RWT/tests/test-helper.sh"
 g "$RWT" commit -q -am "hotfix on release"
