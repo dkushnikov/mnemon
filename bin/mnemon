@@ -116,8 +116,8 @@ _reject_post_command_selectors() {
   local a
   for a in "$@"; do
     case "$a" in
-      --config|--config=*|--instance|--instance=*)
-        usage_error "$a belongs before the command: mnemon $a <command> …" ;;
+      --config|--config=*)     usage_error "${a%%=*} belongs before the command: mnemon --config <path> <command> …" ;;
+      --instance|--instance=*) usage_error "${a%%=*} belongs before the command: mnemon --instance <name> <command> …" ;;
     esac
   done
 }
@@ -255,6 +255,24 @@ cmd_init() {
     die "init: instance '$name' already exists at $inst_file (use --force to overwrite the config; vault files are never overwritten)"
   fi
 
+  # --- Preflight: refuse before anything is written (no scaffold, no config) ---
+  local archive_note=""
+  if [[ -n "$reader_src" ]]; then
+    reader_src="$(_abs_path "$reader_src")"
+    [[ -f "$reader_src" ]] || die "init: reader context not found: $reader_src"
+  fi
+  if [[ -n "$archive" ]]; then
+    # the user's explicit choice: create it now, or refuse before the vault is touched
+    archive="$(_abs_path "$archive")"
+    if [[ -d "$archive" ]]; then
+      archive_note="  ○ archive dir exists: $archive"
+    elif mkdir -p "$archive" 2>/dev/null; then
+      archive_note="  ✓ created archive dir $archive"
+    else
+      die "init: cannot create archive dir $archive (choose a writable --archive path)"
+    fi
+  fi
+
   # Vault: create and make tilde-free absolute.
   vault="$(_expand_tilde "$vault")"
   mkdir -p "$vault" || die "init: cannot create vault directory $vault"
@@ -272,8 +290,6 @@ cmd_init() {
   _copy_if_missing "$MNEMON_ROOT/vault-template/CLAUDE.md" "$vault/CLAUDE.md" "CLAUDE.md"
   _copy_if_missing "$MNEMON_ROOT/vault-template/_meta/Protocol.md" "$vault/_meta/Protocol.md" "_meta/Protocol.md"
   if [[ -n "$reader_src" ]]; then
-    reader_src="$(_expand_tilde "$reader_src")"
-    [[ -f "$reader_src" ]] || die "init: reader context not found: $reader_src"
     _copy_if_missing "$reader_src" "$vault/reader-context.md" "reader-context.md (from $reader_src)"
   else
     _copy_if_missing "$MNEMON_ROOT/reader-context.md.template" "$vault/reader-context.md" "reader-context.md (generic — edit to personalize)"
@@ -291,15 +307,7 @@ cmd_init() {
       "$template" > "$tmp"
   if [[ -n "$collection" ]];  then _yaml_set "$tmp" qmd_collection "$collection"; fi
   if [[ -n "$archive" ]]; then
-    archive="$(_abs_path "$archive")"
-    if [[ -d "$archive" ]]; then
-      echo "  ○ archive dir exists: $archive"
-    elif mkdir -p "$archive" 2>/dev/null; then
-      echo "  ✓ created archive dir $archive"
-    else
-      rm -f "$tmp"
-      die "init: cannot create archive dir $archive (choose a writable --archive path)"
-    fi
+    echo "$archive_note"
     _yaml_set "$tmp" archive_dir "$archive"
   fi
   if [[ -n "$charter" ]];     then _yaml_set "$tmp" charter_path "$(_abs_path "$charter")"; fi
@@ -516,13 +524,20 @@ cmd_doctor() {
     fi
   fi
 
-  # engine-lock — is a `mnemon release` moving the engine right now?
-  local lockf lstate=0
+  # engine-lock — is a `mnemon release` moving the engine right now? The release's
+  # own smoke runs doctor with MNEMON_ENGINE_LOCK_OWNER=<its pid>: that lock is
+  # expected, not a warning.
+  local lockf lstate=0 lock_pid
   lockf="$(mnemon_engine_lock_file)"
   mnemon_engine_lock_state || lstate=$?
   case "$lstate" in
     0) _check ok engine-lock "none ($lockf)" ;;
-    1) _check warn engine-lock "engine update in progress since $(_mnemon_lock_field date "$lockf") (pid $(_mnemon_lock_field pid "$lockf"), target $(_mnemon_lock_field target "$lockf")) — other commands exit 75 until $lockf is removed" ;;
+    1) lock_pid="$(_mnemon_lock_field pid "$lockf")"
+       if [[ -n "${MNEMON_ENGINE_LOCK_OWNER:-}" && "$MNEMON_ENGINE_LOCK_OWNER" == "$lock_pid" ]]; then
+         _check ok engine-lock "held by the running release (pid $lock_pid, target $(_mnemon_lock_field target "$lockf")) — this doctor is its smoke"
+       else
+         _check warn engine-lock "engine update in progress since $(_mnemon_lock_field date "$lockf") (pid $lock_pid, target $(_mnemon_lock_field target "$lockf")) — other commands exit 75 until $lockf is removed"
+       fi ;;
     2) _check warn engine-lock "stale lock $lockf (older than $((MNEMON_ENGINE_LOCK_MAX_AGE / 60)) min, ignored) — remove it if no release is running" ;;
   esac
 

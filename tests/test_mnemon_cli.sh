@@ -154,11 +154,13 @@ run "$MNEMON" init nova --non-interactive
 assert_eq "$rc" "2" "init without --vault is a usage error"
 run "$MNEMON" init nova --vault "$TEST_TMPDIR/vault-x" --reader-context "$TEST_TMPDIR/missing.md" --non-interactive
 assert_eq "$rc" "1" "init fails on a missing --reader-context file"
+[[ -e "$TEST_TMPDIR/vault-x" ]] && fail "a missing --reader-context refuses before the scaffold" "vault-x exists" || pass "a missing --reader-context refuses before the scaffold"
 printf 'not a dir\n' > "$TEST_TMPDIR/a-file"
 run "$MNEMON" init nova --vault "$TEST_TMPDIR/vault-x" --archive "$TEST_TMPDIR/a-file/archive" --non-interactive
 assert_eq "$rc" "1" "init fails when the --archive dir cannot be created"
 assert_contains "$out" "cannot create archive dir" "...and says so"
 assert_eq "$(ls "$CFG_DIR/instances" | grep -c '^nova' || true)" "0" "a refused init leaves no instance file"
+[[ -e "$TEST_TMPDIR/vault-x" ]] && fail "an unwritable --archive refuses before the scaffold" "vault-x exists" || pass "an unwritable --archive refuses before the scaffold (no vault dir created)"
 
 # --- config ---
 echo "--- config ---"
@@ -240,8 +242,12 @@ assert_eq "$rc" "2" "--instance adhoc → exit 2 (reserved name)"
 run "$MNEMON" add --instance beta --url https://example.com/x --dry-run
 assert_eq "$rc" "2" "a selector after the command is refused (dispatcher resolves once)"
 assert_contains "$out" "--instance belongs before the command" "...with the hint"
+assert_contains "$out" "mnemon --instance <name> <command> …" "...showing the global-option form with its argument"
+run "$MNEMON" add --instance=beta --url https://example.com/x --dry-run
+assert_contains "$out" "--instance belongs before the command: mnemon --instance <name> <command> …" "the --instance=<name> form gets the same hint"
 run "$MNEMON" status --config "$BETA_YAML"
 assert_eq "$rc" "2" "--config after the command is refused"
+assert_contains "$out" "--config belongs before the command: mnemon --config <path> <command> …" "...with the --config form and its argument"
 # a by-path copy declaring instance: alpha — the gateway child must see a consistent pair
 cp "$ALPHA_YAML" "$TEST_TMPDIR/copy-of-alpha.yaml"
 run "$MNEMON" --config "$TEST_TMPDIR/copy-of-alpha.yaml" config dump
@@ -392,6 +398,9 @@ assert_contains "$out" "warn engine-lock — engine update in progress since 202
 assert_contains "$out" "ok config — " "fresh lock: doctor still runs (exempt)"
 run env MNEMON_ENGINE_LOCK_OWNER=99999 "$MNEMON" version
 assert_eq "$rc" "0" "the lock owner's children pass the guard"
+run env MNEMON_ENGINE_LOCK_OWNER=99999 "$MNEMON" doctor
+assert_contains "$out" "ok engine-lock — held by the running release (pid 99999, target abc1234)" "the release's own smoke doctor reports its lock as ok"
+assert_not_contains "$out" "warn engine-lock" "...and not as a warning"
 run env MNEMON_ENGINE_LOCK_OWNER=1 "$MNEMON" version
 assert_eq "$rc" "75" "another pid as owner does not pass"
 printf 'pid=99999\ntimestamp=%s\ndate=2026-01-01T00:00:00Z\ntarget=abc1234\n' "$(( $(date +%s) - 3600 ))" > "$LOCK"
@@ -542,6 +551,8 @@ assert_eq "$(git -C "$ORIGIN" rev-parse release)" "$(git -C "$REPO" rev-parse ma
 assert_contains "$out" "release: smoke — $RWT/bin/mnemon config path" "release smoke resolves config"
 assert_contains "$out" "mnemon $(git -C "$REPO" rev-parse --short main) (release, $(git -C "$REPO" rev-parse --short main)) $RWT" "release smoke: version reports the new commit"
 assert_contains "$out" "ok config — " "release smoke ran doctor"
+assert_contains "$out" "ok engine-lock — held by the running release" "release smoke: doctor does not warn about the release's own lock"
+assert_not_contains "$out" "warn engine-lock" "release smoke: no warn engine-lock"
 assert_contains "$out" "Results: " "release smoke ran test_config.sh"
 assert_contains "$out" "release: lock removed ($LOCK)" "release removes the lock last"
 [[ -e "$LOCK" ]] && fail "lock removed after a successful release" "lock exists" || pass "lock removed after a successful release"
