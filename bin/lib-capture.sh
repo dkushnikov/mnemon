@@ -212,6 +212,15 @@ cap_bytes()   { wc -c < "$1" | tr -d ' '; }
 cap_host()    { local h; h="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)"; printf '%s' "${h%%.*}"; }
 cap_engine()  { local v; v="$(git -C "$MNEMON_ROOT" describe --tags --always 2>/dev/null || true)"; printf 'mnemon %s' "${v:-unknown}"; }
 cap_oneline() { printf '%s' "$1" | tr -d '\000-\037\177' ; }
+# Raw-store extension of a path: from the basename only (a dot in a directory name is not an
+# extension), lowercased; a basename without one (or a dotfile) gets the default.
+cap_ext_of() {   # <path> [default=bin]
+  local base ext
+  base="$(basename "$1")"
+  ext="${base##*.}"
+  if [[ "$ext" == "$base" || -z "$ext" || "$base" == .* && "$base" != *.*.* ]]; then ext="${2:-bin}"; fi
+  printf '%s' "$ext" | tr 'A-Z' 'a-z'
+}
 
 # Double-quoted scalar of the serialization subset (§4.4): control characters removed,
 # `"` → `\"`, `\` → `\\`.
@@ -795,9 +804,7 @@ cap_convert_file() {
 cap_acquire_file() {   # other local files: pandoc when it converts the type
   local ext
   [[ -f "$FILE_PATH" ]] || { FAIL_CLASS=input-missing; FAIL_MSG="file not found: $FILE_PATH"; return 1; }
-  ext="${FILE_PATH##*.}"
-  [[ "$ext" == "$FILE_PATH" ]] && ext="bin"
-  ext="$(printf '%s' "$ext" | tr 'A-Z' 'a-z')"
+  ext="$(cap_ext_of "$FILE_PATH" bin)"
   cap_raw_prepare "$ext"
   cap_raw_record_intent
   cap_py copy "$FILE_PATH" "$RAW_STAGED"
@@ -839,8 +846,8 @@ cap_acquire_audio() {
   fi
   audio="$(jq -r '.audio_path // ""' "$ATTEMPT_DIR/media.json" 2>/dev/null || true)"
   [[ -n "$audio" && -f "$audio" ]] || { FAIL_CLASS=fetch; FAIL_MSG="media.json names no audio_path to archive"; return 1; }
-  ext="${audio##*.}"; [[ "$ext" == "$audio" ]] && ext="audio"
-  cap_raw_prepare "$(printf '%s' "$ext" | tr 'A-Z' 'a-z')"
+  ext="$(cap_ext_of "$audio" audio)"
+  cap_raw_prepare "$ext"
   cap_raw_record_intent
   cap_py copy "$audio" "$RAW_STAGED"
   cap_raw_commit || return 1

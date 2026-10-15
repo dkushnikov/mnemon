@@ -276,7 +276,7 @@ cap_dry_run() {
     pdf)     raw_ext=pdf ;;
     youtube) raw_ext=txt ;;
     audio)   raw_ext="<audio ext>" ;;
-    file|book) raw_ext="${FILE_PATH##*.}" ;;
+    file|book) raw_ext="$(cap_ext_of "$FILE_PATH" bin)" ;;
   esac
   if [[ -n "$raw_ext" ]]; then
     if [[ -n "${ARCHIVE_DIR:-}" ]]; then raw_note="archive — $ARCHIVE_DIR/$(cap_today)_<resource_id>.$raw_ext"
@@ -614,7 +614,7 @@ cap_fresh() {
     pdf)     cap_raw_prepare pdf ;;
     youtube) cap_raw_prepare txt ;;
     audio)   cap_raw_prepare audio ;;
-    file|book) local e="${FILE_PATH##*.}"; [[ "$e" == "$FILE_PATH" ]] && e=bin; cap_raw_prepare "$(printf '%s' "$e" | tr 'A-Z' 'a-z')" ;;
+    file|book) cap_raw_prepare "$(cap_ext_of "$FILE_PATH" bin)" ;;
   esac
   TEXT_SHA256=""
   CAP_INIT_ATTEMPTS=1 cap_receipt_create started

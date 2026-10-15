@@ -451,6 +451,20 @@ run_gw --file "$TEST_TMPDIR/weird.xyz" --capture-id file-xyz
 assert_eq "$rc" "1" "unsupported file type → exit 1"
 assert_eq "$(result error_class)" "unsupported" "...unsupported"
 assert_file_exists "$ARCHIVE/$(rget file-xyz '.revision').xyz" "...raw retained"
+# the extension comes from the basename: a dot in a directory name is not one (an extensionless
+# file is .bin and unsupported; the same bytes as .md convert)
+mkdir -p "$TEST_TMPDIR/sub.dir"
+printf 'notes without an extension\n' > "$TEST_TMPDIR/sub.dir/notes"
+run_gw --file "$TEST_TMPDIR/sub.dir/notes" --capture-id ext-1
+assert_eq "$rc" "1" "an extensionless --file under a dotted directory → exit 1 unsupported (not a path error)"
+assert_eq "$(result error_class)" "unsupported" "...unsupported"
+assert_file_exists "$ARCHIVE/$(rget ext-1 '.revision').bin" "...raw retained as <revision>.bin"
+assert_eq "$(rget ext-1 '.raw_published')" "true" "...and the receipt's raw_published is honest"
+assert_eq "$(staging_left)" "0" "...no staging left"
+cp "$TEST_TMPDIR/sub.dir/notes" "$TEST_TMPDIR/sub.dir/notes.md"
+run_gw --file "$TEST_TMPDIR/sub.dir/notes.md" --capture-id ext-2
+assert_eq "$rc" "0" "the same bytes as .md under the dotted directory → extracted"
+assert_file_exists "$ARCHIVE/$(result revision).md" "...raw retained as <revision>.md"
 c1="$(curl_calls)"
 run_gw --origin audio --url "https://example.com/ep.mp3" --capture-id audio-1
 assert_eq "$rc" "0" "audio by URL exits 0"
