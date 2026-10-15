@@ -33,8 +33,22 @@
 #   ./mnemon.yaml, default, legacy), MNEMON_INSTANCE, MNEMON_STATE_DIR,
 #   VAULT_PATH, READER_CONTEXT_PATH, CHARTER_PATH, SEARCH_PROVIDER, QMD_COLLECTION,
 #   DEFAULT_MODEL, DEFAULT_LANGUAGE, WHISPER_MODEL, AUTO_DETECT_ORIGIN, ARCHIVE_DIR,
-#   WRITER_HOST. MNEMON_SELECTED_BY (set by the dispatcher/gateway when a flag
-#   chose the instance) only labels MNEMON_CONFIG_SOURCE.
+#   WRITER_HOST, EXTRACT_TIMEOUT, EXTRACT_INLINE_MAX_BYTES, EXTRACT_MAX_USD and
+#   MNEMON_VAULT_STATE_DIR. MNEMON_SELECTED_BY (set by the dispatcher/gateway when
+#   a flag chose the instance) only labels MNEMON_CONFIG_SOURCE.
+#
+# Two state directories (docs/specs/2026-10-15-capture-contracts.md D6, §7):
+#   MNEMON_STATE_DIR        instance-only state — `state_dir:` or
+#                           $XDG_STATE_HOME/mnemon/<instance>; a config loaded by
+#                           path without an instance name gets its own namespace
+#                           $XDG_STATE_HOME/mnemon/adhoc-<sha256(config path)[:8]>
+#   MNEMON_VAULT_STATE_DIR  the capture ledger of the physical vault — receipts,
+#                           attempt dirs, the state raw store, ingest state and the
+#                           vault lock: $XDG_STATE_HOME/mnemon/vaults/<sha256(vault
+#                           path resolved with pwd -P, no trailing slash)[:16]>.
+#                           Shared by every config that points at the vault. The
+#                           loader only computes it (doctor is observational); the
+#                           writers create it with mode 0700.
 #
 # bash 3.2 compatible: no associative arrays, no ${var,,}, no mapfile.
 
@@ -162,6 +176,44 @@ _mnemon_expand_tilde() {
     "~/"*) printf '%s%s' "$HOME" "${1#\~}" ;;
     *)     printf '%s' "$1" ;;
   esac
+}
+
+# Literal frontmatter scalar of an artifact (source.md / extract.md), spec §4.4:
+# `_mnemon_yaml_literal <key> <file>` prints the value of the first top-level
+# `key: value` line inside the frontmatter block (between the opening `---` and the
+# closing `---`; nested keys are indented and never match; the body is never read).
+# A double-quoted value decodes exactly `\"` → `"` and `\\` → `\` — the two escapes
+# the gateway writes — and nothing else; a single-quoted value is taken verbatim up
+# to its closing quote; an unquoted value loses a trailing ` # comment` and
+# surrounding whitespace. No tilde expansion: a title `~` or `~/Guide` is literal.
+# (`_parse_yaml_value` is the configuration reader and keeps expanding `~` for
+# paths; it must never be used on artifact fields.)
+_mnemon_yaml_literal() {
+  local key="$1" file="$2"
+  local val
+  val=$(awk -v k="$key" 'BEGIN { prefix = k ": "; bare = k ":" }
+    NR == 1 { if ($0 == "---") { fm = 1; next } else { exit } }
+    fm && ($0 == "---" || $0 == "...") { exit }
+    fm && substr($0, 1, length(prefix)) == prefix { print substr($0, length(prefix) + 1); exit }
+    fm && $0 == bare { print ""; exit }' "$file" 2>/dev/null)
+  val=$(printf '%s' "$val" | sed 's/^[[:space:]]*//')
+  case "$val" in
+    \"*) val="$(_mnemon_unquote_dq "${val#\"}")" ;;
+    \'*) val="${val#\'}"; val="${val%%\'*}" ;;
+    \#*) val="" ;;
+    *)   val=$(printf '%s' "$val" | sed 's/[[:space:]]#.*$//; s/[[:space:]]*$//') ;;
+  esac
+  printf '%s\n' "$val"
+}
+
+# Capture ledger directory of a physical vault (D6): the vault path resolved with
+# `pwd -P` when it exists (else as given, absolute), trailing slashes stripped,
+# hashed. Printed, never created.
+mnemon_vault_state_dir() {
+  local vault="$1" phys
+  phys="$(cd "$vault" 2>/dev/null && pwd -P)" || phys="$(_mnemon_abs_file "$vault")"
+  while [[ "${#phys}" -gt 1 && "$phys" == */ ]]; do phys="${phys%/}"; done
+  printf '%s/mnemon/vaults/%s' "$(mnemon_state_home)" "$(printf '%s' "$phys" | shasum -a 256 | cut -c1-16)"
 }
 
 # First non-empty, non-comment line of a `default` file (the default instance).
@@ -314,6 +366,9 @@ load_config() {
   MNEMON_STATE_DIR="$(_parse_yaml_value state_dir "$config_file")"
   CHARTER_PATH="$(_parse_yaml_value charter_path "$config_file")"
   WRITER_HOST="$(_parse_yaml_value writer_host "$config_file")"
+  EXTRACT_TIMEOUT="$(_parse_yaml_value extract_timeout "$config_file")"
+  EXTRACT_INLINE_MAX_BYTES="$(_parse_yaml_value extract_inline_max_bytes "$config_file")"
+  EXTRACT_MAX_USD="$(_parse_yaml_value extract_max_usd "$config_file")"
 
   # Instance name: the name that selected the file wins; otherwise the yaml's
   # `instance:` key; otherwise adhoc.
@@ -341,15 +396,29 @@ load_config() {
   WHISPER_MODEL="${WHISPER_MODEL:-large-v3}"
   AUTO_DETECT_ORIGIN="${AUTO_DETECT_ORIGIN:-true}"
   ARCHIVE_DIR="${ARCHIVE_DIR:-}"
-  MNEMON_STATE_DIR="${MNEMON_STATE_DIR:-$(mnemon_state_home)/mnemon/$MNEMON_INSTANCE}"
+  # Instance-only state: a by-path config without an instance name gets a
+  # namespace of its own (spec §7) so two ad-hoc configs never share it; the
+  # capture ledger is per vault (MNEMON_VAULT_STATE_DIR) and shared on purpose.
+  if [[ -z "$MNEMON_STATE_DIR" ]]; then
+    if [[ "$MNEMON_INSTANCE" == "$MNEMON_ADHOC_INSTANCE" ]]; then
+      MNEMON_STATE_DIR="$(mnemon_state_home)/mnemon/adhoc-$(printf '%s' "$MNEMON_CONFIG_FILE" | shasum -a 256 | cut -c1-8)"
+    else
+      MNEMON_STATE_DIR="$(mnemon_state_home)/mnemon/$MNEMON_INSTANCE"
+    fi
+  fi
+  MNEMON_VAULT_STATE_DIR="$(mnemon_vault_state_dir "$VAULT_PATH")"
   CHARTER_PATH="${CHARTER_PATH:-$VAULT_PATH/_meta/charter.md}"
   WRITER_HOST="${WRITER_HOST:-}"
+  EXTRACT_TIMEOUT="${EXTRACT_TIMEOUT:-900}"
+  EXTRACT_INLINE_MAX_BYTES="${EXTRACT_INLINE_MAX_BYTES:-400000}"
+  EXTRACT_MAX_USD="${EXTRACT_MAX_USD:-}"
 
   # The pair a child re-resolves from — consistent by construction.
   MNEMON_CONFIG="$MNEMON_CONFIG_FILE"
 
   export MNEMON_ROOT MNEMON_CONFIG MNEMON_CONFIG_FILE MNEMON_CONFIG_SOURCE MNEMON_INSTANCE MNEMON_STATE_DIR
+  export MNEMON_VAULT_STATE_DIR
   export VAULT_PATH READER_CONTEXT_PATH CHARTER_PATH SEARCH_PROVIDER
   export QMD_COLLECTION DEFAULT_MODEL DEFAULT_LANGUAGE WHISPER_MODEL AUTO_DETECT_ORIGIN ARCHIVE_DIR
-  export WRITER_HOST
+  export WRITER_HOST EXTRACT_TIMEOUT EXTRACT_INLINE_MAX_BYTES EXTRACT_MAX_USD
 }
