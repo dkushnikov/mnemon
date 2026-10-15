@@ -6,6 +6,11 @@ source "$MNEMON_ROOT/bin/mnemon-config.sh"
 
 echo "=== Config Loader Tests ==="
 echo "toolchain: $(bash --version | head -1) · $(python3 --version 2>&1)"
+# the legacy run (PATH=/usr/bin:/bin:$PATH): the system bash first on PATH means bash 3.2 / python 3.9 — asserted
+if [[ "$(command -v bash)" == /bin/bash ]]; then
+  [[ "$(bash --version | head -1)" == *"version 3.2."* ]] && pass "legacy toolchain: bash 3.2.x" || fail "legacy toolchain: bash 3.2.x" "$(bash --version | head -1)"
+  [[ "$(python3 --version 2>&1)" == "Python 3.9."* ]] && pass "legacy toolchain: python 3.9.x" || fail "legacy toolchain: python 3.9.x" "$(python3 --version 2>&1)"
+fi
 
 # Isolation: every resolution below happens under a temp XDG tree and a temp
 # cwd; the user's real ~/.config/mnemon, state dir and vault are never touched.

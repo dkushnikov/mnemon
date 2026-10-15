@@ -37,6 +37,12 @@ unset MNEMON_CAPTURE_FETCH_CMD MNEMON_CAPTURE_SITE_CMD MNEMON_DEPTH_FOLD_CMD MED
 unset STUB_SITE STUB_SITE_CONVERT_FAIL STUB_DEPTH STUB_MEDIA STUB_YT STUB_FETCH_HOOK STUB_CURL_HOOK STUB_FETCH_EXT STUB_FETCH_PUBLISHED
 unset STUB_FIXTURE_PART STUB_FIXTURE_PART_BAD STUB_PART_BAD_CALLS STUB_FAIL_CALLS STUB_COST STUB_COST_NULL
 echo "toolchain: $(bash --version | head -1) · $(python3 --version 2>&1)"
+# the legacy run (PATH=/usr/bin:/bin:$PATH, §7.16 / A12): when the system bash is first on PATH
+# the suite must really be running bash 3.2 and python 3.9 — asserted, not assumed
+if [[ "$(command -v bash)" == /bin/bash ]]; then
+  [[ "$(bash --version | head -1)" == *"version 3.2."* ]] && pass "legacy toolchain: bash 3.2.x" || fail "legacy toolchain: bash 3.2.x" "$(bash --version | head -1)"
+  [[ "$(python3 --version 2>&1)" == "Python 3.9."* ]] && pass "legacy toolchain: python 3.9.x" || fail "legacy toolchain: python 3.9.x" "$(python3 --version 2>&1)"
+fi
 VAULT="$TEST_TMPDIR/vault"
 ARCHIVE="$TEST_TMPDIR/archive"
 STUBS="$TEST_TMPDIR/stubs"

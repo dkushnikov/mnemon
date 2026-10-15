@@ -886,11 +886,8 @@ cap_lookup_head() {   # uses RESOURCE_SHA256, CANONICAL_URL (empty for non-url k
   return 0
 }
 
-cap_latest_revision() {   # → "<folder> <legacy>" of the head, or nothing
-  cap_lookup_head
-  [[ -n "$CAP_HEAD" ]] || return 0
-  if [[ "$CAP_HEAD_MANAGED" == "true" ]]; then printf '%s false\n' "$CAP_HEAD"; else printf '%s true\n' "$CAP_HEAD"; fi
-}
+# (cap_lookup_head is called in the gateway's own shell, never inside $(…): its integrity exit
+# must end the run, not a subshell)
 
 # Revision names reserved by non-final receipts of the ledger (one line each).
 cap_reserved_revisions() {
