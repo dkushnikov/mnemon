@@ -5,10 +5,10 @@ created: 2026-06-01
 revised: 2026-06-01
 project: Mnemon — depth-aware capture
 sibling_spec: "[[2026-05-31-content-aware-url-triage]]"
-author: Atlas (Knowledge session 2026-06-01)
+author: maintainer
 revision_history:
-  - "v1: initial design after brainstorming (Q1-Q3) + Atlas→Mnemon location correction"
-  - "v2: integrated VAST check + Review 1 (gpt-5.5-pro) + Nestor council (Opus 4.7 + Gemini 3.1-pro + GPT-5.5-pro, deliberative arch, stage-1 + stage-2 cross-critique, degraded 2/3 on stage-2). Three forks decided by the maintainer. See Appendix C."
+  - "v1: initial design after brainstorming (Q1-Q3) + moved into the Mnemon repository"
+  - "v2: integrated VAST check + Review 1 (gpt-5.5-pro) + multi-model council (Opus 4.7 + Gemini 3.1-pro + GPT-5.5-pro, deliberative arch, stage-1 + stage-2 cross-critique, degraded 2/3 on stage-2). Three forks decided by the maintainer. See Appendix C."
 ---
 
 # Depth-Aware Capture — Design Spec (v2)
@@ -35,7 +35,7 @@ revision_history:
 
 ## TL;DR
 
-> [!decision] 6 решений (v2) + 3 fork-решения Димы
+> [!decision] 6 решений (v2) + 3 fork-решения мейнтейнера
 > 1. **Source modeling = hybrid + numeric same-entity confidence.** Same-entity сворачивается в один `source.md`; иной ресурс → отдельный source. **Bounded-fold, НЕ retreat-to-separate** (Opus: «favor separate» противоречит самой фиче). Default при неуверенности — не сворачивать.
 > 2. **[FORK 1] Оркестрация детерминированная, не в prompt.** Gateway preflight'ом гоняет probe + fetch + build composite (зеркалит `--render`); `claude -p` пишет verbatim source.md + extract.md. v1 fail-safe: сворачиваем только high-confidence same-entity; borderline → не сворачиваем + помечаем кандидата. LLM-классификатор borderline = v2.
 > 3. **v1 scope = probes без рендера.** llms.txt · GitHub (explicit links + API/README) · docs (`docs.`, `/docs`). **GitHub-search и sitemap.xml → deferred** (YAGNI/rate-limit). Reuse `render-url.sh` для SPA-целей.
@@ -115,7 +115,7 @@ type: source
 source_type: <repo|article|...>
 content_format: composite        # NEW value
 origin: <github|web|...>
-url: "<ПОСТНУТАЯ ссылка>"          # user-facing identity = что дал Дима
+url: "<ПОСТНУТАЯ ссылка>"          # user-facing identity = что дал мейнтейнер
 posted_url: "<постнутая>"
 final_url: "<после редиректов>"
 canonical_url: "<og:url / <link rel=canonical>, если есть>"
@@ -239,7 +239,7 @@ Rejected candidates: <url> (medium, no backlink). External refs (не свёрн
 - `lib-url.py` — существует ли уже (triage-спек планировал его создать); если нет — создаём здесь.
 
 ## Status
-v2 spec approved (Дима: «верю тебе»). Council confidence: high (Opus 8 · Gemini 8 · GPT 7, stage-2 degraded 2/3 но конвергентен). Все unanimous must-fixes вшиты; 3 форка решены; async — escape hatch.
+v2 spec approved (мейнтейнер: «верю тебе»). Council confidence: high (Opus 8 · Gemini 8 · GPT 7, stage-2 degraded 2/3 но конвергентен). Все unanimous must-fixes вшиты; 3 форка решены; async — escape hatch.
 
 ### Implementation progress (2026-06-01) — все council must-fixes РЕАЛИЗОВАНЫ
 Коммиты: `c65e2e1` (probe+lib_url) · `15aba32` (fold+gateway) · `c3a22f0` (D6a+D4).
@@ -256,12 +256,12 @@ v2 spec approved (Дима: «верю тебе»). Council confidence: high (Op
 
 ## Appendix C — Review history (v1 → v2)
 
-**v1:** 2026-06-01, после брейншторма (Q1-Q3) + коррекция места (Atlas→Mnemon, по вопросу Димы).
+**v1:** 2026-06-01, после брейншторма (Q1-Q3) + коррекция места (спека перенесена в репозиторий Mnemon, по вопросу мейнтейнера).
 
 **Review process:**
 - **VAST check** (vast-validate): scope=product, доминирует Architecture+Tactics, **Vision отсутствовал** → добавлен Vision + falsification (выше). Инварианты Mnemon honored (Matryoshka pass).
 - **Review 1** — `pal.chat`, `openai/gpt-5.5-pro`, thinking-high.
-- **Review 2** — Nestor council via `pal.consensus`, deliberative arch (`anthropic/claude-opus-4.7` + `google/gemini-3.1-pro-preview` + `openai/gpt-5.5-pro`), all-neutral. Stage-1: 3 ответа. Stage-2: 3 anonymised cross-critiques (**degraded 2/3** — gemini-критика вернула blocked/incomplete; продолжено по degraded-run handling).
+- **Review 2** — multi-model council via `pal.consensus`, deliberative arch (`anthropic/claude-opus-4.7` + `google/gemini-3.1-pro-preview` + `openai/gpt-5.5-pro`), all-neutral. Stage-1: 3 ответа. Stage-2: 3 anonymised cross-critiques (**degraded 2/3** — gemini-критика вернула blocked/incomplete; продолжено по degraded-run handling).
 
 **Convergent findings (unanimous stage-1 + Review 1):**
 1. Cross-spec false-skip = v1 blocker, не deferrable → D6a.
@@ -279,6 +279,6 @@ v2 spec approved (Дима: «верю тебе»). Council confidence: high (Op
 - SSRF/network-safety → D6b + step 1.
 - Injection ≠ решается verbatim-хранением; нужна instruction-isolation на extract → D6b.
 
-**Fork decisions (Дима, 2026-06-01):** (1) детерминированная оркестрация ✓; (2) sync v1, async = escape hatch ✓; (3) user-intent override ✓.
+**Fork decisions (мейнтейнер, 2026-06-01):** (1) детерминированная оркестрация ✓; (2) sync v1, async = escape hatch ✓; (3) user-intent override ✓.
 
 **Confidence after v2:** high на архитектуру; ниже на same-entity precision (эмпирично, мерить false-fold rate в usage).

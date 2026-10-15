@@ -310,7 +310,7 @@ def main():
             Path(manifest_path).parent.mkdir(parents=True, exist_ok=True)
             Path(manifest_path).write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
         print(f"\n✓ Knowledge manifest: {manifest_path} ({len(manifest)} items)")
-        print(f"  Next step: ~/Mnemon/bin/knowledge-gateway.sh source-add \\")
+        print(f"  Next step: mnemon add \\")
         print(f"             --manifest {manifest_path} \\")
         print(f"             --context personal \\")
         print(f"             --import-source dump \\")

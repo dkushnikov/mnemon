@@ -4,10 +4,10 @@ status: review-v2
 created: 2026-05-31
 revised: 2026-05-31
 project: Mnemon — content-aware URL triage
-author: Atlas (Knowledge session 2026-05-31)
+author: maintainer
 revision_history:
   - "v1: initial design after brainstorming"
-  - "v2: integrated Nestor council review (Opus 4.7 + Gemini 3.1-pro + GPT-5.5-pro, deliberative arch preset) + own engineering:architecture pass — see Appendix C"
+  - "v2: integrated multi-model council review (Opus 4.7 + Gemini 3.1-pro + GPT-5.5-pro, deliberative arch preset) + own engineering:architecture pass — see Appendix C"
 ---
 
 # Content-Aware URL Triage — Design Spec (v2)
@@ -344,7 +344,7 @@ Constants live in `triage-urls.py` as module-level config.
 
 ## Status
 
-V2 spec, ready for review. v2 integrates Nestor council review + own engineering:architecture pass. MVP scope expanded (executor + cache + calibration loop in), but still tractable (~3 days). Mnemon repo as build location. Reuses existing infra (defuddle, claude -p, knowledge-gateway.sh + minor mod).
+V2 spec, ready for review. v2 integrates multi-model council review + own engineering:architecture pass. MVP scope expanded (executor + cache + calibration loop in), but still tractable (~3 days). Mnemon repo as build location. Reuses existing infra (defuddle, claude -p, knowledge-gateway.sh + minor mod).
 
 ---
 
@@ -378,7 +378,7 @@ V2 spec, ready for review. v2 integrates Nestor council review + own engineering
 
 **v1 written:** 2026-05-31, ~3 hours, after brainstorming dialogue with the maintainer.
 
-**Review process:** Nestor council via `pal.consensus` — deliberative mode, arch preset (Opus 4.7 + Gemini 3.1-pro + GPT-5.5-pro), all-neutral stances. Stage 1: 3 first-round answers. Stage 2: 3 parallel anonymised cross-critiques. Plus own engineering:architecture pass for session-aware qualifications.
+**Review process:** multi-model council via `pal.consensus` — deliberative mode, arch preset (Opus 4.7 + Gemini 3.1-pro + GPT-5.5-pro), all-neutral stances. Stage 1: 3 first-round answers. Stage 2: 3 parallel anonymised cross-critiques. Plus own engineering:architecture pass for session-aware qualifications.
 
 **Convergent findings (unanimous stage 1):**
 1. synthesis-seed override is data-loss bug

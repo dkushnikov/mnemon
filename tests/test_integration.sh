@@ -8,9 +8,9 @@ echo "=== Integration Tests ==="
 TEST_TMPDIR=$(mktemp -d -t mnemon-integration-XXXX)
 VAULT="$TEST_TMPDIR/test-vault"
 
-# Isolate the test's config from the user's real ~/Mnemon/mnemon.yaml.
-# setup.sh and mnemon-config.sh both honor $MNEMON_CONFIG, so exporting it
-# here routes all config reads and writes into $TEST_TMPDIR.
+# Isolate the test's config from the user's real instance files and legacy
+# mnemon.yaml. setup.sh and mnemon-config.sh both honor $MNEMON_CONFIG, so
+# exporting it here routes all config reads and writes into $TEST_TMPDIR.
 export MNEMON_CONFIG="$TEST_TMPDIR/mnemon.yaml"
 
 # --- Test 1: Full setup flow ---
@@ -89,9 +89,8 @@ assert_contains "$output" "DRY RUN" "dry-run still works with qmd provider set"
 # Flip back for subsequent tests
 sed -i '' 's/^search_provider: qmd/search_provider: grep/' "$MNEMON_CONFIG"
 
-# Skills and plugin manifest moved to the dkushnikov/mnemon-plugin repo;
-# tests for those assertions live there now (see commit removing plugin.json
-# and skills/ from Mnemon tool repo).
+# The in-tree plugin (plugins/mnemon, .claude-plugin/marketplace.json) is
+# covered by tests/test_hygiene.sh: manifest validity, version, path form.
 
 # --- Test 8: Template exists ---
 echo "--- Templates ---"

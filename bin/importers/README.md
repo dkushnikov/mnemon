@@ -191,8 +191,8 @@ cat > /tmp/promote.json <<'EOF'
 ]
 EOF
 
-# Batch import
-~/Mnemon/bin/knowledge-gateway.sh source-add \
+# Batch import (mnemon add = knowledge-gateway.sh source-add of the installed engine)
+mnemon add \
   --manifest /tmp/promote.json \
   --context personal \
   --import-source safari \
