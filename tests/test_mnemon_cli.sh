@@ -592,6 +592,9 @@ printf 'not a receipt\n' > "$VSTATE_A/captures/junk.json"
 run "$MNEMON" doctor
 assert_contains "$out" "warn captures — 2 failed/extract-failed receipt(s) — finish with: mnemon add --resume c-failed; 2 receipt(s) point at missing files; 1 unreadable receipt(s)" "doctor: captures warns about failed receipts (with the --resume hint), missing files and unreadable receipts"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^fail captures' || true)" "0" "...as a warning, never a failure"
+receipt c-integ integrity-error '"2026-10-15_aaaaaaaa"'
+run "$MNEMON" doctor
+assert_contains "$out" "; 1 integrity-error receipt(s) — a published source.md is missing or was edited (operator: restore it, then replay); 2 receipt(s) point at missing files" "doctor: captures counts integrity-error receipts (A3) as an operator item, apart from the --resume hint"
 rm -rf "$VSTATE_A/captures" "$VAULT_A/Sources/2026-10-15_aaaaaaaa" "$VAULT_A/Sources/2026-10-15_bbbbbbbb"
 IRES="$VSTATE_A/ingest/abcd1234/results"
 mkdir -p "$IRES"

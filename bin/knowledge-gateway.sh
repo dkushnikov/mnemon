@@ -410,29 +410,19 @@ cap_replay() {
   cap_restore_from_receipt
   cap_receipt_update "$CAPTURE_ID" '.replayed=true'
 
-  # --- alias receipts: the fixed target revision, never the acquisition rows ---
-  if [[ -n "$RESOLVED_REV" ]]; then
-    REVISION="$RESOLVED_REV"
-    cap_verify_source "$REVISION" "$RESOLVED_CID" "$TEXT_SHA256" "$LEGACY_MATCH" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
-    if [[ "$RECEIPT_STATE" == "extracted" && "$RECEIPT_ATTEMPTS" -eq 0 ]]; then
-      cap_result skipped-duplicate "$(cap_extract_state_of "$REVISION")" "" "" true
-      exit 0
-    fi
-    if cap_extract_belongs; then
-      if [[ "$RECEIPT_STATE" == "extracted" ]]; then cap_result extracted ok "" "" true; exit 0; fi
-      cap_reconcile_extracted false
-    fi
-    if [[ "$RECEIPT_STATE" == "extracted" && -f "$VAULT_PATH/Sources/$REVISION/extract.md" ]]; then
-      cap_result extracted ok "" "" true; exit 0
-    fi
-    cap_run_extract_step true false
-  fi
+  # --- alias receipts: the fixed target revision; publication recovery is delegated (§12 A4) ---
+  if [[ -n "$RESOLVED_REV" ]]; then cap_alias_replay; fi
 
   case "$RECEIPT_STATE" in
-    extracted)
+    extracted|integrity-error)
+      # (an integrity-error receipt is re-verified: when the operator restored the file the
+      # capture goes on from the files as they are, §12 A3)
       cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
       if [[ ! -f "$VAULT_PATH/Sources/$REVISION/extract.md" ]]; then
         cap_run_extract_step true "$KEEP_LOCATOR"
+      fi
+      if [[ "$RECEIPT_STATE" == "integrity-error" ]]; then
+        cap_receipt_update "$CAPTURE_ID" '.state="extracted" | .error_class=null | .error=null | .retryable=null'
       fi
       # hash equal or not: the RESULT comes from the files as they are
       cap_result extracted ok "" "" true
@@ -443,14 +433,16 @@ cap_replay() {
       cap_run_extract_step true "$KEEP_LOCATOR" ;;
     started|failed)
       if [[ -f "$VAULT_PATH/Sources/$REVISION/source.md" ]]; then
-        # crash after the directory rename, before the receipt
+        # crash after the directory rename, before the receipt: a source.md at the reserved name
+        # is verified (§12 A3 — verification applies once a source.md with this id exists)
         cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
         cap_receipt_update "$CAPTURE_ID" '.state="source-published" | .source_published=true | .error_class=null | .error=null | .retryable=null'
         if cap_extract_belongs; then cap_reconcile_extracted "$KEEP_LOCATOR"; fi
         cap_run_extract_step true "$KEEP_LOCATOR"
       fi
       case "$RECEIPT_CLASS" in
-        archive-exists|input-missing)
+        archive-exists|input-missing|evidence-missing|evidence-mismatch)
+          # operator classes: exit 1 again with the same class (§3.4; raw evidence rows of §12 A3)
           REVISION=""
           echo "ERROR: $(cap_receipt_get "$CAPTURE_ID" '.error // ""')" >&2
           cap_result failed none "$RECEIPT_CLASS" false true
@@ -461,19 +453,66 @@ cap_replay() {
   esac
 }
 
+# An alias names a fixed target revision (§3.1). When the owner receipt (the operation that
+# published the revision) is in the ledger, the publication recovery is delegated to it: the rows
+# run with CAPTURE_ID = the owner and update the owner's receipt, extract.md carries the owner's
+# id, the alias (ALIAS_ID) records only its own attempt accounting and reports the requested id
+# (§12 A4). Without an owner receipt the alias runs the rows itself. Verification compares
+# source.md with the OWNER id. Expects the alias's receipt restored into the globals.
+cap_alias_replay() {
+  local alias="$CAPTURE_ID" owner="$RESOLVED_CID" target="$RESOLVED_REV"
+  local alias_state="$RECEIPT_STATE" alias_attempts="$RECEIPT_ATTEMPTS" keep=false
+  ALIAS_ID=""
+  REVISION="$target"
+  if [[ -n "$owner" ]] && cap_receipt_exists "$owner" && [[ "$(cap_receipt_get "$owner" '.resolved_to_revision // ""')" == "" ]]; then
+    ALIAS_ID="$alias"
+    CAPTURE_ID="$owner"
+    cap_restore_from_receipt        # the owner's request, locator, hashes and state
+    REVISION="$target"
+    keep="$KEEP_LOCATOR"
+    cap_receipt_update "$CAPTURE_ID" '.replayed=true'
+  fi
+  cap_verify_source "$REVISION" "$owner" "$TEXT_SHA256" "$LEGACY_MATCH" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+  if [[ -n "$ALIAS_ID" && ( "$RECEIPT_STATE" == "started" || "$RECEIPT_STATE" == "failed" ) ]]; then
+    # the owner's receipt lagged behind its published folder (crash after the rename)
+    cap_receipt_update "$CAPTURE_ID" '.state="source-published" | .source_published=true | .error_class=null | .error=null | .retryable=null'
+  fi
+  if [[ "$alias_state" == "extracted" && "$alias_attempts" -eq 0 ]]; then
+    # a duplicate alias: the RESULT from the files of its target, nothing written
+    cap_result skipped-duplicate "$(cap_extract_state_of "$REVISION")" "" "" true
+    exit 0
+  fi
+  if [[ -f "$VAULT_PATH/Sources/$REVISION/extract.md" ]]; then
+    if [[ "$alias_state" == "extracted" ]]; then cap_result extracted ok "" "" true; exit 0; fi
+    if cap_extract_belongs || [[ "$LEGACY_MATCH" == true ]]; then cap_reconcile_extracted "$keep"; fi
+    cap_result extracted ok "" "" true     # an extract that belongs to another operation: the files decide
+    exit 0
+  fi
+  cap_run_extract_step true "$keep"
+}
+
 # started / failed without a published source: finish or redo the acquisition with the same
-# reserved names, then publish and extract.
+# reserved names, then publish and extract. The retained inputs win over the locator (§12 A4):
+# the original --file is consulted only when nothing is retained, and recorded raw evidence is
+# never refetched (§12 A3).
 cap_recover_acquire() {
   local staged_match=false
   cap_new_attempt "$CAPTURE_ID"
   cap_receipt_update "$CAPTURE_ID" '.state="started" | .error_class=null | .error=null | .retryable=null'
-  cap_restore_input
   if ! cap_preflight_extractor; then cap_fail_exit "$PREFLIGHT_CLASS" "$PREFLIGHT_MSG"; fi
   if [[ "$RAW_STORE" != "none" && -n "$RAW_PATH" ]]; then
     RAW_DIR="$(dirname "$RAW_PATH")"
-    if [[ "$RAW_PUBLISHED" == "true" && -n "$RAW_SHA256" && -f "$RAW_PATH" && "$(cap_sha256 "$RAW_PATH")" == "$RAW_SHA256" ]]; then
-      cap_reconvert || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
+    if [[ "$RAW_PUBLISHED" == "true" ]]; then
+      # a published raw must still be there, unchanged — it is the evidence, never refetched
+      if [[ -n "$RAW_SHA256" && -f "$RAW_PATH" && "$(cap_sha256 "$RAW_PATH")" == "$RAW_SHA256" ]]; then
+        cap_reconvert || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
+      elif [[ -f "$RAW_PATH" ]]; then
+        cap_fail_exit evidence-mismatch "the published raw $RAW_PATH no longer matches its recorded hash (recorded raw evidence is never refetched; operator)"
+      else
+        cap_fail_exit evidence-mismatch "the published raw $RAW_PATH is missing (recorded raw evidence is never refetched; operator)"
+      fi
     elif [[ -n "$RAW_SHA256" ]]; then
+      # recorded, not yet published: finish from the staged or final copy carrying that hash
       if [[ -n "$RAW_STAGED" && -f "$RAW_STAGED" ]]; then
         if [[ "$(cap_sha256 "$RAW_STAGED")" == "$RAW_SHA256" ]]; then
           if [[ -e "$RAW_PATH" && "$(cap_sha256 "$RAW_PATH")" != "$RAW_SHA256" ]]; then
@@ -490,18 +529,20 @@ cap_recover_acquire() {
       elif [[ -f "$RAW_PATH" ]]; then
         if [[ "$(cap_sha256 "$RAW_PATH")" == "$RAW_SHA256" ]]; then staged_match=true
         else cap_fail_exit archive-exists "a different file sits at $RAW_PATH (no receipt accounts for it)"; fi
-      fi
-      if $staged_match; then
-        cap_receipt_update "$CAPTURE_ID" '.raw_published=true | .raw_staged_path=null'
-        cap_reconvert || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
       else
-        cap_acquire_fresh
+        cap_fail_exit evidence-missing "the raw recorded for $RAW_PATH (sha256 $RAW_SHA256) exists neither staged nor published (recorded raw evidence is never refetched; operator)"
       fi
+      cap_receipt_update "$CAPTURE_ID" '.raw_published=true | .raw_staged_path=null'
+      cap_reconvert || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
     else
+      # nothing recorded: a stale staged file is discarded and the input is acquired again — this
+      # is the one place the locator is consulted
       [[ -n "$RAW_STAGED" && -f "$RAW_STAGED" ]] && rm -f "$RAW_STAGED"
+      cap_restore_input
       cap_acquire_fresh
     fi
   else
+    cap_restore_input
     cap_acquire_fresh
   fi
   cap_publish_source || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
@@ -576,7 +617,9 @@ cap_fresh() {
       cap_result skipped-duplicate "$(cap_extract_state_of "$folder")" "" "" false
       exit 0
     fi
-    # incomplete latest revision: resume it under a new attempt
+    # incomplete latest revision: resume it under a new attempt — as the owner when its receipt
+    # is in the ledger and no id was given; otherwise under an alias receipt that delegates the
+    # recovery to the owner receipt (§12 A4) or, without one, runs it itself
     [[ -n "$incoming" ]] && rm -f "$incoming"
     echo "NOTE: Sources/$folder/ has source.md but no extract.md — resuming the extraction" >&2
     if [[ -n "$folder_cid" ]] && cap_receipt_exists "$folder_cid" && ! $CAPTURE_ID_GIVEN; then
@@ -593,8 +636,8 @@ cap_fresh() {
     CAP_INIT_ATTEMPTS=0 cap_receipt_create source-published "$folder" "$folder_cid" false
     cap_receipt_update "$CAPTURE_ID" '.source_published=true'
     REPLAYED=true
-    cap_verify_source "$REVISION" "$folder_cid" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
-    cap_run_extract_step true false
+    RESOLVED_REV="$folder"; RESOLVED_CID="$folder_cid"; RECEIPT_STATE=source-published; RECEIPT_ATTEMPTS=0; LEGACY_MATCH=false
+    cap_alias_replay
   fi
   if $RECAPTURE && [[ -z "$SUPERSEDES" && -n "$latest" ]]; then
     SUPERSEDES="${latest%% *}"

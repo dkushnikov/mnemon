@@ -68,16 +68,28 @@
 #   argv (the extractor argv list) · cost_usd · duration_ms · resolved_to_revision ·
 #   resolved_to_capture_id (set on an alias: a fresh operation that resolved to an existing
 #   revision) · legacy_match · replayed · notes (publisher notes: dropped list elements).
-#   States: started → source-published → extracted (final); started → failed (nothing
-#   published; error_class fetch | convert | no-text | unsupported | invalid-utf8 |
-#   archive-exists | input-missing, plus fence-unprobed / environment for an exit-3 preflight
-#   miss); source-published → extract-failed (error_class auth | transient | budget | max-turns |
-#   invalid-output | claude-exit | timeout | unsupported-size | fence-unprobed). retryable: true for
-#   fetch, convert, auth, transient, timeout, claude-exit, fence-unprobed, environment; false for
-#   the rest (--resume is always allowed). An integrity error (published source.md missing or
-#   edited) is reported, never stored as a state: the receipt keeps its last state.
+#   States: started → source-published → extracted (final); started → failed (no source.md
+#   published — raw may be retained; error_class fetch | convert | no-text | unsupported |
+#   invalid-utf8 | archive-exists | input-missing | evidence-missing | evidence-mismatch, plus
+#   fence-unprobed / environment for an exit-3 preflight miss); source-published →
+#   extract-failed (error_class auth | transient | budget | max-turns | invalid-output |
+#   claude-exit | timeout | unsupported-size | fence-unprobed); any published state →
+#   integrity-error (the published source.md is missing or was edited: error_class
+#   evidence-missing | evidence-mismatch, §12 A3; a replay re-verifies and goes on when the
+#   operator restored the file). retryable: true for fetch, convert, auth, transient, timeout,
+#   claude-exit, fence-unprobed, environment; false for the rest (--resume is always allowed).
+#   Recorded raw evidence is never refetched: a recorded raw_sha256 whose file is gone is
+#   evidence-missing, a published raw that is missing or changed is evidence-mismatch (operator).
 #   Every write is tmp + fsync + rename; the receipt records the intent of a publication before
 #   it and the outcome after it.
+#
+# ─── Aliases (§3.1, §12 A4) ─────────────────────────────────────────────────────────────────────
+#   A fresh operation that resolves to an existing revision gets an alias receipt
+#   (resolved_to_revision / resolved_to_capture_id). When the owner receipt is in the ledger, an
+#   alias of an incomplete revision delegates the publication recovery to it: the recovery rows
+#   run with CAPTURE_ID = the owner and update the owner's receipt, extract.md carries the owner's
+#   id, and the alias (ALIAS_ID) records only its own attempt accounting and the outcome;
+#   RESULT:capture_id reports the alias. Without an owner receipt the alias runs the rows itself.
 #
 # ─── RESULT lines and exit codes (§3.6) ─────────────────────────────────────────────────────────
 #   RESULT:capture_id= revision= path= status= title= source_sha256= extract= error_class=
@@ -515,7 +527,11 @@ cap_receipt_fail() {   # <id> <state failed|extract-failed> <class> <retryable> 
 # Attempt dirs
 # ---------------------------------------------------------------------------------------------
 cap_new_attempt() {   # <capture_id> → sets ATTEMPT_DIR ATTEMPT_N, bumps receipt.attempts when it exists
-  local id="$1" n=1
+  # The counter lives in the receipt (lifetime attempts); the attempt dirs that still exist only
+  # push the number further, so numbering never regresses after a final receipt's cleanup.
+  local id="$1" n=1 prev=0
+  if cap_receipt_exists "$id"; then prev="$(cap_receipt_get "$id" '.attempts // 0')"; [[ "$prev" =~ ^[0-9]+$ ]] || prev=0; fi
+  n=$((prev + 1))
   while [[ -d "$RUNS_DIR/$id/attempt-$n" ]]; do n=$((n + 1)); done
   ATTEMPT_N=$n
   ATTEMPT_DIR="$RUNS_DIR/$id/attempt-$n"
@@ -1070,12 +1086,13 @@ cap_result() {
     title="$(cap_title_from_files "$rev")"
     # recomputed from the folder — for a duplicate too (§12 A6: the ingest records it and its
     # predecessor rule needs the revision that comes with it)
+    # (on integrity-error this is the recomputed hash of a source that was read and mismatched,
+    # and empty when the source is missing — §12 A3)
     if [[ -f "$VAULT_PATH/Sources/$rev/source.md" ]]; then
       sha="$(cap_py body-sha256 "$VAULT_PATH/Sources/$rev/source.md")"; [[ "$sha" == "none" ]] && sha=""
     fi
   fi
-  if [[ "$status" == "integrity-error" ]]; then sha=""; fi
-  printf 'RESULT:capture_id=%s\n' "$(cap_oneline "$CAPTURE_ID")"
+  printf 'RESULT:capture_id=%s\n' "$(cap_oneline "${ALIAS_ID:-$CAPTURE_ID}")"
   printf 'RESULT:revision=%s\n' "$(cap_oneline "$rev")"
   printf 'RESULT:path=%s\n' "$(cap_oneline "$path")"
   printf 'RESULT:status=%s\n' "$status"
@@ -1099,9 +1116,12 @@ cap_retryable_of() {   # <class> → true|false
   esac
 }
 
-# Integrity error: report and exit 1 (the receipt keeps its state; nothing is retried).
+# Integrity error: the receipt (and the alias that delegated to it) is stored as integrity-error,
+# RESULT, exit 1; nothing is retried automatically (§12 A3).
 cap_integrity_exit() {   # <class> <message>  (extract=none: the contract fixtures' shape)
   echo "ERROR: integrity: $2" >&2
+  cap_receipt_exists "$CAPTURE_ID" && cap_receipt_fail "$CAPTURE_ID" integrity-error "$1" false "$2"
+  [[ -n "${ALIAS_ID:-}" ]] && cap_receipt_fail "$ALIAS_ID" integrity-error "$1" false "$2"
   cap_result integrity-error none "$1" false "${REPLAYED:-false}"
   exit 1
 }
@@ -1111,6 +1131,7 @@ cap_fail_exit() {   # <class> <message>
   local retry code=1
   retry="$(cap_retryable_of "$1")"
   cap_receipt_fail "$CAPTURE_ID" failed "$1" "$retry" "$2"
+  [[ -n "${ALIAS_ID:-}" ]] && cap_receipt_fail "$ALIAS_ID" failed "$1" "$retry" "$2"
   echo "ERROR: $2" >&2
   REVISION=""
   cap_result failed none "$1" "$retry" "${REPLAYED:-false}"
@@ -1317,10 +1338,27 @@ cap_success_exit() {
   exit 0
 }
 
+# The alias that delegated this run (§12 A4) records its own attempt and the outcome; the owner's
+# receipt carries the publication state.
+cap_alias_account() {   # <state> [extract_sha256]  (an attempt is counted only when this run spent one)
+  [[ -n "${ALIAS_ID:-}" ]] || return 0
+  local spent=0
+  [[ "${ALIAS_ATTEMPT_SPENT:-false}" == true ]] && spent=1
+  ALIAS_ATTEMPT_SPENT=false
+  cap_receipt_update "$ALIAS_ID" '.attempts=(.attempts // 0) + $n | .attempt_dir=$d | .state=$s | .replayed=true
+      | .extract_sha256=(if $e == "" then .extract_sha256 else $e end)
+      | .finalized_at=(if $s == "extracted" then $now else .finalized_at end)
+      | .error_class=(if $s == "extracted" then null else .error_class end)
+      | .error=(if $s == "extracted" then null else .error end)
+      | .retryable=(if $s == "extracted" then null else .retryable end)' \
+    --arg d "${ATTEMPT_DIR:-}" --arg s "$1" --arg e "${2:-}" --argjson n "$spent"
+}
+
 # The common tail of a successful extraction: receipt extracted → verify → reindex → cleanup → RESULT.
 cap_finish_extracted() {   # <replayed true|false> <keep_locator true|false>
   cap_crash_at after-extract-published
   cap_receipt_update "$CAPTURE_ID" '.state="extracted" | .extract_sha256=$e | .finalized_at=$now | .error_class=null | .error=null | .retryable=null' --arg e "$EXTRACT_SHA256"
+  cap_alias_account extracted "$EXTRACT_SHA256"
   cap_reindex
   cap_cleanup_attempts "$CAPTURE_ID" "$2"
   cap_result extracted ok "" "" "$1"
@@ -1331,6 +1369,10 @@ cap_finish_extract_failed() {   # <replayed>
   local retry
   retry="$(cap_retryable_of "$EXTRACT_CLASS")"
   cap_receipt_fail "$CAPTURE_ID" extract-failed "$EXTRACT_CLASS" "$retry" "$EXTRACT_MSG"
+  if [[ -n "${ALIAS_ID:-}" ]]; then
+    cap_alias_account extract-failed
+    cap_receipt_fail "$ALIAS_ID" extract-failed "$EXTRACT_CLASS" "$retry" "$EXTRACT_MSG"
+  fi
   echo "ERROR: $EXTRACT_MSG" >&2
   local ext=missing
   [[ "$EXTRACT_CLASS" == invalid-output ]] && ext=invalid
@@ -1341,6 +1383,7 @@ cap_finish_extract_failed() {   # <replayed>
 # Run the extraction step for CAPTURE_ID on the published REVISION in a fresh attempt.
 cap_run_extract_step() {   # <replayed> <keep_locator>
   cap_new_attempt "$CAPTURE_ID"
+  ALIAS_ATTEMPT_SPENT=true
   cap_py body-extract "$VAULT_PATH/Sources/$REVISION/source.md" "$ATTEMPT_DIR/capture.md"
   # the published source is authoritative for the content format (the receipt does not carry it):
   # a resumed pdf / transcript / reference / markdown capture keeps its format in extract.md

@@ -146,6 +146,36 @@ assert_eq "$(result replayed)" "true" "...replayed"
 assert_eq "$(rget rec-5 '.state')" "extracted" "...reconciled to extracted"
 assert_eq "$(rget rec-5 '.extract_sha256')" "$(shasum -a 256 "$VAULT/Sources/$rev5/extract.md" | cut -c1-64)" "...extract_sha256 recorded"
 
+# raw evidence is never refetched (§12 A3): a recorded raw_sha256 with neither staged nor final
+# copy is evidence-missing; a published raw that changed or disappeared is evidence-mismatch
+stub_reset
+crash_run after-raw-staged ev-1 "https://example.com/ev1"
+rm -f "$(rget ev-1 '.raw_staged_path')"
+c1="$(curl_calls)"
+run_gw --capture-id ev-1
+assert_eq "$rc" "1" "a recorded raw with neither staged nor final copy → exit 1"
+assert_eq "$(result error_class)" "evidence-missing" "...evidence-missing"
+assert_eq "$(result retryable)" "false" "...permanent (operator)"
+assert_eq "$(curl_calls)" "$c1" "...never refetched"
+assert_eq "$(rget ev-1 '.state')" "failed" "...receipt failed"
+run_gw --capture-id ev-1
+assert_eq "$(result error_class)" "evidence-missing" "...and again on the next replay"
+stub_reset
+crash_run after-raw-published ev-2 "https://example.com/ev2"
+printf 'tampered\n' > "$(rget ev-2 '.raw_path')"
+c1="$(curl_calls)"
+run_gw --capture-id ev-2
+assert_eq "$rc" "1" "a published raw whose bytes changed → exit 1"
+assert_eq "$(result error_class)" "evidence-mismatch" "...evidence-mismatch"
+assert_eq "$(result retryable)" "false" "...permanent (operator)"
+assert_eq "$(curl_calls)" "$c1" "...never refetched"
+stub_reset
+crash_run after-raw-published ev-3 "https://example.com/ev3"
+rm -f "$(rget ev-3 '.raw_path')"
+run_gw --capture-id ev-3
+assert_eq "$(result error_class)" "evidence-mismatch" "a published raw that disappeared → evidence-mismatch"
+assert_eq "$(nfolders)" "$((n_before + 5))" "...and none of the three evidence failures published a revision"
+
 # a stub that exits 1 → source.md + no extract.md, extract-failed, dead letter, exit 4
 stub_reset
 STUB_MODE=exit1 run_gw --url "https://example.com/fail1" --capture-id fail-1
@@ -171,6 +201,13 @@ assert_eq "$(ls -d "$VSTATE/runs/fail-1" 2>/dev/null)" "" "...attempt dirs remov
 assert_eq "$(rget fail-1 '.attempts')" "2" "...attempts = 2"
 run_gw --resume "$revf"
 assert_eq "$rc" "2" "--resume of a complete capture → exit 2"
+# attempt numbering continues from the receipt after the final cleanup removed the dirs
+rm -f "$VAULT/Sources/$revf/extract.md"
+stub_reset
+run_gw --capture-id fail-1
+assert_eq "$rc" "0" "a replay with extract.md gone re-extracts"
+assert_eq "$(rget fail-1 '.attempts')" "3" "...attempts = 3 (the receipt's counter, never regressed by the cleanup)"
+assert_eq "$(cat "$STUB_DIR/call-1.cwd")" "$VSTATE/runs/fail-1/attempt-3" "...in attempt-3"
 
 # failed/convert with a published raw → the retry converts the retained raw, curl not called
 stub_reset
@@ -285,17 +322,43 @@ run_gw --capture-id fid-1 --url "https://example.com/other" --origin url
 assert_eq "$rc" "2" "a different bound field → exit 2"
 assert_contains "$err" "capture-id reuse with a different request" "...with the contract message"
 
-# --file origin: replay from input_path; a changed file → input-missing
+# --file origin: retained inputs win over the locator (§12 A4) — with the raw published, a moved or
+# changed original is irrelevant; the locator is consulted only when nothing is retained
 printf 'a markdown file\n' > "$TEST_TMPDIR/note.md"
 export MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-source-staged
 run_gw --file "$TEST_TMPDIR/note.md" --capture-id file-1
 unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT
 assert_eq "$(rget file-1 '.input_path')" "$TEST_TMPDIR/note.md" "--file origin: input locator is the path as given"
+assert_eq "$(rget file-1 '.raw_published')" "true" "...the raw is published (the crash came after the source was staged)"
 printf 'a changed file\n' > "$TEST_TMPDIR/note.md"
 run_gw --capture-id file-1
-assert_eq "$rc" "1" "changed input file on replay → exit 1"
+assert_eq "$rc" "0" "a changed original after the raw was published: the replay finishes from the retained raw"
+assert_eq "$(rget file-1 '.state')" "extracted" "...extracted"
+assert_contains "$(cat "$VAULT/Sources/$(rget file-1 '.revision')/source.md")" "a markdown file" "...with the retained raw's bytes as the body, not the changed file's"
+rm -f "$XDG_STATE_HOME/mnemon/fence-probes.json"
+printf 'a second file\n' > "$TEST_TMPDIR/note2.md"
+run_gw --file "$TEST_TMPDIR/note2.md" --capture-id file-2
+assert_eq "$rc" "3" "fixture: a --file capture refused before acquisition (no probe record) retains nothing"
+write_probe_record
+assert_eq "$(rget file-2 '.raw_sha256')" "null" "...no raw recorded"
+printf 'changed before anything was retained\n' > "$TEST_TMPDIR/note2.md"
+run_gw --capture-id file-2
+assert_eq "$rc" "1" "...the replay consults the locator: a changed input → exit 1"
 assert_eq "$(result error_class)" "input-missing" "...input-missing"
-assert_eq "$(rget file-1 '.state')" "failed" "...receipt failed"
+assert_eq "$(rget file-2 '.state')" "failed" "...receipt failed"
+# failed/environment (exit 3 before publication): the replay resumes from the retained checkpoint —
+# a text origin's capture-text in attempt-1 is published without re-reading stdin (§12 A3)
+rm -f "$XDG_STATE_HOME/mnemon/fence-probes.json"
+printf 'retained text\n' > "$TEST_TMPDIR/env.txt"
+run_gw_stdin "$TEST_TMPDIR/env.txt" --origin text --capture-id env-text
+assert_eq "$rc" "3" "a text capture with no probe record → exit 3 before publication"
+assert_eq "$(rget env-text '.error_class')" "fence-unprobed" "...receipt failed/fence-unprobed"
+assert_file_exists "$VSTATE/runs/env-text/attempt-1/capture.md" "...the capture-text is retained in attempt-1"
+write_probe_record
+run_gw --capture-id env-text
+assert_eq "$rc" "0" "...the replay publishes from the retained capture-text (stdin is /dev/null here)"
+assert_contains "$(cat "$VAULT/Sources/$(rget env-text '.revision')/source.md")" "retained text" "...with the retained bytes"
+assert_eq "$(rget env-text '.attempts')" "2" "...attempts counted"
 
 # unknown --capture-id for a captured resource → skipped-duplicate + alias receipt
 src_before="$(shasum -a 256 "$VAULT/Sources/$rev0/source.md")"
@@ -340,6 +403,36 @@ assert_eq "$(result capture_id)" "inc-2-alias" "...under the alias"
 assert_eq "$(result revision)" "$revi2" "...same folder"
 assert_eq "$(rget inc-2-alias '.attempts')" "1" "...with the alias's own attempt accounting"
 assert_eq "$(rget inc-2-alias '.resolved_to_capture_id')" "inc-2" "...resolved to the original operation"
+assert_eq "$(rget inc-2-alias '.state')" "extracted" "...the alias records the outcome"
+# §12 A4: the alias delegated the recovery to the owner receipt, which is the one updated
+assert_eq "$(rget inc-2 '.state')" "extracted" "...the owner receipt is updated through the delegation (A4)"
+assert_eq "$(rget inc-2 '.attempts')" "2" "...under the owner's attempt accounting (attempt 2)"
+assert_eq "$(_mnemon_yaml_literal capture_id "$VAULT/Sources/$revi2/extract.md")" "inc-2" "...extract.md carries the owner's capture_id"
+assert_eq "$(ls -d "$VSTATE/runs/inc-2-alias" 2>/dev/null)" "" "...the alias has no attempt dirs of its own"
+stub_reset
+run_gw --capture-id inc-2
+assert_eq "$rc" "0" "a replay of the owner → exit 0"
+assert_eq "$(result status)" "extracted" "...extracted from the files"
+assert_eq "$(stub_calls)" "0" "...without a second paid extraction"
+run_gw --capture-id inc-2-alias
+assert_eq "$(result status)" "extracted" "a replay of the alias reports extracted from the files"
+assert_eq "$(result capture_id)" "inc-2-alias" "...under the alias id"
+assert_eq "$(stub_calls)" "0" "...no model call either"
+# an alias that fails its delegated extraction: both receipts record it, the owner keeps the state
+stub_reset
+STUB_MODE=exit1 run_gw --url "https://example.com/incomplete3" --capture-id inc-3
+revi3="$(result revision)"
+stub_reset
+STUB_MODE=exit1 run_gw --url "https://example.com/incomplete3" --capture-id inc-3-alias
+assert_eq "$rc" "4" "an alias whose delegated extraction fails → exit 4"
+assert_eq "$(result capture_id)" "inc-3-alias" "...reported under the alias"
+assert_eq "$(rget inc-3-alias '.state') $(rget inc-3-alias '.attempts') $(rget inc-3-alias '.error_class')" "extract-failed 1 claude-exit" "...the alias: extract-failed, one attempt, the class"
+assert_eq "$(rget inc-3 '.state') $(rget inc-3 '.attempts')" "extract-failed 2" "...the owner: extract-failed, attempt 2"
+stub_reset
+run_gw --resume "$revi3"
+assert_eq "$rc" "0" "--resume <revision> finishes it under the owner"
+assert_eq "$(result capture_id)" "inc-3" "...reporting the owner id"
+assert_eq "$(rget inc-3 '.state')" "extracted" "...owner extracted"
 
 # --recapture → -2 with supersedes; --supersedes across resources; replayed id never a second revision
 run_gw --url "https://example.com/recovery" --recapture --capture-id rec-0b
@@ -412,21 +505,39 @@ assert_eq "$(result status)" "integrity-error" "...integrity-error"
 assert_eq "$(result error_class)" "evidence-missing" "...evidence-missing"
 assert_eq "$(result revision)" "$rev5" "...revision reported"
 assert_eq "$(result retryable)" "false" "...retryable=false"
+assert_eq "$(result source_sha256)" "" "...source_sha256 empty (the source could not be read, A3)"
+assert_eq "$(rget rec-5 '.state') $(rget rec-5 '.error_class')" "integrity-error evidence-missing" "...the receipt is stored as integrity-error (A3)"
 mv "$TEST_TMPDIR/rev5-source.md" "$VAULT/Sources/$rev5/source.md"
+run_gw --capture-id rec-5
+assert_eq "$rc" "0" "the file restored: the integrity-error receipt re-verifies and the replay goes on"
+assert_eq "$(result status)" "extracted" "...extracted from the files"
+assert_eq "$(rget rec-5 '.state')" "extracted" "...the receipt leaves integrity-error"
 printf 'edited\n' >> "$VAULT/Sources/$rev5/source.md"
 run_gw --capture-id rec-5
 assert_eq "$rc" "1" "edited body on an extracted replay → exit 1"
 assert_eq "$(result error_class)" "evidence-mismatch" "...evidence-mismatch"
+assert_eq "$(result source_sha256)" "$(body_sha "$VAULT/Sources/$rev5/source.md")" "...source_sha256 = the recomputed hash of the edited body (A3)"
 STUB_MODE=exit1 run_gw --url "https://example.com/edit2" --capture-id edit-2
 reve="$(result revision)"
 printf 'edited\n' >> "$VAULT/Sources/$reve/source.md"
 run_gw --capture-id edit-2
 assert_eq "$rc" "1" "edited body on a resume path → exit 1"
 assert_eq "$(result error_class)" "evidence-mismatch" "...evidence-mismatch"
-assert_eq "$(rget edit-2 '.state')" "extract-failed" "...the receipt keeps its state"
+assert_eq "$(rget edit-2 '.state')" "integrity-error" "...the receipt is stored as integrity-error"
 run_gw --url "https://example.com/edit2" --capture-id edit-2-alias
 assert_eq "$rc" "1" "edited body behind an alias resume → exit 1"
 assert_eq "$(result error_class)" "evidence-mismatch" "...evidence-mismatch"
+assert_eq "$(rget edit-2-alias '.state')" "integrity-error" "...the alias records it too"
+python3 - "$VAULT/Sources/$reve/source.md" <<'PY'
+import sys
+p = sys.argv[1]; d = open(p, "rb").read()
+assert d.endswith(b"edited\n"); open(p, "wb").write(d[:-len(b"edited\n")])
+PY
+stub_reset
+run_gw --capture-id edit-2
+assert_eq "$rc" "0" "the body restored: the resume finishes the extraction"
+assert_eq "$(rget edit-2 '.state')" "extracted" "...owner extracted"
+assert_eq "$(stub_calls)" "1" "...with one extraction"
 
 # ---------------------------------------------------------------------------------------------
 echo "--- 8. url chain ---"

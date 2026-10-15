@@ -527,7 +527,7 @@ _doctor_captures() {
   out="$(python3 - "$cdir" "$VAULT_PATH" <<'PY' 2>/dev/null || printf 'warn\tcould not scan %s' "$cdir"
 import glob, json, os, sys
 cdir, vault = sys.argv[1], sys.argv[2]
-total = failed = missing = unreadable = 0
+total = failed = missing = unreadable = integrity = 0
 first_failed = None
 for path in sorted(glob.glob(os.path.join(cdir, "*.json"))):
     total += 1
@@ -545,6 +545,8 @@ for path in sorted(glob.glob(os.path.join(cdir, "*.json"))):
         failed += 1
         if first_failed is None:
             first_failed = rec.get("capture_id") or os.path.basename(path)[:-5]
+    elif state == "integrity-error":
+        integrity += 1
     elif state in ("source-published", "extracted"):
         rev = rec.get("revision")
         if not isinstance(rev, str) or not rev or not os.path.isfile(os.path.join(vault, "Sources", rev, "source.md")):
@@ -552,6 +554,8 @@ for path in sorted(glob.glob(os.path.join(cdir, "*.json"))):
 parts = []
 if failed:
     parts.append("%d failed/extract-failed receipt(s) — finish with: mnemon add --resume %s" % (failed, first_failed))
+if integrity:
+    parts.append("%d integrity-error receipt(s) — a published source.md is missing or was edited (operator: restore it, then replay)" % integrity)
 if missing:
     parts.append("%d receipt(s) point at missing files" % missing)
 if unreadable:
