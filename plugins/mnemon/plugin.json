@@ -1,0 +1,13 @@
+{
+  "name": "mnemon",
+  "version": "0.2.0",
+  "description": "AI-powered personal knowledge extraction system. Capture articles, videos, podcasts, books — get structured, searchable knowledge artifacts framed by your personal context.",
+  "author": {
+    "name": "Dmitry Kushnikov",
+    "email": "dkushnikov@gmail.com"
+  },
+  "homepage": "https://github.com/dkushnikov/mnemon",
+  "repository": "https://github.com/dkushnikov/mnemon",
+  "license": "MIT",
+  "keywords": ["knowledge", "reading", "obsidian", "extraction", "library"]
+}

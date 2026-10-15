@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "mnemon",
+  "description": "Mnemon — AI-powered personal knowledge extraction system",
+  "owner": {
+    "name": "Dmitry Kushnikov",
+    "email": "dkushnikov@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "mnemon",
+      "description": "Capture articles, videos, podcasts, books — get structured, searchable knowledge artifacts framed by your personal context",
+      "source": "./plugins/mnemon",
+      "category": "productivity",
+      "homepage": "https://github.com/dkushnikov/mnemon"
+    }
+  ]
+}
