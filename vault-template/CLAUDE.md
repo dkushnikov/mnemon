@@ -17,7 +17,9 @@ Personal knowledge extraction vault. Sources are captured and extracted into str
 
 ## How captures land
 
-`mnemon add` (the gateway) fetches the content itself — `curl` and `defuddle` / `pandoc` for pages, `pdftotext` for PDFs, `yt-dlp` / `whisper` for media, or the text it is given — and publishes `Sources/<revision>/source.md` with that text. It then runs a fenced extractor (`claude -p --restricted --tools "" --no-session-persistence --json-schema …`, prompt on stdin, no tools) that returns structured fields, validates them and publishes `extract.md`. The model never writes into the vault, and a session started in this vault is never the extractor: `RESULT:` lines and exit codes are computed from the files by the gateway. Automated feeders drop envelopes into an inbox directory for `mnemon ingest <dir>`.
+`mnemon add` (the gateway) fetches the content itself — its own fetch chain and `defuddle` / `pandoc` / the DOM text for pages, `pdftotext` for PDFs, `yt-dlp` / `whisper` for media, or the text it is given — and publishes `Sources/<revision>/source.md` with that text. It then runs a fenced extractor (`claude -p --restricted --tools "" --no-session-persistence --json-schema …`, prompt on stdin, no tools) that returns structured fields, validates them and publishes `extract.md`. The model never writes into the vault, and a session started in this vault is never the extractor: `RESULT:` lines and exit codes are computed from the files by the gateway. Automated feeders drop envelopes into an inbox directory for `mnemon ingest <dir>`.
+
+**Completeness and site captures.** Every URL capture records how it was acquired and how much of the fetched page the conversion kept: `capture.acquisition` (`ok`, `thin`, `paywall`, …) and `capture.completeness` — `complete` (every substantial line and heading of the saved page is in the text), `partial` (something was lost; `missing_lines`, `glued_lines` and `headings_missing` say how much), `blocked` (a paywall teaser: only the text before the wall), `unknown` (nothing to check against: PDFs, media, plain text). Completeness is a diagnostic, not a gate — a `partial` source is a published source; read it as such before building on it. A site capture (`mnemon add --url <landing> --site <plan.json>`) is one source for the landing resource whose body holds every included page as `## Part n — <url> (<role>)`, with `folded_sources:` listing each page's disposition and completeness and `site_pages: "<converted>/<included>"`. The literal URL stays in `url:`; `canonical_url:` is the computed identity (tracking parameters and plain fragments dropped); a re-capture names its predecessor in `supersedes:` and `mnemon reindex` marks the old index row from it. A durable note on an index row belongs in `index_note:` of `extract.md`, never in `index.md` — its rows are regenerated (the replaced ones are kept in `_inputs/index-hand-edits-<date>.md`).
 
 ## Schemas
 
@@ -27,7 +29,8 @@ type: source
 source_type: <article|video|podcast|book|paper|idea|conversation>
 content_format: <text|transcript|pdf|reference|markdown>
 origin: <url|text|youtube|audio|pdf|file|book|idea|ref:vault>
-url: "<source url>"               # when known
+url: "<source url>"               # when known, as given
+canonical_url: "<computed identity>"   # URL captures: version 1 of the canonicalization rules
 title: "<title>"                  # --title or the acquired page / PDF title
 author: "<author>"
 captured: <YYYY-MM-DD>
@@ -39,9 +42,14 @@ resource_id: "<hash8 — the folder label>"
 revision: "<YYYY-MM-DD_hash8[-n]>"
 context: "<capture context, declared in the charter>"
 capture:                          # how the text was produced; never written by the model
-  method: "<curl+defuddle|curl+pandoc|pdftotext|stdin|…>"
+  method: "<direct+defuddle|direct+pandoc|render+dom-text|site+mixed|pdftotext|stdin|…>"
   fidelity: <exact|converted|transcribed>
   raw_store: <archive|state|none>
+  raw_kind: <response|rendered|composite|transcript|file|site>
+  acquisition: <ok|thin|js-shell|bot-wall|forbidden|login|paywall|…>   # what the fetch got
+  completeness: <complete|partial|blocked|unknown>                     # what the conversion kept (diagnostic)
+  missing_lines: <n>              # with glued_lines, headings_missing, repairs when a reference existed
+  canonical_version: 1
   text_sha256: "<sha256 of the body>"
   text_bytes: <n>
 ```

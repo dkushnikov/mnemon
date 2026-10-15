@@ -22,15 +22,17 @@ The dispatcher takes its global options before the command: `mnemon [--instance 
 | `git`, `bash`, `python3` | the engine | system / Homebrew |
 | `jq`, `shasum` | gateway JSON handling, source hashes | `brew install jq` (shasum ships with macOS / perl) |
 | Poppler (`pdftotext`, `pdfinfo`; optional) | PDF captures (refused before anything is published without it) | `brew install poppler` |
-| `pandoc` (optional) | document conversion on import; the HTML-to-markdown fallback when defuddle is absent | `brew install pandoc` |
-| [`defuddle`](https://github.com/kepano/defuddle) (optional) | page-to-markdown conversion of URL captures, URL triage (`mnemon triage`) and depth probing | `npm install -g defuddle` |
-| Python packages `pyyaml`, `requests` (optional) | depth-aware capture (`--depth auto`, kb-depth-fold / kb_fetch); `mnemon doctor` warns when missing | `pip3 install pyyaml requests` (or your preferred Python environment) |
+| `pandoc` 3+ (optional) | a converter candidate of URL captures (after defuddle, before the DOM text); document conversion on import | `brew install pandoc` |
+| [`defuddle`](https://github.com/kepano/defuddle) 0.6+ (optional) | the first converter candidate of URL captures, URL triage (`mnemon triage`) and depth probing | `npm install -g defuddle` |
+| Google Chrome or Chromium (optional) | the rendered stage of the fetch chain (JavaScript shells, bot walls, `--render`): found at its standard application path or as `google-chrome` / `chromium` on PATH; without it such pages fail as `environment` unless an external fetcher is allowed | per its site |
+| `FIRECRAWL_API_KEY`, `JINA_API_KEY` (environment, optional) | the external fetchers — used only when the instance sets `external_fetch: auto` and only after the local chain failed on a bot wall, a 403 or a JavaScript shell ([capture.md](capture.md)); `mnemon doctor` reports whether each is set, never its value | export them in the shell profile and in a job's environment |
+| Python package `pyyaml` (optional) | depth-aware capture (`--depth auto`, kb-depth-fold); `mnemon doctor` warns when missing. `requests` is no longer used — every request goes through the engine's own policy on the standard library | `pip3 install pyyaml` (or your preferred Python environment) |
 | `yt-dlp` (optional) | YouTube transcripts | `brew install yt-dlp` |
 | `ffmpeg` (optional) | audio probing / conversion | `brew install ffmpeg` |
 | `whisper` (optional) | audio transcription | `pip3 install openai-whisper` |
 | [`qmd`](https://github.com/tobi/qmd) (optional) | a hybrid semantic + keyword index of the vault for the qmd CLI; with `search_provider: qmd` the gateway refreshes it after each capture and `mnemon doctor` requires it. `mnemon search` itself is a grep-style scan and does not query qmd yet | `npm install -g @tobilu/qmd` (see the README's known issues) |
 
-`mnemon doctor` reports what is missing (required → `fail`, optional → `warn`) and whether the selected instance is healthy — including the vault lock, the capture ledger and the fence record; `mnemon doctor --json` for machines.
+`mnemon doctor` reports what is missing (required → `fail`, optional → `warn`) and whether the selected instance is healthy — including the vault lock, the capture ledger and the fence record, the converter chain's tools with versions (`capture-deps`), the egress setting and keys (`egress`), the identity rules (`canonical`); `mnemon doctor --json` for machines.
 
 **State on disk.** Besides the instance files, the engine keeps one ledger per physical vault under `${XDG_STATE_HOME:-~/.local/state}/mnemon/vaults/<id>/` (mode `0700`): capture receipts, attempt directories, the raw store when `archive_dir` is unset, the inbox consumer's state and the vault lock. One account on one host writes a vault (the lock is kernel-held); a second machine runs producers only. The fence probe record lives next to it in `…/mnemon/fence-probes.json`.
 
@@ -84,10 +86,12 @@ mkdir -p ~/.local/bin && ln -sf ~/.local/share/mnemon/engine/bin/mnemon ~/.local
 # profile: MNEMON_HOME and PATH as in Variant A — and in the environment of any launchd/cron job, which does not read your profile
 
 # dependencies (Homebrew / npm / pip)
-brew install jq pandoc
+brew install jq pandoc poppler
 npm install -g defuddle
-pip3 install pyyaml requests
+pip3 install pyyaml
 # optional: brew install yt-dlp ffmpeg · pip3 install openai-whisper · npm install -g @tobilu/qmd
+# optional: Google Chrome or Chromium for rendered pages; FIRECRAWL_API_KEY / JINA_API_KEY in the job's
+#           environment only if the instance sets external_fetch: auto (docs/capture.md)
 
 mnemon init personal --vault ~/path/to/vault --archive ~/path/to/archive --default
 mnemon doctor

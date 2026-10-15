@@ -2,39 +2,65 @@
 """
 knowledge-reindex.py — rebuild a Mnemon vault's index.md from current Sources/.
 
-Called from knowledge-gateway.sh as a post-extract hook (mirroring the qmd
-update pattern) so index.md doesn't drift when extractions land via
-non-interactive paths (`claude -p`, autonomous runs) that silently skip
-/source-process step 4.
+Called from knowledge-gateway.sh as a post-extract hook and by `mnemon reindex`, so index.md
+never drifts from the files (docs/specs/2026-10-15-capture-layer.md §3.9, D14, §12 A1).
 
 Behavior:
-- Reads every Sources/*/extract.md, generates a reverse-chronological
-  catalog entry per (folder, title, source_type, domains, rating, status).
-- Preserves existing hand-edited entries (supersedes markers, "captured —
-  awaiting content" annotations, etc.) by matching on folder name.
-- Counts Sources / Extracted / Synthesis and updates the Status table.
-- Lists all Synthesis/*.md notes.
-- Updates frontmatter `updated:` to today.
+- Every row is regenerated from the files — one reverse-chronological catalog entry per folder
+  with an extract.md: `- [[Sources/<folder>/extract|<title>]] (<source_type>, <domains>,
+  rating <n>[, <status>])`, plus two derived suffixes:
+    ` — <index_note>` — `index_note:` of extract.md (one line, the §4.4 serialization subset,
+      decoded and display-escaped like a title): the place for a durable annotation;
+    ` ⤳ superseded by [[Sources/<new>/extract|<new title>]]` — derived from every source.md's
+      `supersedes:` (`<revision>` or `Sources/<revision>/extract`), one marker per successor
+      (fan-out lists each; a successor without extract.md links its source; a cycle is reported
+      on stderr and not marked; a `supersedes:` naming a folder that no longer exists is counted
+      as dangling and marks nothing). Nothing is ever written into source.md or extract.md.
+- Preservation transaction (A1, lossless): before index.md is replaced, every existing row whose
+  exact text differs from the regenerated row (and every row of a folder that gets no row) is
+  appended verbatim under a dated heading to <vault>/_inputs/index-hand-edits-<YYYY-MM-DD>.md —
+  deduplicated by (folder, sha256(row)) across that day's file, so a second edit on one day is
+  kept too — and that file and its directory are fsynced first. If the file cannot be written
+  the index is left untouched and the run exits 1. --no-hand-edit-report skips the step.
+- index.md is written atomically (tmp + fsync + rename); counts Sources / Extracted / Synthesis /
+  Superseded; the pending note names `mnemon add --resume <revision>` and counts legacy
+  placeholders (`status: bookmark`, `fetch_status: failed` in source.md) apart; lists Synthesis/.
+- Headers are read whole (through the closing `---`, cap 256 KB): a source.md whose header has no
+  closing delimiter within the cap is `malformed-frontmatter <folder>` on stderr and its
+  `supersedes:` is not read (§12 A2).
 
 Usage:
-    knowledge-reindex.py [VAULT_PATH]
+    knowledge-reindex.py [VAULT_PATH] [--no-hand-edit-report]
 
-VAULT_PATH defaults to $MNEMON_VAULT_PATH then $PWD. The vault must have
-Sources/ and (optionally) Synthesis/. Exits non-zero on missing vault.
+VAULT_PATH defaults to $MNEMON_VAULT_PATH then $PWD. The vault must have Sources/ and
+(optionally) Synthesis/.
 
 Exit codes:
     0  rebuilt
-    1  vault path missing / not a Mnemon vault
+    1  vault path missing / not a Mnemon vault, or the hand-edit report could not be written
+       (index.md untouched)
     2  unexpected error during rebuild
 """
 
 from __future__ import annotations
 
+import argparse
+import datetime
+import hashlib
 import os
 import re
 import sys
-import datetime
 from pathlib import Path
+
+HEADER_CAP = 256 * 1024          # §12 A2: the whole header, never a silent truncation
+NOTE_SEP = ' — '                 # the index_note suffix
+SUPERSEDED_SEP = ' ⤳ superseded by '
+HAND_EDIT_MARK = '<!-- mnemon:hand-edit folder={folder} sha256={sha} -->'
+HAND_EDIT_RE = re.compile(r'^<!-- mnemon:hand-edit folder=(\S+) sha256=([0-9a-f]{64}) -->$', re.M)
+
+
+class PreservationError(Exception):
+    """The hand-edit report could not be written: the index must not be replaced."""
 
 
 def decode_dq(inner: str) -> str:
@@ -71,14 +97,40 @@ def frontmatter_block(text: str) -> str:
     return text
 
 
-def parse_field(text: str, key: str) -> str | None:
-    """Parse a top-level 'key: value' from the frontmatter block.
+def read_header(path: Path) -> tuple[str | None, str]:
+    """The frontmatter block of a file read whole, through the closing delimiter (§12 A2).
+
+    Returns (block, state): state is `ok` (block = the header's lines), `none` (the file does
+    not start with `---`: no header, block None) or `malformed` (an opening `---` without a
+    closing `---`/`...` within HEADER_CAP bytes, or an unreadable file; block None).
+    """
+    try:
+        with open(path, 'rb') as fh:
+            data = fh.read(HEADER_CAP + 1)
+    except OSError:
+        return None, 'malformed'
+    text = data.decode('utf-8', errors='replace')
+    lines = text.split('\n')
+    if not lines or lines[0].strip() != '---':
+        return None, 'none'
+    pos = len(lines[0]) + 1
+    for i in range(1, len(lines)):
+        if lines[i].strip() in ('---', '...'):
+            if pos > HEADER_CAP:
+                return None, 'malformed'
+            return '\n'.join(lines[1:i]), 'ok'
+        pos += len(lines[i]) + 1
+    return None, 'malformed'
+
+
+def field_in_block(block: str, key: str) -> str | None:
+    """A top-level 'key: value' of a frontmatter block (nested, indented keys never match).
 
     A double-quoted value decodes `\\"` and `\\\\` and nothing else (no tilde expansion,
     no other escapes — the serialization subset of spec §4.4); a single-quoted value is
-    taken as it is; an unquoted value is trimmed. Nested keys (indented) never match.
+    taken as it is; an unquoted value is trimmed.
     """
-    m = re.search(rf'^{re.escape(key)}:[ \t]*(.*)$', frontmatter_block(text), re.M)
+    m = re.search(rf'^{re.escape(key)}:[ \t]*(.*)$', block, re.M)
     if not m:
         return None
     v = m.group(1).strip()
@@ -87,6 +139,12 @@ def parse_field(text: str, key: str) -> str | None:
     elif len(v) >= 2 and v.startswith("'") and v.endswith("'"):
         v = v[1:-1]
     return v or None
+
+
+def parse_field(text: str, key: str) -> str | None:
+    """Parse a top-level 'key: value' from a file's frontmatter block (lenient: a file without a
+    closing delimiter is read whole, as legacy extract.md files are)."""
+    return field_in_block(frontmatter_block(text), key)
 
 
 def display_text(title: str) -> str:
@@ -108,18 +166,54 @@ def parse_list_field(text: str, key: str) -> list[str]:
     return []
 
 
-def parse_existing_entries(index_text: str) -> dict[str, str]:
-    """Return {folder_name: full_line} for every existing Recent Sources entry."""
-    out = {}
+def parse_existing_entries(index_text: str) -> dict[str, list[str]]:
+    """{folder_name: [row, …]} for every existing `- [[Sources/<folder>/…` row, in order."""
+    out: dict[str, list[str]] = {}
     for line in index_text.splitlines():
         m = re.match(r'^- \[\[Sources/([\w-]+)/', line)
         if m:
-            out[m.group(1)] = line
+            out.setdefault(m.group(1), []).append(line)
     return out
 
 
+def supersedes_target(value: str | None) -> str | None:
+    """The folder a `supersedes:` value names: `<revision>` or `Sources/<revision>/extract`
+    (a wikilink form and a `/source` suffix are tolerated), prefix and suffix stripped."""
+    if not value:
+        return None
+    v = value.strip()
+    if v.startswith('[[') and v.endswith(']]'):
+        v = v[2:-2].split('|', 1)[0].strip()
+    if v.startswith('Sources/'):
+        v = v[len('Sources/'):]
+    for suffix in ('/extract.md', '/extract', '/source.md', '/source'):
+        if v.endswith(suffix):
+            v = v[:-len(suffix)]
+            break
+    v = v.strip('/')
+    return v or None
+
+
+def folder_title(folder: Path) -> tuple[str, str]:
+    """(title, link target) of a folder: extract.md's title when it exists (target `extract`),
+    else source.md's title or `# ` heading or the folder name (target `source`)."""
+    ex_path = folder / 'extract.md'
+    if ex_path.exists():
+        ex = ex_path.read_text(encoding='utf-8', errors='ignore')
+        title = parse_field(ex, 'title')
+        if title:
+            return title, 'extract'
+    src_path = folder / 'source.md'
+    src = src_path.read_text(encoding='utf-8', errors='ignore') if src_path.exists() else ''
+    title = parse_field(src, 'title')
+    if not title:
+        m = re.search(r'^#\s+(.+)$', src, re.M)
+        title = m.group(1).strip() if m else folder.name
+    return title, ('extract' if ex_path.exists() else 'source')
+
+
 def generate_entry(folder: Path) -> str | None:
-    """Generate a fresh index line from a folder's extract.md/source.md."""
+    """The base index row of a folder (without the derived suffixes), or None without extract.md."""
     ex_path = folder / 'extract.md'
     if not ex_path.exists():
         return None
@@ -147,8 +241,145 @@ def generate_entry(folder: Path) -> str | None:
     return f"- [[Sources/{folder.name}/extract|{display_text(title)}]] ({', '.join(parts)})"
 
 
-def reindex(vault: Path) -> tuple[int, int, int, int]:
-    """Rebuild vault/index.md. Returns (sources, extracted, synthesis, no_extract)."""
+def index_note(folder: Path) -> str | None:
+    """`index_note:` of extract.md, decoded and display-escaped; None when absent or empty."""
+    ex_path = folder / 'extract.md'
+    if not ex_path.exists():
+        return None
+    note = parse_field(ex_path.read_text(encoding='utf-8', errors='ignore'), 'index_note')
+    if not note:
+        return None
+    note = ' '.join(note.split())   # single line, single spaces (the subset of §4.4)
+    return display_text(note) if note else None
+
+
+def scan_sources(all_dirs: list[Path]) -> dict:
+    """One whole-header scan of every Sources/*/source.md (§12 A2): the supersedes map
+    old → [new…] (sorted), the dangling targets, the cycles, the legacy placeholders and the
+    malformed headers."""
+    names = {d.name for d in all_dirs}
+    edges: dict[str, str] = {}          # new → old (one supersedes: per source.md)
+    legacy: set[str] = set()
+    malformed: list[str] = []
+    for d in all_dirs:
+        src = d / 'source.md'
+        if not src.exists():
+            continue
+        block, state = read_header(src)
+        if state == 'malformed':
+            malformed.append(d.name)
+            continue
+        if block is None:
+            continue
+        target = supersedes_target(field_in_block(block, 'supersedes'))
+        if target and target != d.name:
+            edges[d.name] = target
+        if (field_in_block(block, 'status') or '') == 'bookmark' or \
+           (field_in_block(block, 'fetch_status') or '') == 'failed':
+            legacy.add(d.name)
+
+    # cycles: each folder has at most one outgoing edge, so follow the chain from every node
+    cycle_edges: set[tuple[str, str]] = set()
+    cycles: list[list[str]] = []
+    seen_in_cycle: set[str] = set()
+    for start in sorted(edges):
+        path: list[str] = []
+        node: str | None = start
+        while node is not None and node in edges and node not in path:
+            path.append(node)
+            node = edges[node]
+        if node is not None and node in path:
+            cyc = path[path.index(node):]
+            if not any(n in seen_in_cycle for n in cyc):
+                cycles.append(cyc)
+                seen_in_cycle.update(cyc)
+            for i, n in enumerate(cyc):
+                cycle_edges.add((n, cyc[(i + 1) % len(cyc)]))
+
+    successors: dict[str, list[str]] = {}
+    dangling: list[tuple[str, str]] = []
+    for new, old in sorted(edges.items()):
+        if (new, old) in cycle_edges:
+            continue
+        if old not in names:
+            dangling.append((new, old))
+            continue
+        successors.setdefault(old, []).append(new)
+    return {'successors': successors, 'dangling': dangling, 'cycles': cycles,
+            'legacy': legacy, 'malformed': malformed}
+
+
+def build_row(folder: Path, successors: dict[str, list[str]], sources_dir: Path) -> str | None:
+    base = generate_entry(folder)
+    if base is None:
+        return None
+    row = base
+    note = index_note(folder)
+    if note:
+        row += NOTE_SEP + note
+    for new in successors.get(folder.name, []):
+        title, target = folder_title(sources_dir / new)
+        row += f"{SUPERSEDED_SEP}[[Sources/{new}/{target}|{display_text(title)}]]"
+    return row
+
+
+def sha256_text(s: str) -> str:
+    return hashlib.sha256(s.encode('utf-8')).hexdigest()
+
+
+def fsync_dir(path: Path) -> None:
+    dfd = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
+def preserve_rows(vault: Path, replaced: list[tuple[str, str]], today: str) -> tuple[int, Path]:
+    """Append every (folder, old row) not yet in today's report (dedup by (folder, sha256(row))),
+    fsync the file and its directory. Returns (rows written, path). Raises PreservationError."""
+    inputs = vault / '_inputs'
+    path = inputs / f'index-hand-edits-{today}.md'
+    try:
+        inputs.mkdir(parents=True, exist_ok=True)
+        existing_text = path.read_text(encoding='utf-8') if path.exists() else ''
+    except OSError as exc:
+        raise PreservationError(f'{path}: {exc.strerror or exc}')
+    known = {(f, h) for f, h in HAND_EDIT_RE.findall(existing_text)}
+    new: list[tuple[str, str, str]] = []
+    for folder, row in replaced:
+        h = sha256_text(row)
+        if (folder, h) in known:
+            continue
+        known.add((folder, h))
+        new.append((folder, h, row))
+    if not new:
+        return 0, path
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    chunk = []
+    if not existing_text:
+        chunk.append(f"# index.md rows replaced on {today}\n\n"
+                     "`mnemon reindex` regenerates every row of `index.md` from `Sources/*/extract.md` and "
+                     "`source.md`. Each row below differed from the regenerated one when it was replaced "
+                     "and is kept here verbatim, once per distinct text (lossless). A durable annotation "
+                     "belongs in `index_note:` of the folder's `extract.md` — the index shows it as "
+                     "` — <note>`; `supersedes:` markers are derived from `source.md`.\n")
+    chunk.append(f"\n## {stamp} — mnemon reindex\n\n")
+    for folder, h, row in new:
+        chunk.append(HAND_EDIT_MARK.format(folder=folder, sha=h) + '\n' + row + '\n\n')
+    try:
+        with open(path, 'a', encoding='utf-8') as fh:
+            fh.write(''.join(chunk))
+            fh.flush()
+            os.fsync(fh.fileno())
+        fsync_dir(inputs)
+    except OSError as exc:
+        raise PreservationError(f'{path}: {exc.strerror or exc}')
+    return len(new), path
+
+
+def reindex(vault: Path, hand_edit_report: bool = True) -> dict:
+    """Rebuild vault/index.md. Returns the counters."""
     sources_dir = vault / 'Sources'
     synthesis_dir = vault / 'Synthesis'
     index_path = vault / 'index.md'
@@ -156,7 +387,7 @@ def reindex(vault: Path) -> tuple[int, int, int, int]:
     if not sources_dir.is_dir():
         raise FileNotFoundError(f"No Sources/ directory in {vault}")
 
-    all_source_dirs = sorted(d for d in sources_dir.iterdir() if d.is_dir())
+    all_source_dirs = sorted(d for d in sources_dir.iterdir() if d.is_dir() and not d.name.startswith('.'))
     extracted_dirs = sorted(
         (d for d in all_source_dirs if (d / 'extract.md').exists()),
         key=lambda d: d.name,
@@ -164,18 +395,45 @@ def reindex(vault: Path) -> tuple[int, int, int, int]:
     )
     no_extract = [d for d in all_source_dirs if not (d / 'extract.md').exists()]
 
+    scan = scan_sources(all_source_dirs)
+    for name in scan['malformed']:
+        print(f"knowledge-reindex: malformed-frontmatter {name} (header without a closing --- within "
+              f"{HEADER_CAP // 1024} KB; its supersedes: is not read)", file=sys.stderr)
+    for cyc in scan['cycles']:
+        print(f"knowledge-reindex: supersedes cycle: {' → '.join(cyc + [cyc[0]])} (not marked)", file=sys.stderr)
+
     existing = parse_existing_entries(
         index_path.read_text(encoding='utf-8') if index_path.exists() else ''
     )
 
     entries = []
+    regenerated: dict[str, str] = {}
     for d in extracted_dirs:
-        if d.name in existing:
-            entries.append(existing[d.name])  # preserve hand-edits
+        row = build_row(d, scan['successors'], sources_dir)
+        if row:
+            entries.append(row)
+            regenerated[d.name] = row
+
+    # A1 — every existing row whose exact text is not the regenerated row of its folder (and every
+    # row of a folder that gets no row at all) is preserved before index.md is replaced.
+    replaced: list[tuple[str, str]] = []
+    for folder, rows in existing.items():
+        for row in rows:
+            if regenerated.get(folder) != row:
+                replaced.append((folder, row))
+    preserved = 0
+    report_path = None
+    if replaced:
+        if hand_edit_report:
+            preserved, report_path = preserve_rows(vault, replaced, datetime.date.today().isoformat())
+            if preserved:
+                print(f"knowledge-reindex: {preserved} replaced row(s) preserved in "
+                      f"{report_path.relative_to(vault)}", file=sys.stderr)
         else:
-            line = generate_entry(d)
-            if line:
-                entries.append(line)
+            print(f"knowledge-reindex: {len(replaced)} replaced row(s) not preserved (--no-hand-edit-report)",
+                  file=sys.stderr)
+    if os.environ.get('MNEMON_TEST_HOOKS') == '1' and os.environ.get('MNEMON_TEST_CRASH_AT') == 'after-hand-edit-report':
+        os._exit(99)
 
     syn_files = sorted(
         [f for f in synthesis_dir.iterdir() if f.suffix == '.md']
@@ -187,18 +445,26 @@ def reindex(vault: Path) -> tuple[int, int, int, int]:
         head = f.read_text(encoding='utf-8', errors='ignore')[:600]
         m = re.search(r'^#\s+(.+)$', head, re.M)
         title = m.group(1).strip() if m else f.stem
-        syn_lines.append(f"- [[Synthesis/{f.stem}|{title}]]")
+        syn_lines.append(f"- [[Synthesis/{f.stem}|{display_text(title)}]]")
 
     sources_count = len(all_source_dirs)
     extracted_count = len(extracted_dirs)
     synthesis_count = len(syn_files)
+    superseded_count = len(scan['successors'])
     today = datetime.date.today().isoformat()
 
-    pending_note = (
-        f"_{len(no_extract)} source(s) raw-captured without extract.md "
-        f"(run `/source-process` to extract)._"
-        if no_extract else ""
-    )
+    legacy = sorted(d.name for d in no_extract if d.name in scan['legacy'])
+    pending = sorted(d.name for d in no_extract if d.name not in scan['legacy'])
+    notes = []
+    if pending:
+        shown = ', '.join(pending[:5]) + (', …' if len(pending) > 5 else '')
+        notes.append(f"_{len(pending)} source(s) captured without extract.md "
+                     f"(finish each with `mnemon add --resume <revision>`: {shown})._")
+    if legacy:
+        shown = ', '.join(legacy[:5]) + (', …' if len(legacy) > 5 else '')
+        notes.append(f"_{len(legacy)} legacy placeholder(s) without extract.md "
+                     f"(`status: bookmark` or `fetch_status: failed` in source.md — not resumable; capture again): {shown}._")
+    pending_note = '\n'.join(notes)
 
     out = f"""---
 type: index
@@ -216,6 +482,7 @@ Universal reference storage. Sources captured and extracted by AI, synthesis wri
 |--------|-------|
 | Sources | {sources_count} |
 | Extracted | {extracted_count} |
+| Superseded | {superseded_count} |
 | Synthesis | {synthesis_count} |
 
 {pending_note}
@@ -243,18 +510,21 @@ Universal reference storage. Sources captured and extracted by AI, synthesis wri
         os.fsync(fh.fileno())
     os.replace(tmp_path, index_path)
     try:
-        dfd = os.open(str(vault), os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        fsync_dir(vault)
     except OSError:
         pass
-    return sources_count, extracted_count, synthesis_count, len(no_extract)
+    return {'sources': sources_count, 'extracted': extracted_count, 'synthesis': synthesis_count,
+            'pending': len(pending), 'legacy': len(legacy), 'superseded': superseded_count,
+            'dangling': len(scan['dangling']), 'preserved': preserved, 'malformed': len(scan['malformed'])}
 
 
 def main(argv: list[str]) -> int:
-    vault_arg = argv[1] if len(argv) > 1 else os.environ.get('MNEMON_VAULT_PATH', os.getcwd())
+    ap = argparse.ArgumentParser(description="Rebuild a Mnemon vault's index.md from Sources/")
+    ap.add_argument('vault', nargs='?', default=None, help='the vault (default: $MNEMON_VAULT_PATH, else the cwd)')
+    ap.add_argument('--no-hand-edit-report', action='store_true',
+                    help='replace differing rows without preserving them in _inputs/index-hand-edits-<date>.md')
+    args = ap.parse_args(argv[1:])
+    vault_arg = args.vault or os.environ.get('MNEMON_VAULT_PATH', os.getcwd())
     vault = Path(vault_arg).expanduser().resolve()
 
     if not (vault / 'Sources').is_dir():
@@ -262,13 +532,22 @@ def main(argv: list[str]) -> int:
         return 1
 
     try:
-        s, e, syn, pending = reindex(vault)
+        c = reindex(vault, hand_edit_report=not args.no_hand_edit_report)
+    except PreservationError as exc:
+        print(f"knowledge-reindex: hand-edit report not written ({exc}) — index.md left untouched; "
+              f"fix the vault's _inputs/ or run: mnemon reindex --no-hand-edit-report", file=sys.stderr)
+        return 1
     except Exception as exc:
         print(f"knowledge-reindex: failed — {exc}", file=sys.stderr)
         return 2
 
-    print(f"reindex: {vault.name} — Sources={s}, Extracted={e}, Synthesis={syn}"
-          + (f", Pending={pending}" if pending else ""))
+    line = (f"reindex: {vault.name} — Sources={c['sources']}, Extracted={c['extracted']}, "
+            f"Synthesis={c['synthesis']}, Superseded={c['superseded']}")
+    for key, label in (('pending', 'Pending'), ('legacy', 'Legacy'), ('dangling', 'Dangling-supersedes'),
+                       ('preserved', 'Preserved'), ('malformed', 'Malformed-frontmatter')):
+        if c[key]:
+            line += f", {label}={c[key]}"
+    print(line)
     return 0
 
 
