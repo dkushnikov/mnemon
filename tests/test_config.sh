@@ -69,9 +69,76 @@ printf 'vault_path: %s/vault5\n' "$TEST_TMPDIR" > "$TMPCONFIG5"
 load_config "$TMPCONFIG5"
 assert_eq "$MNEMON_CONFIG_FILE" "$TMPCONFIG5" "MNEMON_CONFIG_FILE is the resolved file"
 assert_eq "$MNEMON_INSTANCE" "adhoc" "instance is adhoc for a path-given config without instance:"
-assert_eq "$MNEMON_STATE_DIR" "$XDG_STATE_HOME/mnemon/adhoc" "state_dir defaults to XDG_STATE_HOME/mnemon/<instance>"
+adhoc_ns="adhoc-$(printf '%s' "$TMPCONFIG5" | shasum -a 256 | cut -c1-8)"
+assert_eq "$MNEMON_STATE_DIR" "$XDG_STATE_HOME/mnemon/$adhoc_ns" "an ad-hoc config gets its own state namespace adhoc-<sha256(config path)[:8]> (spec §7)"
 assert_eq "$CHARTER_PATH" "$TEST_TMPDIR/vault5/_meta/charter.md" "charter_path defaults to vault/_meta/charter.md"
 assert_eq "$WRITER_HOST" "" "writer_host is empty when unset"
+assert_eq "$EXTRACT_TIMEOUT" "900" "extract_timeout defaults to 900"
+assert_eq "$EXTRACT_INLINE_MAX_BYTES" "400000" "extract_inline_max_bytes defaults to 400000"
+assert_eq "$EXTRACT_MAX_USD" "" "extract_max_usd is empty when unset"
+vault5_hash="$(printf '%s' "$TEST_TMPDIR/vault5" | shasum -a 256 | cut -c1-16)"
+assert_eq "$MNEMON_VAULT_STATE_DIR" "$XDG_STATE_HOME/mnemon/vaults/$vault5_hash" "MNEMON_VAULT_STATE_DIR = XDG_STATE_HOME/mnemon/vaults/<sha256(vault path)[:16]> (D6)"
+[[ -e "$XDG_STATE_HOME" ]] && fail "load_config creates nothing" "XDG_STATE_HOME exists" || pass "load_config computes the state dirs without creating them"
+
+# --- Test 5b: the vault ledger is keyed by the physical vault path: two configs
+#     (an instance and an ad-hoc file), a trailing slash and a symlinked parent all
+#     land on one MNEMON_VAULT_STATE_DIR; instance state stays apart ---
+echo "--- vault state dir ---"
+mkdir -p "$TEST_TMPDIR/real/vault5b"
+ln -s "$TEST_TMPDIR/real" "$TEST_TMPDIR/link"
+printf 'instance: shared\nvault_path: %s/real/vault5b\nextract_timeout: 5\nextract_inline_max_bytes: 1234\nextract_max_usd: 0.5\n' "$TEST_TMPDIR" > "$TEST_TMPDIR/shared-a.yaml"
+printf 'vault_path: %s/link/vault5b/\n' "$TEST_TMPDIR" > "$TEST_TMPDIR/shared-b.yaml"
+load_config "$TEST_TMPDIR/shared-a.yaml"
+vsd_a="$MNEMON_VAULT_STATE_DIR"; isd_a="$MNEMON_STATE_DIR"
+assert_eq "$EXTRACT_TIMEOUT" "5" "extract_timeout key honoured"
+assert_eq "$EXTRACT_INLINE_MAX_BYTES" "1234" "extract_inline_max_bytes key honoured"
+assert_eq "$EXTRACT_MAX_USD" "0.5" "extract_max_usd key honoured"
+load_config "$TEST_TMPDIR/shared-b.yaml"
+vault5b_hash="$(printf '%s' "$TEST_TMPDIR/real/vault5b" | shasum -a 256 | cut -c1-16)"
+assert_eq "$vsd_a" "$XDG_STATE_HOME/mnemon/vaults/$vault5b_hash" "the ledger dir hashes the physical path (instance config)"
+assert_eq "$MNEMON_VAULT_STATE_DIR" "$vsd_a" "a symlinked path with a trailing slash resolves to the same ledger dir (ad-hoc config)"
+[[ "$MNEMON_STATE_DIR" != "$isd_a" ]] && pass "instance-only state stays per config" || fail "instance-only state stays per config" "both configs got $isd_a"
+assert_eq "$(mnemon_vault_state_dir "$TEST_TMPDIR/nope/missing-vault/")" "$XDG_STATE_HOME/mnemon/vaults/$(printf '%s' "$TEST_TMPDIR/nope/missing-vault" | shasum -a 256 | cut -c1-16)" "a vault that does not exist yet hashes its absolute path without the trailing slash"
+
+# --- Test 5c: _mnemon_yaml_literal — the artifact decoder (spec §4.4): exactly
+#     \" and \\ decoded, no tilde expansion, frontmatter only; _parse_yaml_value
+#     (the config reader) keeps expanding ~ ---
+echo "--- yaml literal decoder ---"
+ART="$TEST_TMPDIR/artifact.md"
+cat > "$ART" << 'EOF'
+---
+type: source
+title: "~"
+author: "~/Guide"
+session: "a \"quoted\" \ title"
+intent: "back\\slash and \"q\""
+revision: "2026-10-15_c2e16f9b"
+rating: 7   # comment
+plain: ~/literal
+single: 'it''s'
+capture:
+  title: "nested, never read"
+  method: "curl+defuddle"
+empty:
+---
+
+title: "body line, never read"
+method: "body line, never read"
+EOF
+assert_eq "$(_mnemon_yaml_literal title "$ART")" "~" 'literal: a title "~" stays a tilde'
+assert_eq "$(_mnemon_yaml_literal author "$ART")" "~/Guide" 'literal: "~/Guide" is not expanded'
+assert_eq "$(_mnemon_yaml_literal session "$ART")" 'a "quoted" \ title' 'literal: \" and a lone backslash decode'
+assert_eq "$(_mnemon_yaml_literal intent "$ART")" 'back\slash and "q"' 'literal: \\ → \ and \" → "'
+assert_eq "$(_mnemon_yaml_literal revision "$ART")" "2026-10-15_c2e16f9b" "literal: plain quoted scalar"
+assert_eq "$(_mnemon_yaml_literal rating "$ART")" "7" "literal: unquoted value loses a trailing comment"
+assert_eq "$(_mnemon_yaml_literal plain "$ART")" "~/literal" "literal: an unquoted leading tilde is not expanded"
+assert_eq "$(_mnemon_yaml_literal single "$ART")" "it" "literal: single-quoted value ends at the first closing quote (not a gateway form)"
+assert_eq "$(_mnemon_yaml_literal method "$ART")" "" "literal: a nested key is not a top-level key; the body is never read"
+assert_eq "$(_mnemon_yaml_literal empty "$ART")" "" "literal: a key without a value is empty"
+printf 'nofm: "x"\n' > "$TEST_TMPDIR/nofm.md"
+assert_eq "$(_mnemon_yaml_literal nofm "$TEST_TMPDIR/nofm.md")" "" "literal: a file without a frontmatter block yields nothing"
+printf 'vault_path: ~/cfg-vault\n' > "$TEST_TMPDIR/tilde-cfg.yaml"
+assert_eq "$(_parse_yaml_value vault_path "$TEST_TMPDIR/tilde-cfg.yaml")" "$HOME/cfg-vault" "_parse_yaml_value (config) still expands ~"
 
 # --- Test 6: New keys honoured (instance, state_dir, charter_path, writer_host) ---
 cat > "$TEST_TMPDIR/full.yaml" << 'EOF'

@@ -25,35 +25,20 @@ Turn the raw thought into a structured knowledge artifact that will be findable 
 
 Generate extract.md with EXACTLY this structure:
 
-## Frontmatter
+## Fields
 
-```yaml
----
-type: extract
-source_type: idea
-content_format: text
-origin: idea
-visibility: personal
-status: extracted
-context: "<from capture context: personal | mc>"
-title: "<concise title capturing the idea — max 8 words>"
-author: "<person's name from capture context, or 'self'>"
-url: ""
-created: <YYYY-MM-DD>
-extracted: <YYYY-MM-DD>
-language: <detected language>
-tags: [<2-5 topic tags, lowercase>]
-people: []
-domains: [<1-2 domains from reader context>]
-rating: <1-10 integer>
-capture_context:
-  vault: <from capture context>
-  session: "<from capture context>"
-  intent: "<from capture context>"
-  import_source: "<from capture context, e.g. gateway>"
-  import_batch: "<from capture context, empty if none>"
----
-```
+Return these structured fields (output schema `extract/1`). The gateway writes the frontmatter of
+extract.md from them — do not write YAML, do not add fields, do not wrap the answer in prose.
+
+- `title` — a concise title capturing the idea, at most 8 words (1–300 characters, one line)
+- `author` — the person the idea came from, or `self` (at most 200 characters; empty string when unknown)
+- `language` — the content's language as a code such as `en`, `ru`, `pt-BR`
+- `tags` — 3–8 lowercase topic tags, each matching `[a-z0-9][a-z0-9_/-]*` (at most 12)
+- `people` — people mentioned or referenced, plain names (at most 30)
+- `domains` — 1–3 domains from the Reader Context domain list, lowercase
+- `rating` — an integer from 1 to 10 on the reader's value scale
+- `pages` — the page count, only when the source states it (integer; omit otherwise)
+- `body` — the Body section below as markdown, with exactly its `### ` headings
 
 Rating guide: apply the reader's value-scale from the Reader Context (single source of truth).
 

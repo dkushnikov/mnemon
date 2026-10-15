@@ -49,12 +49,30 @@ import lib_config  # noqa: E402
 _KEY_RE = re.compile(r"^([A-Za-z_][\w./-]*):(?:\s+(.*))?$")
 
 
+def _decode_dq(inner: str) -> str:
+    """Body of a double-quoted scalar: exactly `\\"` → `"` and `\\\\` → `\\` in one pass
+    (the serialization subset of docs/specs/2026-10-15-capture-contracts.md §4.4); every
+    other backslash sequence stays as it is, and a tilde is never expanded."""
+    out: list[str] = []
+    i = 0
+    n = len(inner)
+    while i < n:
+        c = inner[i]
+        if c == "\\" and i + 1 < n and inner[i + 1] in ('"', "\\"):
+            out.append(inner[i + 1])
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _unquote(raw: str) -> str:
     raw = raw.strip()
     if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("'", '"'):
         inner = raw[1:-1]
         if raw[0] == '"':
-            return inner.replace('\\"', '"').replace("\\\\", "\\")
+            return _decode_dq(inner)
         return inner.replace("''", "'")
     return raw
 

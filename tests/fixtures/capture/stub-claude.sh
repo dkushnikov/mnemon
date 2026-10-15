@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Stub `claude` for the capture / fence / lock suites (spec §9 "Stubs"). Never talks to a model.
+#
+# Every call is recorded under $STUB_DIR as call-<n>.argv (one argument per line), call-<n>.cwd,
+# call-<n>.stdin (the prompt bytes), call-<n>.sources (the Sources/*/source.md files that existed
+# at call time — the "source before LLM" assertion) and call-<n>.staging (staging dirs seen);
+# $STUB_DIR/count holds the number of calls. `claude --version` and `claude --help` answer like
+# the real binary (the help lists --restricted).
+#
+# Behaviour (environment):
+#   STUB_MODE         ok (default) · exit1 · is-error · missing-field · invalid-json · sleep ·
+#                     bad-then-ok · max-turns · no-output
+#   STUB_FIXTURE      structured_output JSON file for `ok` (and the second answer of bad-then-ok)
+#   STUB_FIXTURE_BAD  structured_output JSON file for the first answer of bad-then-ok
+#   STUB_SLEEP        seconds to sleep in `sleep` mode (a child `sleep` is spawned too, so the
+#                     timeout test can check that the whole process group is reaped)
+#   STUB_MARKER       a string put on the child sleep's command line (pgrep -f target)
+set -uo pipefail
+
+case "${1:-}" in
+  --version) echo "9.9.9-stub (Claude Code)"; exit 0 ;;
+  --help)
+    cat <<'HELP'
+Usage: claude [options] [command] [prompt]
+Options:
+  -p, --print                  Print response and exit
+  --restricted                 Restrict file tools to the working directory and disable shell tools
+  --tools <tools...>           Tool names the model may use
+  --permission-prompts <mode>  acceptEdits|none|...
+  --strict-mcp-config          Only use MCP servers from --mcp-config
+  --output-format <format>     text|json|stream-json
+  --json-schema <schema>       JSON schema for structured output
+HELP
+    exit 0 ;;
+esac
+
+: "${STUB_DIR:?STUB_DIR must be set}"
+mkdir -p "$STUB_DIR"
+n=$(( $(cat "$STUB_DIR/count" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$STUB_DIR/count"
+printf '%s\n' "$@" > "$STUB_DIR/call-$n.argv"
+pwd > "$STUB_DIR/call-$n.cwd"
+cat > "$STUB_DIR/call-$n.stdin"
+if [[ -n "${STUB_VAULT:-}" ]]; then
+  (shopt -s nullglob; for f in "$STUB_VAULT"/Sources/*/source.md; do echo "$f"; done) > "$STUB_DIR/call-$n.sources"
+  (shopt -s nullglob; for d in "$STUB_VAULT"/Sources/.*.staging-*; do echo "$d"; done) > "$STUB_DIR/call-$n.staging"
+fi
+
+mode="${STUB_MODE:-ok}"
+fixture="${STUB_FIXTURE:-}"
+if [[ "$mode" == "bad-then-ok" ]]; then
+  if [[ "$n" -eq 1 ]]; then fixture="${STUB_FIXTURE_BAD:?}"; fi
+  mode=ok
+fi
+
+emit() {  # <structured_output file or empty> <extra jq filter>
+  local so="$1" extra="${2:-.}"
+  if [[ -n "$so" ]]; then
+    jq -c --slurpfile so "$so" '{type:"result", subtype:"success", is_error:false, total_cost_usd:0.012, duration_ms:1500, num_turns:1, permission_denials:[], structured_output:$so[0]} | '"$extra"
+  else
+    jq -n -c '{type:"result", subtype:"success", is_error:false, total_cost_usd:0.012, duration_ms:1500, num_turns:1, permission_denials:[]} | '"$extra"
+  fi
+}
+
+case "$mode" in
+  ok)            emit "${fixture:?STUB_FIXTURE must be set for ok}" <<< '{}' ;;
+  exit1)         echo "stub claude: simulated failure" >&2; exit 1 ;;
+  is-error)      emit "" '. + {is_error:true, subtype:"error_during_execution", result:"simulated transient failure"}' <<< '{}' ;;
+  max-turns)     emit "" '. + {is_error:true, subtype:"error_max_turns", result:"max turns"}' <<< '{}' ;;
+  missing-field) jq -c 'del(.author)' "${fixture:?}" > "$STUB_DIR/so-$n.json"; emit "$STUB_DIR/so-$n.json" <<< '{}' ;;
+  no-output)     emit "" <<< '{}' ;;
+  invalid-json)  echo "this is not json" ;;
+  sleep)
+    sleep "${STUB_SLEEP:-60}" "${STUB_MARKER:-}" >/dev/null 2>&1 &
+    sleep "${STUB_SLEEP:-60}"
+    emit "${fixture:?}" <<< '{}' ;;
+  *) echo "stub claude: unknown STUB_MODE $mode" >&2; exit 3 ;;
+esac

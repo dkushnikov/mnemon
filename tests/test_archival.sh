@@ -1,121 +1,80 @@
 #!/usr/bin/env bash
-# A1 — url-archival fallback chain (curl -> render -> unarchivable marker).
-# Stubs curl/render/claude so we exercise the real non-dry-run archival path
-# without network, Chrome, or a real extraction.
+# A1 — url raw-store chain (curl → render → fetch failure) under the capture contract
+# (docs/specs/2026-10-15-capture-contracts.md §6, D8): the raw is staged next to its destination,
+# named after the revision, hashed into source.md; a page served as PDF takes the pdf row; the
+# rendered text is the retained artifact when curl fails; both failing is an acquisition failure
+# (exit 1, nothing published) — there is no "unarchivable" marker any more. Legacy folders are
+# matched by url: (legacy_match). Stubs from tests/fixtures/capture/setup.sh.
 source "$(dirname "$0")/test-helper.sh"
+MNEMON_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+source "$MNEMON_ROOT/tests/fixtures/capture/setup.sh"
 
-MNEMON_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-GW="$MNEMON_ROOT/bin/knowledge-gateway.sh"
+echo "=== Archival Chain Tests (A1) ==="
 
-echo "=== Archival Fallback Tests (A1) ==="
-
-TEST_TMPDIR=$(mktemp -d)
-VAULT="$TEST_TMPDIR/vault"
-ARCHIVE="$TEST_TMPDIR/archive"
-STUBS="$TEST_TMPDIR/stubs"
-CONFIG="$TEST_TMPDIR/mnemon.yaml"
-mkdir -p "$VAULT/Sources" "$ARCHIVE" "$STUBS"
-echo "Test reader context" > "$VAULT/reader-context.md"
-
-mkdir -p "$MNEMON_ROOT/templates/core"
-[[ -f "$MNEMON_ROOT/templates/core/article.md" ]] || echo "# TEST TEMPLATE" > "$MNEMON_ROOT/templates/core/article.md"
-
-cat > "$CONFIG" << EOF
-vault_path: $VAULT
-reader_context_path: $VAULT/reader-context.md
-search_provider: grep
-default_model: sonnet
-archive_dir: $ARCHIVE
-EOF
-
-# stub: claude — capture the prompt (last arg), emit RESULT lines, no real work
-cat > "$STUBS/claude" << 'STUB'
-#!/usr/bin/env bash
-printf '%s' "${@: -1}" > "$CLAUDE_CAPTURE"
-echo "RESULT:path=Sources/test/"
-echo "RESULT:status=extracted"
-STUB
-
-# stub: curl — writes to the -o target (binary-safe path). ok=html, pdf=binary(+nulls), else fail
-cat > "$STUBS/curl" << 'STUB'
-#!/usr/bin/env bash
-out=""; prev=""
-for a in "$@"; do [[ "$prev" == "-o" ]] && out="$a"; prev="$a"; done
-case "${STUB_CURL:-fail}" in
-  ok)  [[ -n "$out" ]] && printf '<html>curl content</html>' > "$out"; exit 0 ;;
-  pdf) [[ -n "$out" ]] && printf '%%PDF-1.7\000\000\000END' > "$out"; exit 0 ;;
-  *)   exit 1 ;;
-esac
-STUB
-
-# stub: render-url.sh — STUB_RENDER=ok prints content (success), else exit 1
-cat > "$STUBS/render-url.sh" << 'STUB'
-#!/usr/bin/env bash
-[[ "${STUB_RENDER:-fail}" == "ok" ]] && { echo "rendered text content"; exit 0; }
-exit 1
-STUB
-
-chmod +x "$STUBS/claude" "$STUBS/curl" "$STUBS/render-url.sh"
-
-export PATH="$STUBS:$PATH"
-export RENDER_URL_CMD="$STUBS/render-url.sh"
-export CLAUDE_CAPTURE="$TEST_TMPDIR/claude_prompt.txt"
-
-reset()  { find "$ARCHIVE" -maxdepth 1 -type f -delete 2>/dev/null || true; : > "$CLAUDE_CAPTURE"; }
 nfiles() { find "$ARCHIVE" -maxdepth 1 -type f -name "${1:-*}" 2>/dev/null | wc -l | tr -d ' '; }
-run_gw() { export STUB_CURL="$1" STUB_RENDER="$2"; "$GW" source-add --url "$3" --config "$CONFIG" >/dev/null 2>&1 || true; }
 
-# T1: curl succeeds -> archived as .html (regression guard for existing behavior)
-reset
-run_gw ok fail "https://example.com/t1"
-assert_eq "$(nfiles '*.html')" "1" "curl success archives .html"
-assert_contains "$(cat "$CLAUDE_CAPTURE")" "Archive:" "curl-success prompt carries Archive line"
+# T1: curl succeeds → <revision>.html in archive_dir, hash recorded in source.md
+run_gw --url "https://example.com/t1" --capture-id t1
+assert_eq "$rc" "0" "curl success → exit 0"
+assert_eq "$(nfiles '*.html')" "1" "curl success archives <revision>.html"
+assert_file_exists "$ARCHIVE/$(result revision).html" "...named after the revision"
+assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" "archive: \"$(result revision).html\"" "...source.md archive: field"
+assert_eq "$(grep '^  raw_sha256:' "$VAULT/Sources/$(result revision)/source.md" | tr -d '" ' | cut -d: -f2)" "$(shasum -a 256 "$ARCHIVE/$(result revision).html" | cut -c1-64)" "...raw_sha256 matches the archived bytes"
 
-# T1b: url-origin serving binary (PDF w/ null bytes), URL has NO .pdf extension
-# (else the gateway routes to its already-binary-safe pdf branch). -> .pdf, byte-exact.
-reset
-run_gw pdf fail "https://example.com/q4-report"
+# T1b: url origin served as PDF (binary with NUL bytes, no .pdf in the URL) → .pdf, byte-exact
+STUB_CURL=pdf run_gw --url "https://example.com/q4-report" --capture-id t1b
+assert_eq "$rc" "0" "binary (pdf) download → exit 0"
 assert_eq "$(nfiles '*.pdf')" "1" "binary download archived as .pdf (ext from content)"
-assert_eq "$(cat "$ARCHIVE"/*.pdf | wc -c | tr -d ' ')" "14" "pdf bytes preserved exactly (no null stripping)"
+printf '%%PDF-1.7\n\000\000binary\n%%%%EOF\n' > "$TEST_TMPDIR/expected.pdf"
+assert_eq "$(shasum -a 256 "$ARCHIVE/$(result revision).pdf" | cut -c1-64)" "$(shasum -a 256 "$TEST_TMPDIR/expected.pdf" | cut -c1-64)" "pdf bytes preserved exactly (no null stripping)"
+assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" '  method: "pdftotext"' "...converted by the pdf row"
 
-# T2: curl fails, render succeeds -> archived via render as .txt (NEW fallback)
-reset
-run_gw fail ok "https://example.com/t2"
-assert_eq "$(nfiles '*.txt')" "1" "curl fail + render ok archives via render (.txt)"
-assert_not_contains "$(cat "$CLAUDE_CAPTURE")" "unarchivable" "render-fallback success is not marked unarchivable"
+# T2: curl fails, render succeeds → the rendered text is the raw (.txt, rendered)
+STUB_CURL=fail STUB_RENDER=ok run_gw --url "https://example.com/t2" --capture-id t2
+assert_eq "$rc" "0" "curl fail + render ok → exit 0"
+assert_eq "$(nfiles '*.txt')" "1" "render fallback retains the rendered text as <revision>.txt"
+assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" '  raw_kind: rendered' "...raw_kind rendered"
+assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" '  method: "render-text"' "...method render-text"
+assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" "rendered text content" "...the rendered text is the body"
 
-# T3: both fail -> no file written + archive: unarchivable marker (NEW)
-reset
-run_gw fail fail "https://example.com/t3"
-assert_eq "$(nfiles)" "0" "both fail -> no archive file written"
-assert_contains "$(cat "$CLAUDE_CAPTURE")" "Archive: unarchivable" "both fail -> unarchivable marker in prompt"
+# T3: both fail → acquisition failure, nothing published, no file written
+n_before="$(nfiles)"
+STUB_CURL=fail STUB_RENDER=fail run_gw --url "https://example.com/t3" --capture-id t3
+assert_eq "$rc" "1" "both fail → exit 1"
+assert_eq "$(result status)" "failed" "...status failed"
+assert_eq "$(result error_class)" "fetch" "...error_class fetch (no unarchivable marker)"
+assert_eq "$(result retryable)" "true" "...retryable"
+assert_eq "$(nfiles)" "$n_before" "both fail → no archive file written"
+assert_eq "$(staging_left)" "0" "...and no staged file left"
+[[ -d "$VAULT/Sources/$(rget t3 '.revision')" ]] && fail "nothing published" "folder exists" || pass "...nothing published"
 
-# T4: archival disabled (no archive_dir) -> no Archive line at all.
-# Guards against spurious "unarchivable" when the user never enabled archival.
-cat > "$TEST_TMPDIR/noarchive.yaml" << EOF
-vault_path: $VAULT
-reader_context_path: $VAULT/reader-context.md
-search_provider: grep
-default_model: sonnet
-EOF
-reset
-export STUB_CURL=fail STUB_RENDER=fail
-"$GW" source-add --url "https://example.com/t4" --config "$TEST_TMPDIR/noarchive.yaml" >/dev/null 2>&1 || true
-assert_not_contains "$(cat "$CLAUDE_CAPTURE")" "Archive:" "archival disabled -> no Archive line (no spurious unarchivable)"
+# T4: archival disabled (no archive_dir) → the raw lives in the vault state, no archive: field
+rc=0; "$GW" source-add --config "$TEST_TMPDIR/noarchive.yaml" --url "https://example.com/t4" --capture-id t4 >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+out="$(cat "$TEST_TMPDIR/run.out")"
+assert_eq "$rc" "0" "no archive_dir → exit 0"
+assert_not_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" "archive:" "archival disabled → no archive: field"
+assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" "  raw_store: state" "...raw_store: state"
+assert_file_exists "$VSTATE/raw/$(result revision).html" "...raw retained under <vault state>/raw/"
 
-# --- T6: dedup — re-adding an already-captured URL skips with a warning, unless --force ---
+# T6: dedup — a legacy folder (no resource_sha256) is matched by url:, never modified; --force recaptures
 mkdir -p "$VAULT/Sources/2026-01-01_existing"
 printf '%s\n' '---' 'type: source' 'origin: url' 'url: "https://dup.test/x"' '---' '' '# body' > "$VAULT/Sources/2026-01-01_existing/source.md"
-reset
-dout=$("$GW" source-add --url "https://dup.test/x" --config "$CONFIG" 2>&1) || true
-assert_contains "$dout" "skipped-duplicate" "duplicate URL is skipped"
-assert_eq "$(cat "$CLAUDE_CAPTURE")" "" "skipped duplicate does not invoke claude"
-reset
-STUB_CURL=fail STUB_RENDER=fail "$GW" source-add --url "https://dup.test/x" --force --config "$CONFIG" >/dev/null 2>&1 || true
-assert_contains "$(cat "$CLAUDE_CAPTURE")" "source-add" "--force re-captures the duplicate (claude invoked)"
-reset
-STUB_CURL=fail STUB_RENDER=fail "$GW" source-add --url "https://fresh.test/y" --config "$CONFIG" >/dev/null 2>&1 || true
-assert_contains "$(cat "$CLAUDE_CAPTURE")" "source-add" "non-duplicate URL proceeds normally"
+printf '%s\n' '---' 'type: extract' 'status: extracted' 'title: "Old"' '---' > "$VAULT/Sources/2026-01-01_existing/extract.md"
+legacy_sha="$(shasum -a 256 "$VAULT/Sources/2026-01-01_existing/source.md")"
+stub_reset
+run_gw --url "https://dup.test/x"
+assert_eq "$rc" "0" "legacy duplicate → exit 0"
+assert_eq "$(result status)" "skipped-duplicate" "duplicate URL is skipped (legacy url: match)"
+assert_eq "$(result path)" "Sources/2026-01-01_existing/" "...pointing at the legacy folder"
+assert_eq "$(stub_calls)" "0" "skipped duplicate does not invoke claude"
+assert_eq "$(shasum -a 256 "$VAULT/Sources/2026-01-01_existing/source.md")" "$legacy_sha" "the legacy folder is never modified"
+run_gw --url "https://dup.test/x" --force --capture-id dup-force
+assert_eq "$rc" "0" "--force re-captures the duplicate"
+assert_eq "$(result status)" "extracted" "...as a new revision"
+assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" supersedes)" '"2026-01-01_existing"' "...superseding the legacy folder"
+assert_eq "$(rget dup-force '.legacy_match')" "false" "...the new receipt is not a legacy match"
+run_gw --url "https://fresh.test/y" --capture-id fresh-y
+assert_eq "$(result status)" "extracted" "non-duplicate URL proceeds normally"
 
-rm -rf "$TEST_TMPDIR"
+cleanup_capture_test
 summary

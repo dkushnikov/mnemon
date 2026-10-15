@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# L1 archive helpers — shared by knowledge-gateway.sh and backfill-archives.sh.
-# Source this file (it only defines functions + RENDER_URL_CMD, runs nothing).
-# Requires ARCHIVE_DIR in the environment (set by mnemon-config.sh load_config).
+# L1 archive helpers — used by backfill-archives.sh (legacy Gap-A re-archival) and, for
+# RENDER_URL_CMD, by knowledge-gateway.sh. Source this file (it only defines functions +
+# RENDER_URL_CMD, runs nothing). Requires ARCHIVE_DIR in the environment (mnemon-config.sh).
+#
+# Since the capture contracts (docs/specs/2026-10-15-capture-contracts.md, D8/§3.2) the gateway
+# no longer archives through these helpers: its raw is named after the revision, staged next to
+# its destination, hashed and recorded in a receipt before the rename (bin/lib-capture.sh). The
+# date_hash8 names and the "unarchivable" marker below remain for the backfill of pre-contract
+# folders only.
 
 _LIB_ARCHIVE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

@@ -1,0 +1,10 @@
+{
+ "title": "Domains test",
+ "author": "",
+ "language": "en",
+ "tags": ["testing"],
+ "people": [],
+ "domains": ["*x", "12", "a,b"],
+ "rating": 4,
+ "body": "### Summary\n\nS.\n\n### Executive Summary\n\nE.\n\n### Key Ideas\n\n- **x** #learning — y.\n\n### Connections\n\n- [[a]] — b.\n\n### Raw Quotes\n\n> q\n"
+}

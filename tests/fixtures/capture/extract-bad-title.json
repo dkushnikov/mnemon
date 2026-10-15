@@ -1,0 +1,10 @@
+{
+ "title": "Two line\ntitle",
+ "author": "A. Author",
+ "language": "en",
+ "tags": ["testing"],
+ "people": [],
+ "domains": ["learning"],
+ "rating": 10,
+ "body": "### Summary\n\nS.\n\n### Executive Summary\n\nE.\n\n### Key Ideas\n\n- **x** #learning — y.\n\n### Connections\n\n- [[a]] — b.\n\n### Raw Quotes\n\n> q\n"
+}
