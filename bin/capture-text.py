@@ -11,10 +11,14 @@ the retained artifact of a `--render` capture is the rendered output itself). An
 conversion is an acquisition failure: exit 1, `error_class: convert` in the report, nothing at
 --out — the gateway keeps the raw published and a retry converts it again (never refetches).
 
-The report (`mnemon-capture-text/1`) records `method`, `bytes`, `words`, `title` (the page's
+The report (`mnemon-capture-text/2`, the frozen shape of tests/fixtures/capture/reports/text.json)
+records the `/1` keys — `method` (`<fetch>+<converter>`), `bytes`, `words`, `title` (the page's
 `<title>`, normalized per §3.3: control characters removed, whitespace collapsed, trimmed,
-≤ 300 characters; null when absent), `completeness: "unknown"` (phase 2 fills it) and the version
-of the tool that produced the text. Stdlib only, python 3.9.
+≤ 300 characters; null when absent), `completeness`, the tool that produced the text — plus the
+phase-2 keys with neutral values (this is the phase-1 converter with the `/2` report shape: no
+reference check, `completeness: "unknown"`, empty inventory and repairs; the capture layer's
+rewrite replaces it). `--fetch-report`, `--raw-kind` and `--kind` are accepted; the fetch report
+supplies the fetch method, the acquisition outcome and the arXiv metadata. Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
@@ -27,7 +31,7 @@ import shutil
 import subprocess
 import sys
 
-SCHEMA = "mnemon-capture-text/1"
+SCHEMA = "mnemon-capture-text/2"
 TITLE_MAX = 300
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 
@@ -81,6 +85,19 @@ def run_pandoc(raw_path: str):
     return out.stdout, None
 
 
+def published_candidates(raw: bytes) -> list:
+    """Dated candidates from the page's meta tags (the gateway chooses by source type, D8)."""
+    text = raw.decode("utf-8", errors="replace")
+    found = []
+    for attr, source in (("property", "article:published_time"), ("name", "citation_date")):
+        m = re.search(r'<meta\s+(?:[^>]*?\s)?' + attr + r'=["\']' + re.escape(source) + r'["\'][^>]*?content=["\']([^"\']+)["\']', text, re.IGNORECASE)
+        if not m:
+            m = re.search(r'<meta\s+(?:[^>]*?\s)?content=["\']([^"\']+)["\'][^>]*?' + attr + r'=["\']' + re.escape(source) + r'["\']', text, re.IGNORECASE)
+        if m:
+            found.append({"value": normalize_scalar(html.unescape(m.group(1)), 40), "source": source})
+    return found
+
+
 def write_report(path: str, report: dict) -> None:
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(report, fh, ensure_ascii=False, indent=1)
@@ -94,10 +111,31 @@ def main() -> int:
     ap.add_argument("--rendered", default=None, help="rendered text to use verbatim as capture-text")
     ap.add_argument("--out", required=True, help="where to write the capture-text bytes")
     ap.add_argument("--report", required=True, help="where to write the JSON report")
+    ap.add_argument("--fetch-report", default=None, help="the fetch report (mnemon-fetch/1) of the raw")
+    ap.add_argument("--raw-kind", default=None, choices=["response", "rendered", "site", "external"])
+    ap.add_argument("--kind", default=None, choices=["page", "arxiv", "youtube", "github"])
     args = ap.parse_args()
 
+    fetch = {}
+    if args.fetch_report:
+        try:
+            with open(args.fetch_report, "r", encoding="utf-8") as fh:
+                fetch = json.load(fh)
+        except (OSError, ValueError):
+            fetch = {}
+    fmeta = fetch.get("metadata") or {}
+    acq = (fetch.get("acquisition") or {}).get("outcome") or "unknown"
     report = {"schema": SCHEMA, "url": args.url, "method": None, "bytes": 0, "words": 0,
-              "title": None, "completeness": "unknown", "tool": None, "error_class": None, "error": None}
+              "title": None, "completeness": "unknown", "tool": None, "error_class": None, "error": None,
+              "converter": None, "acquisition": acq, "candidates": [], "reference_count": 0, "eligible_count": 0,
+              "missing_count": 0, "glued_count": 0, "headings_missing_count": 0, "missing_examples": [],
+              "inventory": {}, "repairs": {"html": {}, "markdown": {}}, "bytes_per_word": 0.0, "bloat": False,
+              "published_candidates": [], "authors": list(fmeta.get("authors") or []), "arxiv_id": fmeta.get("arxiv_id"),
+              "arxiv_version": fmeta.get("arxiv_version"), "arxiv_requested_version": fmeta.get("arxiv_requested_version"),
+              "limits": ["phase-1 converter: no reference check (completeness unknown)"],
+              "tools": {"defuddle": tool_version("defuddle") if shutil.which("defuddle") else None,
+                        "pandoc": tool_version("pandoc") if shutil.which("pandoc") else None}}
+    fetch_method = fetch.get("method") or "direct"
     attempts = []
 
     if args.rendered:
@@ -120,14 +158,19 @@ def main() -> int:
             write_report(args.report, report)
             return 1
         report["title"] = page_title(raw)
+        report["published_candidates"] = published_candidates(raw)
         text, err = run_defuddle(args.raw)
-        method, tool = "curl+defuddle", "defuddle"
+        method, tool = fetch_method + "+defuddle", "defuddle"
         if text is None:
             attempts.append(err)
+            report["candidates"].append({"converter": "defuddle", "missing_count": 0, "glued_count": 0,
+                                         "headings_missing_count": 0, "chosen": False, "note": err})
             text, err = run_pandoc(args.raw)
-            method, tool = "curl+pandoc", "pandoc"
+            method, tool = fetch_method + "+pandoc", "pandoc"
             if text is None:
                 attempts.append(err)
+                report["candidates"].append({"converter": "pandoc", "missing_count": 0, "glued_count": 0,
+                                             "headings_missing_count": 0, "chosen": False, "note": err})
                 text = b""
 
     if not text or not text.strip():
@@ -148,6 +191,11 @@ def main() -> int:
     report["bytes"] = len(text)
     report["words"] = len(text.decode("utf-8", errors="replace").split())
     report["tool"] = {"name": tool, "version": tool_version(tool)} if tool else None
+    report["converter"] = tool or "render-text"
+    report["candidates"].append({"converter": report["converter"], "missing_count": 0, "glued_count": 0,
+                                 "headings_missing_count": 0, "chosen": True, "note": None})
+    report["bytes_per_word"] = round(report["bytes"] / report["words"], 1) if report["words"] else 0.0
+    report["bloat"] = report["bytes_per_word"] > 40
     write_report(args.report, report)
     return 0
 
