@@ -14,8 +14,11 @@ VAULT="$TEST_TMPDIR/test-vault"
 export MNEMON_CONFIG="$TEST_TMPDIR/mnemon.yaml"
 
 # --- Test 1: Full setup flow ---
+# --skip-plugin: the plugin step would register this checkout as a Claude Code
+# marketplace in the developer's real registry (test-helper.sh also exports
+# MNEMON_SKIP_PLUGIN=1 as a safety net).
 echo "--- Setup ---"
-bash "$MNEMON_ROOT/setup.sh" "$VAULT" --non-interactive --skip-qmd
+bash "$MNEMON_ROOT/setup.sh" "$VAULT" --non-interactive --skip-qmd --skip-plugin
 assert_dir_exists "$VAULT/Sources" "vault created"
 assert_file_exists "$MNEMON_CONFIG" "config generated"
 

@@ -5,6 +5,12 @@ set -euo pipefail
 PASS=0
 FAIL=0
 
+# No test may register the checkout under test as a Claude Code plugin
+# marketplace: setup.sh skips its plugin step while this is set (tests also pass
+# --skip-plugin; this is the belt to that braces). The one test that exercises
+# the plugin step does so in a sandbox and unsets it explicitly.
+export MNEMON_SKIP_PLUGIN=1
+
 pass() { echo "  ✓ $1"; ((PASS++)) || true; }
 fail() { echo "  ✗ $1: $2"; ((FAIL++)) || true; }
 

@@ -292,8 +292,26 @@ ensure_engine_for_skills() {
     echo "     replace it with a release worktree when you move to \`mnemon init\` — docs/install.md)"
   fi
 }
+# Guard: the plugin step registers THIS directory as a Claude Code marketplace
+# and installs from it. Never do that from a test, a CI run or a process that
+# already runs inside a Claude Code plugin — the same as --skip-plugin:
+#   MNEMON_SKIP_PLUGIN=1   tests export it from tests/test-helper.sh
+#   CLAUDE_PLUGIN_ROOT     set while a Claude Code plugin is running
+#   CI                     set by CI systems
+SKIP_PLUGIN_REASON=""
 if $SKIP_PLUGIN; then
-  echo "   ○ Skipped (--skip-plugin)"
+  SKIP_PLUGIN_REASON="--skip-plugin"
+elif [[ -n "${MNEMON_SKIP_PLUGIN:-}" && "${MNEMON_SKIP_PLUGIN:-}" != "0" ]]; then
+  SKIP_PLUGIN_REASON="MNEMON_SKIP_PLUGIN=$MNEMON_SKIP_PLUGIN in the environment"
+elif [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
+  SKIP_PLUGIN_REASON="CLAUDE_PLUGIN_ROOT is set: running inside a Claude Code plugin"
+elif [[ -n "${CI:-}" ]]; then
+  SKIP_PLUGIN_REASON="CI is set"
+fi
+if [[ -n "$SKIP_PLUGIN_REASON" ]]; then
+  echo "   ○ Skipped the plugin step ($SKIP_PLUGIN_REASON) — the plugin registry was not touched"
+  echo "     Manual: claude plugin marketplace add $MARKETPLACE_DIR"
+  echo "             claude plugin install $PLUGIN_ID"
 elif ensure_engine_for_skills && command -v claude >/dev/null 2>&1; then
   claude plugin marketplace add "$MARKETPLACE_DIR" 2>/dev/null || true
   if claude plugin install "$PLUGIN_ID" 2>/dev/null; then
