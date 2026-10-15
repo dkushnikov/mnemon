@@ -288,6 +288,20 @@ class Policy:
         p._last_request = self._last_request
         return p
 
+    def check(self, url: str, *, deadline: Optional[proc.Deadline] = None) -> str:
+        """The first-hop checks without a request (the pre-validation before a browser or a media tool
+        launches): scheme, userinfo, DNS, every address — returns the first checked address."""
+        deadline = deadline or proc.Deadline.never()
+        _split_url(url, True)
+        scheme, host, port, path = _split_url(rewrite_url(url), True)
+        infos = _resolve(host, port, deadline)
+        loopback_ok = allow_loopback()
+        for info in infos:
+            problem = address_problem(info[4][0], loopback_ok)
+            if problem:
+                raise PolicyError("ssrf-blocked", "%s resolves to a %s" % (host, problem), url)
+        return infos[0][4][0]
+
     # --- the request -------------------------------------------------------------------------------------
 
     def _pace(self, host: str, deadline: proc.Deadline) -> None:

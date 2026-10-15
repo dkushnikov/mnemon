@@ -5,11 +5,12 @@
 #   render-url.sh <url>                    # prints rendered text to stdout
 #   render-url.sh <url> --html             # prints rendered HTML (post-JS) to stdout
 #   render-url.sh <url> --timeout 15000    # virtual-time-budget in ms (default 10000)
+#   render-url.sh <url> --max-bytes N       # output cap (render_max_bytes, default 20000000; exit 11 above it)
 #
 # Exit codes:
 #   0  success, content on stdout
 #   10 Chrome/Chromium not found — install hint on stderr
-#   11 render produced empty / suspiciously-thin output
+#   11 render produced empty / suspiciously-thin output, or output above --max-bytes
 #   12 unsupported flag or missing URL
 #
 # Design:
@@ -18,18 +19,23 @@
 #   Defuddle aggressively identifies a single "main" region and loses sections
 #   on landing pages with multiple hero-equivalent blocks.
 # - Does NOT handle interactions, waits, auth. Use Playwright MCP for those.
+# - Boundary (capture layer D3): the policy checks the URL before Chrome launches; Chrome runs with a
+#   throw-away profile and a mock keychain, no extensions, no sync, no first-run — but its own connection,
+#   redirects, subresources and script requests are not policed, and --max-bytes caps only the DOM output.
 
 set -uo pipefail
 
 URL=""
 MODE="text"   # text | html
 TIMEOUT="10000"
+MAX_BYTES="20000000"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --html)    MODE="html"; shift ;;
     --timeout) TIMEOUT="$2"; shift 2 ;;
-    --help|-h) sed -n '2,20p' "$0"; exit 0 ;;
+    --max-bytes) MAX_BYTES="$2"; shift 2 ;;
+    --help|-h) sed -n '2,24p' "$0"; exit 0 ;;
     --*)       echo "ERROR: unknown flag: $1" >&2; exit 12 ;;
     *)         URL="$1"; shift ;;
   esac
@@ -66,12 +72,17 @@ trap 'rm -rf "$TMP" "$PROFILE"' EXIT
 
 "$CHROME" --headless --disable-gpu \
   --use-mock-keychain --user-data-dir="$PROFILE" \
+  --disable-extensions --disable-sync --no-first-run \
   --virtual-time-budget="$TIMEOUT" \
   --dump-dom "$URL" 2>/dev/null > "$TMP"
 
 SIZE=$(wc -c < "$TMP" | tr -d ' ')
 if [[ "$SIZE" -lt 1000 ]]; then
   echo "ERROR: rendered output suspiciously small ($SIZE bytes)" >&2
+  exit 11
+fi
+if [[ "$MAX_BYTES" =~ ^[0-9]+$ && "$SIZE" -gt "$MAX_BYTES" ]]; then
+  echo "ERROR: rendered output $SIZE bytes exceeds --max-bytes $MAX_BYTES" >&2
   exit 11
 fi
 

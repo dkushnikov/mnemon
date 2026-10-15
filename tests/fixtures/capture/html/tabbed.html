@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Tabbed Docs Page</title></head>
+<body>
+<nav><a href="/docs">Docs</a></nav>
+<main>
+<h1>Tabbed Docs Page</h1>
+<p>This documentation page shows the same instructions for two operating systems behind tabs.</p>
+<div class="tabs" role="tablist">
+  <button role="tab" aria-selected="true">macOS</button>
+  <button role="tab" aria-selected="false">Linux</button>
+</div>
+<div role="tabpanel" id="panel-macos">
+  <h2>Install on macOS</h2>
+  <p>On macOS the installer places the engine under the library folder and links the command.</p>
+</div>
+<div role="tabpanel" id="panel-linux" hidden>
+  <h2>Install on Linux</h2>
+  <p>On Linux the installer unpacks the engine under the local share folder and links the command.</p>
+</div>
+<h2>After the installation</h2>
+<p>After the installation run the doctor command once to verify that every dependency is present.</p>
+</main>
+<footer><p>Edit this page on GitHub</p></footer>
+</body>
+</html>

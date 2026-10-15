@@ -1,154 +1,105 @@
 #!/usr/bin/env python3
-"""capture-text.py — the deterministic text form of a fetched page (spec §6, `url` row).
+"""capture-text.py — the capture-text of a retained raw, with the diagnostic completeness check (spec §3.5).
 
-    capture-text.py <raw-file> --url <url> --out <file> --report <json>
-    capture-text.py <raw-file> --url <url> --rendered <file> --out <file> --report <json>
+    capture-text.py <raw> --url <url> --out <file> --report <json> [--fetch-report <json>]
+                    [--raw-kind response|rendered|site|external] [--kind page|arxiv|youtube|github]
+                    [--timeout S]
+    capture-text.py <raw> --url <url> --rendered <file> --out <file> --report <json>   # phase-1 legacy text path
 
-Converts the published raw (the HTML curl saved) into capture-text: `defuddle parse <file>
---markdown` first (method `curl+defuddle`), then `pandoc -f html -t gfm` (method `curl+pandoc`).
-With `--rendered <file>` the capture-text is that file's bytes, unchanged (method `render-text`:
-the retained artifact of a `--render` capture is the rendered output itself). An empty or failed
-conversion is an acquisition failure: exit 1, `error_class: convert` in the report, nothing at
---out — the gateway keeps the raw published and a retry converts it again (never refetches).
+Converts a retained raw (the HTML the fetch saved) into capture-text through the capture layer
+(bin/capture/convert.py): decode → sanitize → the content subtree → the reference → the candidates
+(`defuddle`, `pandoc`, the DOM text) checked against the reference → the winner. It never fetches: what only
+the fetch could see (status, classification, charset, egress, resolver metadata) comes in through
+`--fetch-report`, the receipt's copy on a reconversion; without it the report records `acquisition: unknown`.
+With `--rendered <file>` the capture-text is that file's bytes, unchanged (`render-text`).
 
-The report (`mnemon-capture-text/1`) records `method`, `bytes`, `words`, `title` (the page's
-`<title>`, normalized per §3.3: control characters removed, whitespace collapsed, trimmed,
-≤ 300 characters; null when absent), `completeness: "unknown"` (phase 2 fills it) and the version
-of the tool that produced the text. Stdlib only, python 3.9.
+The report is `mnemon-capture-text/2` (the phase-1 keys plus the converter, the acquisition, the candidates,
+the counts, the inventory, the repairs, the dated candidates). An empty or failed conversion is an
+acquisition failure: exit 1, `error_class: convert` (or `invalid-utf8`), nothing at --out — the raw stays
+published and a retry converts it again. `--timeout` (convert_timeout, default 300) supervises `defuddle` and
+`pandoc` in their own process groups. Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
 import argparse
-import html
-import json
 import os
-import re
-import shutil
-import subprocess
 import sys
 
-SCHEMA = "mnemon-capture-text/1"
-TITLE_MAX = 300
-_CTRL = re.compile(r"[\x00-\x1f\x7f]")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-
-def normalize_scalar(value: str, limit: int) -> str:
-    value = _CTRL.sub(" ", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    return value[:limit]
-
-
-def page_title(raw: bytes):
-    text = raw.decode("utf-8", errors="replace")
-    m = re.search(r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
-    if not m:
-        return None
-    title = normalize_scalar(html.unescape(re.sub(r"<[^>]+>", " ", m.group(1))), TITLE_MAX)
-    return title or None
-
-
-def tool_version(cmd: str, flag: str = "--version"):
-    try:
-        out = subprocess.run([cmd, flag], capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    line = (out.stdout or out.stderr).strip().splitlines()
-    return line[0].strip() if line else None
-
-
-def run_defuddle(raw_path: str):
-    if not shutil.which("defuddle"):
-        return None, "defuddle not installed"
-    try:
-        out = subprocess.run(["defuddle", "parse", raw_path, "--markdown"], capture_output=True, timeout=300)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return None, f"defuddle failed: {exc.__class__.__name__}"
-    if out.returncode != 0 or not out.stdout.strip():
-        return None, "defuddle produced no content"
-    return out.stdout, None
-
-
-def run_pandoc(raw_path: str):
-    if not shutil.which("pandoc"):
-        return None, "pandoc not installed"
-    try:
-        out = subprocess.run(["pandoc", "-f", "html", "-t", "gfm", "--wrap=none", raw_path],
-                             capture_output=True, timeout=300)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return None, f"pandoc failed: {exc.__class__.__name__}"
-    if out.returncode != 0 or not out.stdout.strip():
-        return None, "pandoc produced no content"
-    return out.stdout, None
-
-
-def write_report(path: str, report: dict) -> None:
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(report, fh, ensure_ascii=False, indent=1)
-        fh.write("\n")
+from capture import convert, proc, report as reportmod  # noqa: E402
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Capture-text conversion for the url origin")
-    ap.add_argument("raw", help="the published raw file (HTML), or the rendered text with --rendered")
+    ap = argparse.ArgumentParser(description="Capture-text conversion for the url origin (phase 2)")
+    ap.add_argument("raw", help="the retained raw file (HTML), or the rendered text with --rendered")
     ap.add_argument("--url", required=True, help="the URL the raw came from (recorded in the report)")
-    ap.add_argument("--rendered", default=None, help="rendered text to use verbatim as capture-text")
     ap.add_argument("--out", required=True, help="where to write the capture-text bytes")
-    ap.add_argument("--report", required=True, help="where to write the JSON report")
+    ap.add_argument("--report", required=True, help="where to write the JSON report (mnemon-capture-text/2)")
+    ap.add_argument("--fetch-report", default=None, help="the fetch report (mnemon-fetch/1) of this raw")
+    ap.add_argument("--raw-kind", default="response", choices=["response", "rendered", "site", "external", "file", "composite"])
+    ap.add_argument("--kind", default=None, choices=["page", "arxiv", "youtube", "github"])
+    ap.add_argument("--rendered", default=None, help="rendered text to use verbatim as capture-text (legacy)")
+    ap.add_argument("--timeout", type=float, default=convert.DEFAULT_TIMEOUT, help="convert_timeout in seconds")
     args = ap.parse_args()
 
-    report = {"schema": SCHEMA, "url": args.url, "method": None, "bytes": 0, "words": 0,
-              "title": None, "completeness": "unknown", "tool": None, "error_class": None, "error": None}
-    attempts = []
+    proc.close_lock_fd()
+    proc.install_term_handler()
+    deadline = proc.Deadline(args.timeout)
+    rep = convert.empty_report(args.url)
+    fetch_report = None
+    if args.fetch_report:
+        try:
+            fetch_report = reportmod.read_json(args.fetch_report)
+        except (OSError, ValueError) as exc:
+            print("capture-text: cannot read --fetch-report: %s" % exc, file=sys.stderr)
+            return 2
+        acq = (fetch_report.get("acquisition") or {}).get("outcome")
+        if acq:
+            rep["acquisition"] = acq
 
     if args.rendered:
         try:
             with open(args.rendered, "rb") as fh:
                 text = fh.read()
         except OSError as exc:
-            report["error_class"], report["error"] = "convert", f"cannot read rendered text: {exc.strerror}"
-            write_report(args.report, report)
+            rep["error_class"], rep["error"] = "convert", "cannot read rendered text: %s" % exc.strerror
+            reportmod.write_report(args.report, rep)
             return 1
-        method, tool = "render-text", None
         if not text.strip():
-            text = b""
-    else:
-        try:
-            with open(args.raw, "rb") as fh:
-                raw = fh.read()
-        except OSError as exc:
-            report["error_class"], report["error"] = "convert", f"cannot read raw: {exc.strerror}"
-            write_report(args.report, report)
+            rep["error_class"], rep["error"] = "convert", "rendered text is empty"
+            reportmod.write_report(args.report, rep)
+            print("capture-text: convert failed for %s: %s" % (args.url, rep["error"]), file=sys.stderr)
             return 1
-        report["title"] = page_title(raw)
-        text, err = run_defuddle(args.raw)
-        method, tool = "curl+defuddle", "defuddle"
-        if text is None:
-            attempts.append(err)
-            text, err = run_pandoc(args.raw)
-            method, tool = "curl+pandoc", "pandoc"
-            if text is None:
-                attempts.append(err)
-                text = b""
+        reportmod.write_bytes(args.out, text)
+        words = len(text.decode("utf-8", "replace").split())
+        rep.update({"method": "render-text", "converter": "render-text", "bytes": len(text), "words": words,
+                    "completeness": "unknown", "bytes_per_word": round(len(text) / words, 2) if words else 0.0})
+        reportmod.write_report(args.report, rep)
+        return 0
 
-    if not text or not text.strip():
-        report["error_class"] = "convert"
-        report["error"] = "; ".join(attempts) if attempts else "empty conversion output"
-        write_report(args.report, report)
-        print(f"capture-text: convert failed for {args.url}: {report['error']}", file=sys.stderr)
+    try:
+        with open(args.raw, "rb") as fh:
+            raw = fh.read()
+    except OSError as exc:
+        rep["error_class"], rep["error"] = "convert", "cannot read raw: %s" % exc.strerror
+        reportmod.write_report(args.report, rep)
         return 1
-
-    tmp = args.out + ".tmp"
-    with open(tmp, "wb") as fh:
-        fh.write(text)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.rename(tmp, args.out)
-
-    report["method"] = method
-    report["bytes"] = len(text)
-    report["words"] = len(text.decode("utf-8", errors="replace").split())
-    report["tool"] = {"name": tool, "version": tool_version(tool)} if tool else None
-    write_report(args.report, report)
+    kind = args.kind or (fetch_report or {}).get("kind") or "page"
+    try:
+        result = convert.convert(raw, args.url, args.raw_kind, kind, fetch_report, deadline=deadline)
+    except convert.ConvertError as exc:
+        rep["error_class"], rep["error"] = exc.error_class, str(exc)
+        reportmod.write_report(args.report, rep)
+        print("capture-text: %s for %s: %s" % (exc.error_class, args.url, exc), file=sys.stderr)
+        return 1
+    if not result.text.strip():
+        rep["error_class"], rep["error"] = "convert", "empty conversion output"
+        reportmod.write_report(args.report, rep)
+        print("capture-text: convert failed for %s: empty conversion output" % args.url, file=sys.stderr)
+        return 1
+    reportmod.write_bytes(args.out, result.text.encode("utf-8"))
+    reportmod.write_report(args.report, result.report)
     return 0
 
 

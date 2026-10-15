@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Two Merged Tables</title></head>
+<body>
+<main>
+<h1>Two Merged Tables</h1>
+<p>The page carries two merged-cell tables in an order that a positional repair would get wrong.</p>
+<h2>Second table first</h2>
+<table>
+<tr><th colspan="2">Fruit</th><th rowspan="2">Price</th></tr>
+<tr><th>Name</th><th>Colour</th></tr>
+<tr><td>Apple</td><td>Red</td><td>1</td></tr>
+<tr><td>Pear</td><td>Green</td><td>2</td></tr>
+</table>
+<h2>First table second</h2>
+<table>
+<tr><th rowspan="2">City</th><th colspan="2">Population</th></tr>
+<tr><th>2020</th><th>2030</th></tr>
+<tr><td>Alpha</td><td>10</td><td>12</td></tr>
+<tr><td>Beta</td><td>20</td><td>25</td></tr>
+</table>
+<p>After both tables the page closes with one more sentence of generic words for the check.</p>
+</main>
+</body>
+</html>

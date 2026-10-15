@@ -67,6 +67,7 @@ COOKIE_CONTAINER = re.compile(r"(?:^|[\s_-])(?:cookie|cookies|consent|gdpr|cc-ba
                               re.IGNORECASE)
 
 _SCRIPT = re.compile(r"<(script|style|noscript|template)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
+_HEAD = re.compile(r"<head\b[^>]*>.*?</head\s*>|<title\b[^>]*>.*?</title\s*>", re.IGNORECASE | re.DOTALL)
 _SCRIPT_ONLY = re.compile(r"<script\b[^>]*>.*?</script\s*>|<script\b[^>]*/>", re.IGNORECASE | re.DOTALL)
 _TAG = re.compile(r"<[^>]+>")
 _EMPTY_ROOT = re.compile(r"<(?:div|main|section|body)\b[^>]*\bid=[\"'](?:root|app|__next|__nuxt)[\"'][^>]*>\s*</(?:div|main|section|body)>",
@@ -120,7 +121,8 @@ class Conv(NamedTuple):
 # --- the acquisition table ---------------------------------------------------------------------------------
 
 def visible_text(body_html: str) -> str:
-    text = _SCRIPT.sub(" ", body_html)
+    text = _HEAD.sub(" ", body_html)
+    text = _SCRIPT.sub(" ", text)
     text = _TAG.sub(" ", text)
     text = htmlmod.unescape(text)
     return re.sub(r"\s+", " ", text).strip()

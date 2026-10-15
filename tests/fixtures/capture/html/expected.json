@@ -1,0 +1,217 @@
+{
+ "_note": "Expected outcomes of the synthetic damage fixtures (spec D16, §7.6–§7.8). `converter` is the winner with a real pandoc on PATH; `present`/`absent` are substrings of the capture-text; `repairs` are minimum counts.",
+ "dropped-section.html": {
+  "kind": "page",
+  "title": "Thirteen Sections — Example Project",
+  "defuddle": "dropped-section.defuddle.md",
+  "converter": "pandoc",
+  "completeness": "complete",
+  "defuddle_missing_min": 1,
+  "defuddle_headings_missing_min": 1,
+  "present": [
+   "Safety is paramount"
+  ],
+  "absent": [
+   "All rights reserved",
+   "Home"
+  ]
+ },
+ "tabbed.html": {
+  "kind": "page",
+  "title": "Tabbed Docs Page",
+  "defuddle": "tabbed.defuddle.md",
+  "without_pandoc": true,
+  "converter": "dom-text",
+  "completeness": "complete",
+  "present": [
+   "On Linux the installer unpacks the engine"
+  ],
+  "absent": [
+   "Edit this page"
+  ]
+ },
+ "latexml.html": {
+  "kind": "arxiv",
+  "title": "A Synthetic Paper on Example Methods",
+  "converter": "pandoc",
+  "completeness": "complete",
+  "repairs": {
+   "html": {
+    "latexml_listings": 1,
+    "data_links": 1,
+    "tables_rewritten": 1
+   },
+   "markdown": {
+    "data_uris": 1,
+    "tcolorbox_residue": 1,
+    "residue_lines": 1
+   }
+  },
+  "present": [
+   "return x + 1",
+   "Model",
+   "Task A · Acc",
+   "Task A · F1",
+   "Task B · Acc",
+   "*[inline figure omitted at capture: Figure 1: an example diagram]*",
+   "[TABLE]\nrows and columns go here",
+   "first line of a boxed listing"
+  ],
+  "absent": [
+   "data:",
+   "\\iow_now",
+   "\\newcommand",
+   "⬇",
+   "Back to abstract"
+  ],
+  "authors": [
+   "Author, First",
+   "Writer, Second"
+  ],
+  "published_candidates": [
+   {
+    "value": "2026-02-03",
+    "source": "citation_date"
+   }
+  ]
+ },
+ "nextjs.html": {
+  "kind": "page",
+  "title": "Example Product — Marketing",
+  "converter": "pandoc",
+  "completeness": "complete",
+  "repairs": {
+   "markdown": {
+    "next_images": 1
+   }
+  },
+  "present": [
+   "*[img: Hero image of the product]*",
+   "![x](/_next/image?url=y)"
+  ],
+  "absent": [
+   "Privacy policy",
+   "/_next/image?url=%2Fimages"
+  ]
+ },
+ "svg.html": {
+  "kind": "page",
+  "title": "Architecture Page",
+  "converter": "pandoc",
+  "completeness": "complete",
+  "repairs": {
+   "html": {
+    "svg_diagrams": 1,
+    "svg_icons": 1
+   }
+  },
+  "present": [
+   "diagram: Client · Server · Database"
+  ],
+  "absent": [
+   "<svg",
+   "M2 2h8v8H2z"
+  ]
+ },
+ "cookie.html": {
+  "kind": "page",
+  "title": "Article Behind a Cookie Banner",
+  "converter": "pandoc",
+  "completeness": "complete",
+  "present": [
+   "The article text is the only content"
+  ],
+  "absent": [
+   "We use cookies",
+   "Accept all cookies",
+   "Search",
+   "Terms of service"
+  ]
+ },
+ "comments.html": {
+  "kind": "page",
+  "title": "A Post With Comments",
+  "converter": "pandoc",
+  "completeness": "complete",
+  "repairs": {
+   "markdown": {
+    "comment_sections": 1
+   }
+  },
+  "present": [
+   "The idea matters because"
+  ],
+  "absent": [
+   "First reader comment",
+   "Second reader comment",
+   "Third reader comment"
+  ]
+ },
+ "jsonld-website.html": {
+  "kind": "page",
+  "title": "Example Site Home",
+  "converter": "pandoc",
+  "completeness": "complete",
+  "published_candidates": []
+ },
+ "jsonld-article.html": {
+  "kind": "page",
+  "title": "An Example Blog Post",
+  "converter": "pandoc",
+  "completeness": "complete",
+  "published_candidates": [
+   {
+    "value": "2026-09-01",
+    "source": "article:published_time"
+   },
+   {
+    "value": "2026-09-01",
+    "source": "jsonld:BlogPosting"
+   }
+  ]
+ },
+ "table-wrong.html": {
+  "kind": "page",
+  "title": "Two Merged Tables",
+  "converter": "pandoc",
+  "completeness": "complete",
+  "repairs": {
+   "html": {
+    "tables_rewritten": 2
+   }
+  },
+  "present": [
+   "Fruit · Name",
+   "Fruit · Colour",
+   "Price",
+   "Population · 2020",
+   "City"
+  ],
+  "ordered": [
+   "Fruit · Name",
+   "Population · 2020"
+  ],
+  "absent": [
+   "[TABLE]"
+  ]
+ },
+ "cjk.html": {
+  "kind": "page",
+  "title": "日本語のテストページ",
+  "converter": "pandoc",
+  "completeness": "complete",
+  "eligible_min": 2
+ },
+ "glued.html": {
+  "kind": "page",
+  "title": "Per-word Spans",
+  "defuddle": "glued.defuddle.md",
+  "converter": "dom-text",
+  "completeness": "complete",
+  "defuddle_glued_min": 1,
+  "present": [
+   "Deploy the company brain across every team today"
+  ],
+  "pandoc_glued_min": 1
+ }
+}
