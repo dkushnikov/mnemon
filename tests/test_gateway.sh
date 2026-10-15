@@ -245,7 +245,7 @@ for name, case in argv.items():
     pdir = os.path.join(out, "payloads", eid)
     os.makedirs(pdir, exist_ok=True)
     for rel, hexdata in env["payload_files"].items():
-        p = os.path.join(pdir, rel)
+        p = os.path.join(pdir, "files", os.path.basename(rel))   # the consumer's layout: files/<basename> (A8)
         os.makedirs(os.path.dirname(p), exist_ok=True)
         open(p, "wb").write(bytes.fromhex(hexdata))
     prov = os.path.join(pdir, "provenance.json")
@@ -257,7 +257,7 @@ for name, case in argv.items():
     for a in case["argv"]:
         a = a.replace("<envelope_id>", eid).replace("<provenance>", prov)
         if a.startswith("<snapshot:"):
-            a = os.path.join(pdir, a[len("<snapshot:"):-1])
+            a = os.path.join(pdir, "files", os.path.basename(a[len("<snapshot:"):-1]))
         if a.startswith("<revision:"):
             a = "2026-10-12_aaaaaaaa"   # a revision the test creates in the vault
         lines.append(a)

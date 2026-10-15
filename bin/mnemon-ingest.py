@@ -26,6 +26,12 @@ Test hooks (honoured only with MNEMON_TEST_HOOKS=1): MNEMON_INGEST_ADD_CMD repla
 the `mnemon add` call (same argv after `add`, same stdin, same environment);
 MNEMON_TEST_CRASH_AT=after-snapshot | after-dispatch-saved | after-claim kills the
 process at that boundary.
+
+Payload snapshots live under `payloads/<envelope_id>/files/<basename>` (§12 A8), apart from
+the control files `dispatch.json`, `provenance.json` and `stdin`. Once `dispatch.json` exists
+the request is frozen (§12 A4): every later dispatch of the envelope — a retry, a deferred
+re-check, a crash recovery — reuses it and the snapshot as they are; the producer-side payload
+is never re-read and `incomplete` can only occur before the freeze.
 """
 
 from __future__ import annotations
@@ -322,6 +328,16 @@ class Invalid(Exception):
         self.detail = detail
 
 
+def payload_parts(rel: str) -> list:
+    """The components of a payload.path: `/` and `\\` are both separators (one rule for the
+    validation and for the snapshot, so a `\\` can never hide a symlink from the containment check)."""
+    return rel.replace("\\", "/").split("/")
+
+
+def inside_inbox(real: str, inbox_real: str) -> bool:
+    return real == inbox_real or real.startswith(inbox_real.rstrip("/") + os.sep)
+
+
 def validate_envelope(obj, stem: str, inbox_real: str) -> dict:
     """Every field rule of §5.1. Returns the envelope; raises Invalid."""
     if not isinstance(obj, dict):
@@ -404,13 +420,15 @@ def validate_envelope(obj, stem: str, inbox_real: str) -> dict:
         rel = payload.get("path")
         if not isinstance(rel, str) or not rel:
             raise Invalid("schema", "payload.path must be a relative path for kind file")
-        if rel.startswith("/") or os.path.isabs(rel):
+        # validated on the same normalized form the snapshot step opens (backslashes are
+        # separators here, never part of a name) — the two must never disagree
+        parts = payload_parts(rel)
+        if parts[0] == "" or os.path.isabs(rel) or os.path.isabs("/".join(parts)):
             raise Invalid("path-escape", "payload.path must be relative to the inbox, not absolute")
-        parts = rel.replace("\\", "/").split("/")
         if any(p in ("", ".", "..") for p in parts):
             raise Invalid("path-escape", "payload.path must not contain '..', '.' or empty components")
-        real = os.path.realpath(os.path.join(inbox_real, rel))
-        if real != inbox_real and not real.startswith(inbox_real.rstrip("/") + os.sep):
+        real = os.path.realpath(os.path.join(inbox_real, *parts))
+        if not inside_inbox(real, inbox_real):
             raise Invalid("path-escape", "payload.path resolves outside the inbox")
         if real == inbox_real:
             raise Invalid("path-escape", "payload.path names the inbox itself")
@@ -477,7 +495,7 @@ def build_argv(env: dict, lead: list, provenance_path: str, snapshot_path, super
     argv = [snapshot_path if a == "<snapshot>" else a for a in lead]
     argv += ["--capture-id", eid, "--import-source", env["producer"]["id"], "--import-ref", eid,
              "--producer-fidelity", env["fidelity"], "--provenance-file", provenance_path]
-    if request.get("context") is not None:
+    if request.get("context"):   # an empty string counts as absent, like the other request strings
         argv += ["--context", request["context"]]
     for key, flag in (("title", "--title"), ("author", "--author"), ("intent", "--intent"), ("source_type", "--source-type")):
         value = request.get(key)
@@ -807,20 +825,26 @@ class Ingest:
 
         # step 5: the transition table
         state = prev.get("state") if prev else None
+        frozen = False   # §12 A4: once dispatch.json exists the request is frozen and reused as it is
         if state == "started":
-            if self.recover_started(stem, file_name, sha, prev, env, lead):
-                return
-            # no usable dispatch.json: crash before step 8 → treat as (none)
+            frozen = True
+            # (no usable dispatch.json: a crash before step 8 → treat as (none))
         elif state in ("incomplete", "deferred"):
             due = parse_iso(prev.get("deadline_at"))
             if due is not None and self.now < due:
                 self.report(stem, file_name, "waiting", "%s/%s until %s" % (state, prev.get("error_class"), prev.get("deadline_at")), prev)
                 return
+            # environment / locked came back from a dispatch: the frozen request is reused;
+            # predecessor-pending and incomplete precede the freeze and are resolved again
+            frozen = state == "deferred" and prev.get("error_class") in ("environment", "locked")
         elif state == "failed":
             due = parse_iso(prev.get("next_attempt_at"))
             if due is not None and self.now < due:
                 self.report(stem, file_name, "waiting", "failed/%s, next attempt at %s" % (prev.get("error_class"), prev.get("next_attempt_at")), prev)
                 return
+            frozen = True
+        if frozen and self.dispatch_frozen(stem, file_name, sha, prev, env, lead):
+            return
         self.fresh_request(stem, file_name, sha, prev, env, lead, data)
 
     def conflict_copy(self, stem: str, file_name: str, path: str) -> None:
@@ -873,15 +897,22 @@ class Ingest:
                 write_atomic(os.path.join(pdir, "stdin"), raw)
             return ("ok", os.path.join(pdir, "stdin"))
         if payload["kind"] == "file":
-            rel = payload["path"].replace("\\", "/")
-            snap = os.path.join(pdir, *rel.split("/"))
+            parts = payload_parts(payload["path"])
+            rel = "/".join(parts)
+            # §12 A8: the snapshot lives under files/<basename>, never beside the control files
+            # dispatch.json, provenance.json and stdin of the same directory
+            snap = os.path.join(pdir, "files", parts[-1])
             if os.path.isfile(snap):
                 digest, size = sha256_file(snap)
                 if digest == payload["sha256"] and size == payload["bytes"]:
                     return ("ok", snap)
                 if not self.dry_run:
                     os.unlink(snap)
-            src = os.path.join(self.inbox, *rel.split("/"))
+            src = os.path.join(self.inbox, *parts)
+            # containment is enforced on the path that is opened now (a symlink may have changed
+            # since the validation), not only on the string the producer wrote
+            if not inside_inbox(os.path.realpath(src), self.inbox):
+                return ("quarantined", "path-escape", "payload.path %s resolves outside the inbox" % rel)
             if not os.path.exists(src):
                 return ("incomplete", "payload file %s is not in the inbox yet" % rel)
             if not os.path.isfile(src):
@@ -1011,8 +1042,11 @@ class Ingest:
         rec = self.claim(stem, sha, prev, sha256_bytes(dispatch_bytes), unresolved)
         self.dispatch(stem, file_name, rec, dispatch, prev)
 
-    def recover_started(self, stem, file_name, sha, prev, env, lead) -> bool:
-        """§5.5 `started`: a saved dispatch.json → claim again and dispatch it (or replay by id)."""
+    def dispatch_frozen(self, stem, file_name, sha, prev, env, lead) -> bool:
+        """The frozen request (§5.5 `started`, §12 A4): a saved dispatch.json whose snapshot still
+        exists → claim again and dispatch it as it is (or replay by id once receipt_bound). The
+        producer-side payload is never re-read and the predecessor is never resolved again;
+        False when there is no usable dispatch.json (the caller starts from the snapshot step)."""
         dpath = os.path.join(self.payload_dir(stem), "dispatch.json")
         try:
             dispatch = read_json(dpath)
@@ -1031,13 +1065,13 @@ class Ingest:
         if self.dry_run:
             self.counts["eligible"] += 1
             self.counts["processed"] += 1
-            self.items.append({"envelope_id": stem, "file": file_name, "report": "eligible", "detail": "recover the saved request",
+            self.items.append({"envelope_id": stem, "file": file_name, "report": "eligible", "detail": "the frozen request",
                                "argv": argv, "stdin": stdin_name})
-            self.say("eligible %s — recover started (attempt %d): mnemon add %s" % (
-                stem, (prev.get("attempts") or 0) + 1, " ".join(shlex.quote(a) for a in argv)))
+            self.say("eligible %s — %s, the frozen request (attempt %d): mnemon add %s" % (
+                stem, prev.get("state"), (prev.get("attempts") or 0) + 1, " ".join(shlex.quote(a) for a in argv)))
             return True
         if self.limit is not None and self.claimed >= self.limit:
-            self.report(stem, file_name, "waiting", "started, recoverable, beyond --limit %d of this pass" % self.limit, prev)
+            self.report(stem, file_name, "waiting", "%s, due, beyond --limit %d of this pass" % (prev.get("state"), self.limit), prev)
             return True
         with open(dpath, "rb") as fh:
             dispatch_sha = sha256_bytes(fh.read())

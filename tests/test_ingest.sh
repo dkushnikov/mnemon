@@ -215,7 +215,7 @@ for name, spec in expected.items():
     for a in spec["argv"]:
         if a == "<envelope_id>": a = eid
         elif a == "<provenance>": a = os.path.join(state_dir, "payloads", eid, "provenance.json")
-        elif a.startswith("<snapshot:"): a = os.path.join(state_dir, "payloads", eid, *a[len("<snapshot:"):-1].split("/"))
+        elif a.startswith("<snapshot:"): a = os.path.join(state_dir, "payloads", eid, "files", os.path.basename(a[len("<snapshot:"):-1]))
         elif a.startswith("<revision:"): a = revision_of(a[len("<revision:"):-1])
         want.append(a)
     call = calls.get(eid)
@@ -454,8 +454,8 @@ unset STUB_SCENARIOS
 materialize crash4 file-pdf
 MNEMON_TEST_CRASH_AT=after-snapshot ingest crash4
 assert_eq "$rc" "99" "crash at after-snapshot kills the pass"
-SNAP="$(state_dir crash4)/payloads/test-producer:file-pdf/attachments/file-pdf/paper.pdf"
-assert_file_exists "$SNAP" "after-snapshot: the payload snapshot exists"
+SNAP="$(state_dir crash4)/payloads/test-producer:file-pdf/files/paper.pdf"
+assert_file_exists "$SNAP" "after-snapshot: the payload snapshot exists under files/<basename> (A8)"
 assert_file_exists "$(state_dir crash4)/payloads/test-producer:file-pdf/provenance.json" "after-snapshot: provenance.json exists"
 [[ -e "$(state_dir crash4)/payloads/test-producer:file-pdf/dispatch.json" ]] && fail "after-snapshot: no dispatch.json yet" "exists" || pass "after-snapshot: no dispatch.json yet"
 printf 'REPLACED AFTER THE SNAPSHOT' > "$(inbox_of crash4)/attachments/file-pdf/paper.pdf"
@@ -644,7 +644,7 @@ mkdir -p "$(inbox_of inc3)/attachments/file-pdf"
 printf 'half-synced' > "$(inbox_of inc3)/attachments/file-pdf/paper.pdf"
 ingest inc3
 assert_eq "$(res inc3 test-producer:file-pdf 'd["state"] + "/" + d["error_class"]')" "incomplete/payload-missing" "a payload whose bytes do not match yet → incomplete"
-[[ -e "$(state_dir inc3)/payloads/test-producer:file-pdf/attachments/file-pdf/paper.pdf" ]] && fail "a mismatching copy is not kept as the snapshot" "exists" || pass "a mismatching copy is not kept as the snapshot"
+[[ -e "$(state_dir inc3)/payloads/test-producer:file-pdf/files/paper.pdf" ]] && fail "a mismatching copy is not kept as the snapshot" "exists" || pass "a mismatching copy is not kept as the snapshot"
 materialize inc3 file-pdf
 set_field inc3 test-producer:file-pdf deadline_at "\"$PAST\""
 ingest inc3
@@ -674,6 +674,91 @@ scenarios sup3 '{"test-producer:text-plain": "exit1-fetch"}'
 ingest sup3
 assert_eq "$(res sup3 test-producer:text-plain~2 'd["state"] + "/" + d["error_class"]')" "deferred/predecessor-pending" "a retryable predecessor without a revision keeps ~2 pending"
 unset STUB_SCENARIOS
+# §12 A4: once dispatch.json exists the request is frozen — a retry reuses it as it is, even when the
+# predecessor gained a revision in between (a changed request would fail the gateway's binding check)
+materialize sup4 text-plain text-plain~2
+scenarios sup4 '{"test-producer:text-plain": "exit1-unsupported", "test-producer:text-plain~2": "exit1-fetch"}'
+ingest sup4
+assert_eq "$(res sup4 test-producer:text-plain~2 'd["state"] + "/" + d["error_class"] + " unresolved=" + str(d["supersedes_unresolved"]) + " bound=" + str(d["receipt_bound"])')" "failed/fetch unresolved=True bound=False" "fixture: ~2 dispatched without --supersedes (its predecessor failed permanently without a revision), failed retryably, unbound"
+FROZEN="$(jq_ "$(state_dir sup4)/payloads/test-producer:text-plain~2/dispatch.json" 'd["argv"]')"
+scenarios sup4 '{"test-producer:text-plain": "extracted", "test-producer:text-plain~2": "extracted"}'
+ingest sup4 --retry test-producer:text-plain
+assert_eq "$(res sup4 test-producer:text-plain 'd["state"] + " " + str(d["revision"])')" "captured $REV1" "the predecessor is retried and gains a revision"
+set_field sup4 test-producer:text-plain~2 next_attempt_at "\"$PAST\""
+ingest sup4
+assert_eq "$(res sup4 test-producer:text-plain~2 'd["state"] + " " + d["dispatch_mode"] + " attempts=" + str(d["attempts"]) + " unresolved=" + str(d["supersedes_unresolved"])')" "captured request attempts=2 unresolved=True" "~2's retry reuses the frozen request (dispatch mode request, attempt 2, the predecessor not resolved again)"
+assert_eq "$(call_for sup4 test-producer:text-plain~2 'd["argv"]')" "$FROZEN" "...dispatching exactly the argv of dispatch.json, no --recapture/--supersedes added after the freeze"
+assert_eq "$(jq_ "$(state_dir sup4)/payloads/test-producer:text-plain~2/dispatch.json" 'd["argv"]')" "$FROZEN" "...and dispatch.json itself is unchanged"
+unset STUB_SCENARIOS
+
+# --- 13b. payload snapshots: files/<basename> (A8) and containment on the path that is opened ------
+echo "--- payload snapshots ---"
+# a payload file named like a control file never collides with dispatch.json / provenance.json / stdin
+materialize coll text-plain
+python3 - "$(inbox_of coll)" <<'PY'
+import hashlib, json, os, sys
+inbox = sys.argv[1]
+data = b"%PDF-1.7\n%collide\n%%EOF\n"
+with open(os.path.join(inbox, "dispatch.json"), "wb") as fh:
+    fh.write(data)
+env = {"schema": "mnemon-envelope/1", "envelope_id": "test-producer:collide",
+       "producer": {"id": "test-producer", "kind": "fixture", "host": "node-a", "version": "1"},
+       "instance": "t", "created_at": "2026-10-15T12:00:00+00:00", "supersedes": None,
+       "request": {"origin": "pdf", "url": None, "title": None, "author": None, "intent": None, "context": None,
+                   "source_type": None, "tier": "full"},
+       "payload": {"kind": "file", "text": None, "path": "dispatch.json", "media_type": "application/pdf",
+                   "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)},
+       "fidelity": "exact", "provenance": {"fixture": "collide"}, "complete": True}
+tmp, final = os.path.join(inbox, ".test-producer:collide.json.tmp"), os.path.join(inbox, "test-producer:collide.json")
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(env, fh)
+os.replace(tmp, final)
+PY
+ingest coll --only test-producer:collide
+assert_eq "$(res coll test-producer:collide 'd["state"]')" "captured" "a payload file named dispatch.json is captured"
+assert_eq "$(call_for coll test-producer:collide 'd["argv"][d["argv"].index("--file") + 1]')" "$(state_dir coll)/payloads/test-producer:collide/files/dispatch.json" "...from its snapshot under payloads/<id>/files/<basename> (A8)"
+assert_eq "$(call_for coll test-producer:collide 'd["file_sha256"]')" "$(python3 -c 'import hashlib; print(hashlib.sha256(b"%PDF-1.7\n%collide\n%%EOF\n").hexdigest())')" "...the stub receives the payload bytes, not the dispatch record"
+assert_eq "$(jq_ "$(state_dir coll)/payloads/test-producer:collide/dispatch.json" 'd["schema"]')" "mnemon-dispatch/1" "...and the control file dispatch.json is intact"
+assert_eq "$(jq_ "$(state_dir coll)/payloads/test-producer:collide/provenance.json" 'd["schema"]')" "mnemon-provenance/1" "...as is provenance.json"
+# a backslash is a separator for the containment check too: `link\paper.pdf` where link is a symlink
+# out of the inbox is path-escape, never read from outside
+materialize sep text-plain
+mkdir -p "$TEST_TMPDIR/outside"
+printf 'outside bytes' > "$TEST_TMPDIR/outside/paper.pdf"
+ln -s "$TEST_TMPDIR/outside" "$(inbox_of sep)/link"
+python3 - "$(inbox_of sep)" "$TEST_TMPDIR/outside/paper.pdf" <<'PY'
+import hashlib, json, os, sys
+inbox, outside = sys.argv[1], sys.argv[2]
+data = open(outside, "rb").read()
+env = {"schema": "mnemon-envelope/1", "envelope_id": "test-producer:sep",
+       "producer": {"id": "test-producer", "kind": "fixture", "host": "node-a", "version": "1"},
+       "instance": "t", "created_at": "2026-10-15T12:00:00+00:00", "supersedes": None,
+       "request": {"origin": None, "url": None, "title": None, "author": None, "intent": None, "context": None,
+                   "source_type": None, "tier": "full"},
+       "payload": {"kind": "file", "text": None, "path": "link\\paper.pdf", "media_type": "application/pdf",
+                   "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)},
+       "fidelity": "exact", "provenance": {"fixture": "sep"}, "complete": True}
+tmp, final = os.path.join(inbox, ".test-producer:sep.json.tmp"), os.path.join(inbox, "test-producer:sep.json")
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(env, fh)
+os.replace(tmp, final)
+PY
+ingest sep --only test-producer:sep
+assert_eq "$(res sep test-producer:sep 'd["state"] + "/" + d["error_class"]')" "quarantined/path-escape" "a payload path that leaves the inbox through a symlink behind a backslash is quarantined (path-escape)"
+assert_eq "$(calls sep)" "0" "...and never dispatched"
+# an empty request.context counts as absent (no --context '' reaching the gateway as a contract error)
+materialize ctx text-plain
+python3 - "$(inbox_of ctx)/test-producer:text-plain.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+d["request"]["context"] = ""
+with open(p, "w", encoding="utf-8") as fh:
+    json.dump(d, fh, ensure_ascii=False, indent=1)
+PY
+ingest ctx
+assert_eq "$(call_for ctx test-producer:text-plain '"--context" in d["argv"]')" "False" "an empty request.context is absent: no --context in the argv"
+assert_eq "$(res ctx test-producer:text-plain 'd["state"]')" "captured" "...and the envelope is captured"
 
 # --- 14. listing rules: symlinks, dotfiles, temp files, directories, wrong instance -----------
 echo "--- listing ---"

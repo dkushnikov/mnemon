@@ -60,12 +60,12 @@ Every rule below is checked by the consumer; a violation quarantines the envelop
 | `request.origin` | `text` · `url` · `file` · `pdf` · `audio` · `null` (auto-detect) |
 | `request.url` | `null` or a non-empty single-line string |
 | `request.title` / `author` / `intent` | `null` or single-line strings of at most 300 / 200 / 2000 characters; empty strings count as absent |
-| `request.context` | `null` or a single-line string. The consumer **never validates it** — the gateway does, against the instance charter (spec §4.8); a refusal is a permanent `contract` failure |
+| `request.context` | `null` or a single-line string; an empty string counts as absent. The consumer **never validates it** — the gateway does, against the instance charter (spec §4.8); a refusal is a permanent `contract` failure |
 | `request.source_type` | `null` or a single-line string (`article`, `video`, …); passed through |
 | `request.tier` | `full` or `bookmark`; `bookmark` is refused in phase 1 (`unsupported`, permanent, visible) |
 | `payload.kind` | `text` · `file` · `none` |
 | `payload.text` (kind `text`) | the verbatim content; `bytes` = its **UTF-8 byte length** (not its character count), `sha256` of those bytes, at most 2 MB. A mismatch quarantines the envelope (`payload-mismatch`) |
-| `payload.path` (kind `file`) | relative to the inbox dir: not absolute, no `..`, `.` or empty components, resolving (through symlinks) **inside** the inbox; a regular file of at most 20 MB; `sha256` / `bytes` of the file. A missing or not-yet-matching file is `incomplete` (re-checked for 24 h), not a schema error |
+| `payload.path` (kind `file`) | relative to the inbox dir: not absolute, no `..`, `.` or empty components (`/` and `\` are both separators), resolving (through symlinks) **inside** the inbox — checked again on the path the consumer actually opens; a regular file of at most 20 MB; `sha256` / `bytes` of the file. A missing or not-yet-matching file is `incomplete` (re-checked for 24 h), not a schema error |
 | `payload` (kind `none`) | `sha256` null, `bytes` 0; a `request.url` is what gets captured; without one the envelope is `needs_input` — a valid envelope, not a schema error |
 | `payload.media_type` | `null` or a single-line string; informational |
 | `fidelity` | the **producer's claim**: `exact` · `embed` · `model-transcribed` · `url-only`. It reaches the vault as `capture.producer_fidelity`; the engine's own `capture.fidelity` is observed from the chain it ran |
@@ -174,9 +174,9 @@ The dispatcher resolves the instance once (global `--instance` / `--config`, or 
 3. **Replacement check, first, for every stored state.** The envelope bytes are hashed; a result with a different `envelope_sha256` → `quarantined`/`envelope-replaced`, the previous record appended to `history`.
 4. **Validate** (§1). Broken → `quarantined`; wrong `instance` → `other-instance`, untouched; `tier: bookmark` → `unsupported`; `kind: none` without a url → `needs_input`; an invalid kind × origin pair → `failed`/`invalid-request`. These settle without a gateway call and without spending an attempt.
 5. **Transition table** (§5): terminal → `done-before`; not yet due → `waiting`; otherwise continue.
-6. **Snapshot the payload** under `payloads/<envelope_id>/`: a file is copied into place and verified on the copy (sha256 and size) — a verified snapshot is kept and reused, so a payload replaced in the inbox after the snapshot changes nothing; missing or not yet matching → `incomplete` (re-checked every 15 minutes, `quarantined`/`incomplete-expired` 24 h after `first_seen`); text is written to `payloads/<envelope_id>/stdin` after its sha256/bytes are verified (mismatch → `quarantined`/`payload-mismatch`). `provenance.json` is written (§3).
+6. **Snapshot the payload** under `payloads/<envelope_id>/`: a file is copied to `files/<basename>` (apart from the control files `dispatch.json`, `provenance.json`, `stdin`, so a payload named like one of them never collides) and verified on the copy (sha256 and size) — a verified snapshot is kept and reused, so a payload replaced in the inbox after the snapshot changes nothing; missing or not yet matching → `incomplete` (re-checked every 15 minutes, `quarantined`/`incomplete-expired` 24 h after `first_seen`); text is written to `payloads/<envelope_id>/stdin` after its sha256/bytes are verified (mismatch → `quarantined`/`payload-mismatch`). `provenance.json` is written (§3).
 7. **Predecessor** (`supersedes`): resolved from the superseded envelope's result (§5); unresolved predecessors defer the envelope.
-8. **`dispatch.json`** — the exact request about to be dispatched — is persisted **before** the claim, so a crash between the claim and the gateway's answer can be recovered without reconstructing anything.
+8. **`dispatch.json`** — the exact request about to be dispatched — is persisted **before** the claim, so a crash between the claim and the gateway's answer can be recovered without reconstructing anything. From this point the request is **frozen**: every later dispatch of the envelope (a retry, a deferred re-check, a crash recovery) reuses `dispatch.json` and the snapshot as they are — the producer-side payload is never re-read, the predecessor is never resolved again, and `incomplete` can only occur before the freeze.
 9. **Claim** = one atomic rewrite of the result record: `state: started`, `attempts + 1`, `envelope_sha256`, `dispatch_sha256`, `started_at`. It is the only place an attempt is spent; a first attempt, a retry and a crash recovery all go through it.
 10. **Dispatch.** The saved argv runs with stdin from the snapshot (`dispatch_mode: request`) until this inbox's result record is `receipt_bound` — set once a dispatch of the full saved request came back exit 0 or 4 with `RESULT:capture_id=<envelope_id>`, i.e. the gateway bound the request to its receipt. From then on the gateway is replayed with `mnemon add --capture-id <envelope_id>` alone (`dispatch_mode: replay`), for retries and crash recoveries alike. A receipt that already exists in the vault ledger for the id without `receipt_bound` here (another inbox, an operator's own capture) gets the full request and the gateway's binding check — never a silent acknowledgement; a conflicting request is exit 2 → `failed`/`contract`. The consumer waits — it has **no timeout of its own**; timeouts live in the extractor's process group.
 11. **Outcome** (§4) → `last_exit`, `last_result` (the `RESULT:` map), `last_error` (the stderr tail), written atomically.
@@ -239,10 +239,10 @@ Stored states: `started` · `incomplete` · `deferred` · `failed` · `exhausted
 | Stored state | On the next pass (after the replacement check) |
 |---|---|
 | (none) | validate → `needs_input` / `unsupported` / `quarantined` / `invalid-request`, else snapshot, dispatch request, claim |
-| `started` | recover: `dispatch.json` present → claim again (`attempts + 1`) and dispatch per step 10 (by id when the record is `receipt_bound`, else the saved request); `dispatch.json` absent (a crash before step 8) → as (none) |
+| `started` | recover: `dispatch.json` present → claim again (`attempts + 1`) and dispatch per step 10 (by id when the record is `receipt_bound`, else the frozen request); `dispatch.json` absent (a crash before step 8) → as (none) |
 | `incomplete` | before `deadline_at` → `waiting`; after → re-check the payload; still missing → `incomplete` again until 24 h after `first_seen` → `quarantined`/`incomplete-expired` |
-| `deferred` (`environment`, `locked`, `predecessor-pending`) | before `deadline_at` → `waiting`; after → `environment`/`locked`: claim and dispatch; `predecessor-pending`: resolve the predecessor again; 24 h after `first_seen` → `quarantined`/`supersedes-unknown` |
-| `failed`, `retryable: true` | before `next_attempt_at` → `waiting`; after → claim and dispatch (by id when `receipt_bound`, else the saved request) |
+| `deferred` (`environment`, `locked`, `predecessor-pending`) | before `deadline_at` → `waiting`; after → `environment`/`locked`: claim and dispatch the frozen request; `predecessor-pending`: resolve the predecessor again (the request is not frozen yet); 24 h after `first_seen` → `quarantined`/`supersedes-unknown` |
+| `failed`, `retryable: true` | before `next_attempt_at` → `waiting`; after → claim and dispatch (by id when `receipt_bound`, else the frozen request as it is) |
 | `failed`, `retryable: false` | terminal (`done-before`) unless `--retry` |
 | `exhausted` | terminal unless `--retry` |
 | `captured`, `needs_input`, `unsupported`, `quarantined` | terminal (`done-before`) |
@@ -270,9 +270,9 @@ Everything the consumer writes lives under the **vault state dir** (spec D6): `$
     results/<envelope_id>.json       the result record — the only authority (mnemon-ingest-result/1)
     payloads/<envelope_id>/
       stdin                          the text snapshot (kind text)
-      <payload.path>                 the file snapshot (kind file), verified on the copy
+      files/<basename>               the file snapshot (kind file), verified on the copy — apart from the control files
       provenance.json                mnemon-provenance/1
-      dispatch.json                  mnemon-dispatch/1 — the exact request, persisted before the claim
+      dispatch.json                  mnemon-dispatch/1 — the exact request, persisted before the claim and frozen from then on
     quarantine/<file name>           a copy of every quarantined envelope
 ```
 
