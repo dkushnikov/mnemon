@@ -31,6 +31,7 @@ Options:
   --import-source <s>   Import source label (apple-notes, safari, telegram-saved, etc.)
   --import-batch <id>   Batch ID for grouping dump items
   --config <path>       Path to mnemon.yaml
+  --instance <name>     Mnemon instance to use (sets MNEMON_INSTANCE; see bin/mnemon-config.sh)
   --model <model>       Override default model
   --dry-run             Show prompt without executing
   --whisper-model <m>   Whisper model (default from config)
@@ -93,6 +94,7 @@ while [[ $# -gt 0 ]]; do
     --import-source) [[ $# -lt 2 ]] && { echo "ERROR: --import-source requires a value" >&2; exit 1; }; IMPORT_SOURCE="$2"; shift 2 ;;
     --import-batch)  [[ $# -lt 2 ]] && { echo "ERROR: --import-batch requires a value" >&2; exit 1; }; IMPORT_BATCH="$2"; shift 2 ;;
     --config)        [[ $# -lt 2 ]] && { echo "ERROR: --config requires a value" >&2; exit 1; }; CONFIG_PATH="$2"; shift 2 ;;
+    --instance)      [[ $# -lt 2 ]] && { echo "ERROR: --instance requires a value" >&2; exit 1; }; export MNEMON_INSTANCE="$2"; shift 2 ;;
     --model)         [[ $# -lt 2 ]] && { echo "ERROR: --model requires a value" >&2; exit 1; }; MODEL_FLAG="$2"; shift 2 ;;
     --dry-run)       DRY_RUN=true; shift ;;
     --whisper-model) [[ $# -lt 2 ]] && { echo "ERROR: --whisper-model requires a value" >&2; exit 1; }; WHISPER_MODEL_FLAG="$2"; shift 2 ;;
