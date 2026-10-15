@@ -1,14 +1,31 @@
 #!/usr/bin/env bash
-# test_depth.sh — depth-aware capture: lib_url (pure) + kb-probe-deeper (offline smoke).
-# Network-dependent E2E (openviking → finds volcengine/OpenViking) is validated
-# manually; CI tests here are hermetic (no network).
+# test_depth.sh — depth-aware capture: lib_url (pure) + kb-probe-deeper over the capture policy (hermetic:
+# a local stub server under the §3.2 test hooks — no network, no DNS) + the gateway's alias dedup (D4).
+# The probe's deeper tests (wall rejection, budgets, the fold, teardown) live in
+# tests/capture_layer/test_depth_helpers.py; this suite keeps the bash-level checks and the gateway part.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")/../bin" && pwd)"
+TESTS="$(cd "$(dirname "$0")" && pwd)"
 fail=0
 ok() { echo "  ok: $1"; }
 bad() { echo "  FAIL: $1" >&2; fail=1; }
 
-echo "== lib_url (pure) =="
+echo "=== Depth Tests ==="
+echo "python: $(python3 --version 2>&1) ($(command -v python3))"
+echo "bash:   ${BASH_VERSION}"
+case "$PATH" in
+  /usr/bin:/bin:*)
+    pyv="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+    [[ "$pyv" == "3.9" ]] || { echo "FAIL: legacy PATH run expects python 3.9.x, got $pyv"; exit 1; }
+    [[ "$BASH_VERSION" == 3.2.* ]] || { echo "FAIL: legacy PATH run expects bash 3.2.x, got $BASH_VERSION"; exit 1; }
+    echo "toolchain: legacy (python 3.9, bash 3.2) asserted" ;;
+esac
+
+# §7.16: inherited keys, proxies and test variables cleared before anything runs
+unset FIRECRAWL_API_KEY JINA_API_KEY HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy RENDER_URL_CMD
+for v in $(env | sed -n 's/^\(MNEMON_[A-Z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+
+echo "== lib_url (pure; a comparison form, never an identity) =="
 python3 - "$BIN" <<'PY' && ok "lib_url normalize/domain/github_repo" || bad "lib_url"
 import sys; sys.path.insert(0, sys.argv[1])
 import lib_url as L
@@ -20,29 +37,54 @@ assert L.github_repo("https://github.com/volcengine/OpenViking/tree/main") == "v
 assert L.github_repo("https://github.com/topics/ai") is None
 assert L.same_site("https://docs.openviking.ai", "https://openviking.ai/") is True
 assert L.same_site("https://github.com/x", "https://openviking.ai") is False
+assert "never an identity" in L.__doc__, "the docstring states the comparison-only role"
 PY
 
-echo "== kb-probe-deeper: thin SPA detection (offline fixture, no external links) =="
+# --- a stub site for the probe: llms.txt and a docs page, served locally under the policy hooks ---
+SITE="$(mktemp -d -t depthsite.XXXXXX)"
+mkdir -p "$SITE/docs"
+printf '# Example\n\n- one\n- two\n- three\n' > "$SITE/llms.txt"
+python3 -c "print('<html><body><h1>Docs</h1><p>' + 'docs word '*80 + '</p></body></html>')" > "$SITE/docs/index.html"
+PORTFILE="$SITE/port"
+python3 "$TESTS/capture_layer/stub_server.py" --root "$SITE" > "$PORTFILE" 2>/dev/null &
+SRV=$!
+i=0; while [[ ! -s "$PORTFILE" && $i -lt 100 ]]; do sleep 0.05; i=$((i + 1)); done
+PORT="$(cat "$PORTFILE")"
+cleanup() { kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null; rm -rf "$SITE"; }
+trap cleanup EXIT
+export MNEMON_TEST_HOOKS=1 MNEMON_POLICY_ALLOW_LOOPBACK=1
+export MNEMON_FETCH_URL_REWRITE="https://example-spa.test=http://127.0.0.1:$PORT;https://docs.example-spa.test=http://127.0.0.1:$PORT/docs;https://rich.test=http://127.0.0.1:$PORT/rich;https://docs.rich.test=http://127.0.0.1:$PORT/rich/docs"
+export RENDER_URL_CMD="$SITE/render-fail.sh"
+printf '#!/usr/bin/env bash\nexit 11\n' > "$RENDER_URL_CMD"; chmod +x "$RENDER_URL_CMD"
+
+echo "== kb-probe-deeper: thin SPA detection (supplied landing, targets through the policy, no network) =="
 fx="$(mktemp -t depthfx.XXXXXX.html)"
 cat > "$fx" <<'HTML'
-<!doctype html><html><head><title>X</title></head>
+<!doctype html><html><head><title>X</title><link rel="canonical" href="https://example-spa.test/home"></head>
 <body><div id="root"></div><script src="/static/app.js"></script></body></html>
 HTML
-out="$(python3 "$BIN/kb-probe-deeper.py" "https://example-spa.test/" --landing-file "$fx" 2>/dev/null)"
+out="$(python3 "$BIN/kb-probe-deeper.py" "https://example-spa.test/" --landing-file "$fx" --context '{"final_url":"https://example-spa.test/","render":"off"}' 2>/dev/null)"
 rm -f "$fx"
 echo "$out" | python3 -c "
 import sys,json; d=json.load(sys.stdin)
 assert d['thin'] is True, d
 assert d['spa'] is True, d
+assert d['rendered'] is False, d
 assert isinstance(d['candidates'], list)
 assert 'posted_url' in d and 'errors' in d
-print('  ok: thin+spa detected, json shape valid (candidates=%d)'%len(d['candidates']))
+assert d['declared_canonical_url'] == 'https://example-spa.test/home', d
+assert 'canonical_url' not in d, 'canonical_url is reserved for the computed identity'
+types = sorted(set(c['type'] for c in d['candidates']))
+assert types == ['docs', 'llms.txt'], types
+assert all(c['same_entity_confidence'] == 'high' for c in d['candidates']), d['candidates']
+assert d['errors'] == [], d['errors']
+print('  ok: thin+spa detected, json shape valid, llms.txt and docs found through the policy (candidates=%d)'%len(d['candidates']))
 " || bad "probe thin/spa fixture"
 
-echo "== kb-probe-deeper: rich landing → not thin (offline fixture) =="
+echo "== kb-probe-deeper: rich landing → not thin (supplied landing) =="
 fx2="$(mktemp -t depthfx2.XXXXXX.html)"
 python3 -c "print('<html><body>' + 'word '*600 + '</body></html>')" > "$fx2"
-out2="$(python3 "$BIN/kb-probe-deeper.py" "https://rich.test/" --landing-file "$fx2" 2>/dev/null)"
+out2="$(python3 "$BIN/kb-probe-deeper.py" "https://rich.test/" --landing-file "$fx2" --context '{"render":"off"}' 2>/dev/null)"
 rm -f "$fx2"
 echo "$out2" | python3 -c "
 import sys,json; d=json.load(sys.stdin)
@@ -50,6 +92,11 @@ assert d['thin'] is False, d
 assert d['candidates']==[], d
 print('  ok: rich landing not thin, no candidates')
 " || bad "probe rich fixture"
+
+echo "== kb-probe-deeper: the policy hooks are ignored without MNEMON_TEST_HOOKS=1 (a warning names them) =="
+err="$( MNEMON_TEST_HOOKS= python3 "$BIN/kb-probe-deeper.py" "https://example-spa.test/" --landing-file /dev/null --budget-s 2 --context '{"render":"off"}' 2>&1 >/dev/null )"
+[[ "$err" == *"MNEMON_FETCH_URL_REWRITE"* && "$err" == *"MNEMON_TEST_HOOKS"* ]] && ok "hooks warning names the ignored variables" || bad "hooks warning: $err"
+unset MNEMON_TEST_HOOKS MNEMON_POLICY_ALLOW_LOOPBACK MNEMON_FETCH_URL_REWRITE RENDER_URL_CMD
 
 echo "== D6a: depth-probe gate no-ops when disabled / high-substance =="
 MNEMON_TRIAGE_DEPTH_PROBE=0 python3 - "$BIN" <<'PY' && ok "D6a gate no-op" || bad "D6a gate"

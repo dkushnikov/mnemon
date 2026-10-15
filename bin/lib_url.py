@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""lib_url — URL normalization + entity helpers for Mnemon.
+"""lib_url — URL comparison helpers for the depth helpers (same-site, registrable domain, GitHub repo).
 
-Shared by kb-probe-deeper.py (depth-aware capture) and intended for
-triage-urls.py (dedup) to prevent parsing drift. Importable module
-(underscore name); the design specs refer to it as `lib-url.py`.
+`normalize_url` is a **comparison form only, never an identity**: it strips `www.`, collapses the trailing
+slash, sorts and filters the query and drops the fragment so kb-probe-deeper.py / kb-depth-fold.py can tell
+whether two links point at the same page of the same site. The identity of a captured url resource is the
+versioned canonical form of `bin/capture/resolve.py` (`canonicalize`, v1), which does none of those things
+on purpose (docs/specs/2026-10-15-capture-layer.md §3.1). `triage-urls.py` keeps its own advisory
+normalizer. Importable module (underscore name); the design specs refer to it as `lib-url.py`.
 
 No third-party deps — stdlib only.
 """
@@ -22,7 +25,7 @@ _MULTI_TLD = {
 
 
 def normalize_url(url: str) -> str:
-    """Canonical comparison form: lowercase scheme+host, drop default port,
+    """Comparison form (never an identity): lowercase scheme+host, drop default port,
     drop fragment, strip tracking params, collapse trailing slash, drop a
     leading www. Path case is preserved (paths can be case-sensitive)."""
     if not url:
