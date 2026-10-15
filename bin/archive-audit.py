@@ -7,8 +7,10 @@ Reports three gaps:
   C — orphan archives: files in the archive dir no source references
 
 Read-only. Usage: archive-audit.py [--config PATH] [--cutoff YYYY-MM-DD]
-Without --config the engine's resolved config is used (MNEMON_INSTANCE /
-MNEMON_CONFIG, see bin/mnemon-config.sh); `mnemon audit` passes it explicitly.
+The config is read through the engine's loader (bin/mnemon-config.sh via
+lib_config): with --config that file, otherwise the resolved instance
+(MNEMON_INSTANCE / MNEMON_CONFIG); `mnemon audit` passes it explicitly. No
+second yaml parser lives here.
 """
 import os
 import re
@@ -19,19 +21,6 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import lib_config  # noqa: E402
 
 REF_ORIGINS = {"ref:vault", "ref:mcp"}
-
-
-def yaml_val(path, key):
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                m = re.match(rf'^{re.escape(key)}:\s*(.*)$', line)
-                if m:
-                    v = re.sub(r'\s+#.*$', '', m.group(1)).strip().strip('"').strip("'")
-                    return os.path.expanduser(v)
-    except OSError:
-        pass
-    return ""
 
 
 def parse_frontmatter(path):
@@ -58,18 +47,14 @@ def main():
     ap.add_argument("--cutoff", default="2026-04-23", help="archival feature ship date")
     args = ap.parse_args()
 
-    if not args.config:
-        try:
-            args.config = lib_config.load_config()["MNEMON_CONFIG_FILE"]
-        except lib_config.ConfigError as e:
-            print(f"{e}", file=sys.stderr)
-            sys.exit(2)
-
-    vault = yaml_val(args.config, "vault_path")
-    archive_dir = yaml_val(args.config, "archive_dir")
-    if not vault:
-        print(f"ERROR: vault_path not found in {args.config}", file=sys.stderr)
+    try:
+        cfg = lib_config.load_config(args.config)
+    except lib_config.ConfigError as e:
+        print(f"{e}", file=sys.stderr)
         sys.exit(2)
+    args.config = cfg["MNEMON_CONFIG_FILE"]
+    vault = cfg["VAULT_PATH"]
+    archive_dir = cfg.get("ARCHIVE_DIR", "")
 
     sources_dir = os.path.join(vault, "Sources")
     sources = []
