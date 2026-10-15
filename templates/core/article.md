@@ -30,35 +30,20 @@ Discard filler, obvious claims, and ideas that don't survive the "so what?" test
 
 Generate extract.md with EXACTLY this structure:
 
-## Frontmatter
+## Fields
 
-```yaml
----
-type: extract
-source_type: article
-content_format: text
-origin: url
-visibility: personal
-status: extracted
-context: "<from capture context: personal | mc>"
-title: "<article title — use the actual title, not a summary>"
-author: "<author name>"
-url: "<source URL>"
-created: <YYYY-MM-DD>
-extracted: <YYYY-MM-DD>
-language: <detected language: en, ru, etc.>
-tags: [<3-8 topic tags, lowercase>]
-people: [<people mentioned or referenced>]
-domains: [<1-3 domains from reader context>]
-rating: <1-10 integer>
-capture_context:
-  vault: <from capture context>
-  session: "<from capture context>"
-  intent: "<from capture context>"
-  import_source: "<from capture context, e.g. gateway>"
-  import_batch: "<from capture context, empty if none>"
----
-```
+Return these structured fields (output schema `extract/1`). The gateway writes the frontmatter of
+extract.md from them — do not write YAML, do not add fields, do not wrap the answer in prose.
+
+- `title` — the article's actual title, not a summary (1–300 characters, one line)
+- `author` — the author's name; empty when unknown (at most 200 characters; empty string when unknown)
+- `language` — the content's language as a code such as `en`, `ru`, `pt-BR`
+- `tags` — 3–8 lowercase topic tags, each matching `[a-z0-9][a-z0-9_/-]*` (at most 12)
+- `people` — people mentioned or referenced, plain names (at most 30)
+- `domains` — 1–3 domains from the Reader Context domain list, lowercase
+- `rating` — an integer from 1 to 10 on the reader's value scale
+- `pages` — the page count, only when the source states it (integer; omit otherwise)
+- `body` — the Body section below as markdown, with exactly its `### ` headings
 
 Rating guide: apply the reader's value-scale from the Reader Context (single source of truth).
 
