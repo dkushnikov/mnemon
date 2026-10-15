@@ -764,12 +764,14 @@ _release_drain() {
 }
 
 # Smoke = engine health only: config resolves, version reports the new commit,
-# tests/test_config.sh passes, doctor has no fail line other than the
-# environmental deps/qmd/writer. MNEMON_SMOKE_CMD replaces the checks — a test
-# hook, honoured only together with MNEMON_TEST_HOOKS=1 so a stray variable in a
-# production environment can never stand in for the smoke.
+# tests/test_config.sh passes, doctor exits 0 — or 1 with no fail line other
+# than the environmental deps/qmd/writer; any other exit (a crash, a usage
+# error, a missing binary, 75) fails the smoke, whatever the output says.
+# MNEMON_SMOKE_CMD replaces the checks — a test hook, honoured only together
+# with MNEMON_TEST_HOOKS=1 so a stray variable in a production environment can
+# never stand in for the smoke.
 _release_smoke() {
-  local home="$1" new_sha="$2" ok=true out log bad
+  local home="$1" new_sha="$2" ok=true out log bad drc=0
   if [[ -n "${MNEMON_SMOKE_CMD:-}" ]]; then
     if [[ "${MNEMON_TEST_HOOKS:-}" == 1 ]]; then
       echo "release: smoke — MNEMON_SMOKE_CMD override (MNEMON_TEST_HOOKS=1): $MNEMON_SMOKE_CMD"
@@ -786,15 +788,24 @@ _release_smoke() {
   log="$(mktemp)"
   if bash "$home/tests/test_config.sh" >"$log" 2>&1; then echo "  $(tail -1 "$log")"; else cat "$log"; ok=false; fi
   rm -f "$log"
-  echo "release: smoke — $home/bin/mnemon doctor (fail lines other than deps/qmd/writer fail the release)"
-  out="$("$home/bin/mnemon" doctor 2>&1)" || true
+  echo "release: smoke — $home/bin/mnemon doctor (exit 0, or 1 with no fail line other than deps/qmd/writer)"
+  out="$("$home/bin/mnemon" doctor 2>&1)" || drc=$?
   printf '%s\n' "$out" | sed 's/^/  /'
-  bad="$(printf '%s\n' "$out" | grep '^fail ' | grep -v -e '^fail deps' -e '^fail qmd' -e '^fail writer' || true)"
-  if [[ -n "$bad" ]]; then
-    echo "  ✗ engine-health failures:" >&2
-    printf '%s\n' "$bad" | sed 's/^/    /' >&2
-    ok=false
-  fi
+  case "$drc" in
+    0) ;;
+    1) bad="$(printf '%s\n' "$out" | grep '^fail ' | grep -v -e '^fail deps' -e '^fail qmd' -e '^fail writer' || true)"
+       if [[ -n "$bad" ]]; then
+         echo "  ✗ engine-health failures:" >&2
+         printf '%s\n' "$bad" | sed 's/^/    /' >&2
+         ok=false
+       elif ! printf '%s\n' "$out" | grep -q '^fail '; then
+         # doctor exits 1 only after counting a fail line; none means it died midway
+         echo "  ✗ doctor exited 1 without a fail line — it did not finish its checks" >&2
+         ok=false
+       fi ;;
+    *) echo "  ✗ doctor exited $drc (expected 0, or 1 with only deps/qmd/writer failures) — it crashed or did not run" >&2
+       ok=false ;;
+  esac
   $ok
 }
 

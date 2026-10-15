@@ -775,6 +775,32 @@ assert_eq "$(git -C "$ORIGIN" rev-parse release)" "$BEFORE_PUSH" "origin/release
 [[ -e "$LOCK" ]] && fail "lock removed after a failed push" "lock exists" || pass "lock removed after a failed push"
 git -C "$REPO" remote set-url origin "$ORIGIN"
 
+# G2: a doctor that crashes (exit code other than 0 or 1) fails the smoke. The
+# old rule read only `fail` lines and discarded doctor's exit status, so a
+# crashing doctor passed. The fixture's dispatcher is changed on main so that
+# `doctor` exits 9 — config path, version and test_config.sh still pass, only
+# the doctor rule can catch it. Rule: rc 0 → ok; rc 1 with every fail line in
+# deps/qmd/writer → ok; anything else → smoke failure.
+sed -e 's|^  doctor)   cmd_doctor .*$|  doctor)   echo "doctor: simulated crash" >\&2; exit 9 ;;|' "$REPO/bin/mnemon" > "$REPO/bin/mnemon.new"
+mv "$REPO/bin/mnemon.new" "$REPO/bin/mnemon"
+chmod +x "$REPO/bin/mnemon"
+assert_eq "$(grep -c 'simulated crash' "$REPO/bin/mnemon" || true)" "1" "fixture: the doctor dispatch line was replaced"
+g "$REPO" commit -q -am "doctor crashes"
+CRASH_MAIN=$(git -C "$REPO" rev-parse --short main)
+THIRD_REL=$(git -C "$RWT" rev-parse --short HEAD)
+BEFORE_CRASH=$(git -C "$ORIGIN" rev-parse release)
+run env PATH="$STUBBIN:$PATH" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
+assert_eq "$rc" "1" "a crashing doctor (exit 9) fails the smoke"
+assert_contains "$out" "doctor: simulated crash" "the smoke shows doctor's output"
+assert_contains "$out" "doctor exited 9" "...and names the unexpected exit code"
+assert_contains "$out" "smoke failed on $RWT @ $CRASH_MAIN. Nothing was pushed" "a crashing doctor publishes nothing"
+assert_contains "$out" "mnemon release --rollback $THIRD_REL" "...and prints the rollback"
+assert_eq "$(git -C "$ORIGIN" rev-parse release)" "$BEFORE_CRASH" "a crashing doctor does not move origin/release"
+[[ -e "$LOCK" ]] && fail "lock removed after a crashing doctor" "lock exists" || pass "lock removed after a crashing doctor"
+run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --rollback "$THIRD_REL"
+assert_eq "$rc" "0" "rollback after a crashing doctor exits 0"
+g "$REPO" revert --no-edit HEAD >/dev/null
+
 printf '# hotfix on release\n' >> "$RWT/tests/test-helper.sh"
 g "$RWT" commit -q -am "hotfix on release"
 run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
