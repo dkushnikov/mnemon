@@ -65,7 +65,7 @@ usage_error() { printf 'mnemon: %s\n\n' "$*" >&2; usage >&2; exit 2; }
 # Physical path of an existing directory.
 _abs_dir() { (cd "$1" 2>/dev/null && pwd -P); }
 
-_expand_tilde() { printf '%s' "${1/#\~/$HOME}"; }
+_expand_tilde() { _mnemon_expand_tilde "$1"; }
 
 # Tilde-free absolute path; the parent must exist, the leaf need not.
 _abs_path() {

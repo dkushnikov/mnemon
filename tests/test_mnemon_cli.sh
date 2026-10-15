@@ -104,6 +104,12 @@ assert_eq "$(cat "$TEST_TMPDIR/vault-g/reader-context.md")" "# my reader context
 assert_eq "$(cat "$CFG_DIR/default")" "gamma" "--default switches the default instance"
 printf 'alpha\n' > "$CFG_DIR/default"
 
+# ~user/... is a literal relative path (only ~ and ~/ expand)
+run "$MNEMON" init tilde --vault "~someone/vault-t" --non-interactive
+assert_eq "$rc" "0" "init with a ~user path exits 0"
+assert_contains "$(cat "$CFG_DIR/instances/tilde.yaml")" "vault_path: $TEST_TMPDIR/cwd/~someone/vault-t" "~user/ is not expanded to HOME (literal path under the cwd)"
+rm -f "$CFG_DIR/instances/tilde.yaml"
+
 # bad input
 run "$MNEMON" init adhoc --vault "$TEST_TMPDIR/vault-x" --non-interactive
 assert_eq "$rc" "1" "init adhoc is refused (reserved name)"

@@ -102,6 +102,17 @@ assert_eq "$WRITER_HOST" "host-a" "unquoted value loses the trailing comment"
 assert_eq "$DEFAULT_MODEL" "sonnet#x" "a # without preceding whitespace is part of an unquoted value"
 assert_eq "$DEFAULT_LANGUAGE" "en" "a value that is only a comment counts as unset (default applies)"
 
+# --- Test 6c: only a bare ~ or ~/ expands; ~user/... stays literal ---
+cat > "$TEST_TMPDIR/tilde.yaml" << 'EOF'
+vault_path: ~/tilde-vault
+charter_path: ~someone/charter.md
+state_dir: ~
+EOF
+load_config "$TEST_TMPDIR/tilde.yaml"
+assert_eq "$VAULT_PATH" "$HOME/tilde-vault" "~/path expands to HOME/path"
+assert_eq "$CHARTER_PATH" "~someone/charter.md" "~user/path is not rewritten"
+assert_eq "$MNEMON_STATE_DIR" "$HOME" "a bare ~ expands to HOME"
+
 # --- Test 7: Unrendered {{instance}} placeholder counts as unset ---
 printf 'instance: {{instance}}\nvault_path: %s/vault7\n' "$TEST_TMPDIR" > "$TEST_TMPDIR/tpl.yaml"
 load_config "$TEST_TMPDIR/tpl.yaml"

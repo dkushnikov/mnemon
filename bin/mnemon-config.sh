@@ -55,9 +55,17 @@ _parse_yaml_value() {
     \#*) val="" ;;
     *)   val=$(printf '%s' "$val" | sed 's/[[:space:]]#.*$//; s/[[:space:]]*$//') ;;
   esac
-  # Resolve tilde
-  val="${val/#\~/$HOME}"
+  val="$(_mnemon_expand_tilde "$val")"
   printf '%s\n' "$val"
+}
+
+# Expand a leading `~` or `~/` to $HOME; `~user/...` is left alone.
+_mnemon_expand_tilde() {
+  case "$1" in
+    "~")   printf '%s' "$HOME" ;;
+    "~/"*) printf '%s%s' "$HOME" "${1#\~}" ;;
+    *)     printf '%s' "$1" ;;
+  esac
 }
 
 # First non-empty, non-comment line of a `default` file (the default instance).

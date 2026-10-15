@@ -55,8 +55,8 @@ if [[ -z "$VAULT_PATH" ]]; then
   usage
 fi
 
-# Resolve tilde and make absolute
-VAULT_PATH="${VAULT_PATH/#\~/$HOME}"
+# Resolve a leading ~ (not ~user) and make absolute
+case "$VAULT_PATH" in "~") VAULT_PATH="$HOME" ;; "~/"*) VAULT_PATH="$HOME${VAULT_PATH#\~}" ;; esac
 resolved_parent="$(cd "$(dirname "$VAULT_PATH")" 2>/dev/null && pwd)" || true
 if [[ -n "$resolved_parent" ]]; then
   VAULT_PATH="$resolved_parent/$(basename "$VAULT_PATH")"
@@ -97,7 +97,7 @@ copy_if_missing "$SCRIPT_DIR/vault-template/CLAUDE.md" "$VAULT_PATH/CLAUDE.md" "
 copy_if_missing "$SCRIPT_DIR/vault-template/_meta/Protocol.md" "$VAULT_PATH/_meta/Protocol.md" "_meta/Protocol.md"
 
 if [[ -n "$READER_CONTEXT_SRC" ]]; then
-  READER_CONTEXT_SRC="${READER_CONTEXT_SRC/#\~/$HOME}"
+  case "$READER_CONTEXT_SRC" in "~") READER_CONTEXT_SRC="$HOME" ;; "~/"*) READER_CONTEXT_SRC="$HOME${READER_CONTEXT_SRC#\~}" ;; esac
   if [[ -f "$READER_CONTEXT_SRC" ]]; then
     if [[ ! -f "$VAULT_PATH/reader-context.md" ]]; then
       cp "$READER_CONTEXT_SRC" "$VAULT_PATH/reader-context.md"
