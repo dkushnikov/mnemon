@@ -709,6 +709,27 @@ assert_eq "$rc" "1" "symlink: a process started through the symlink spelling is 
 assert_contains "$out" "engine processes to finish ($BUSY_PID" "symlink: drain names it"
 wait "$BUSY_PID" 2>/dev/null || true
 
+# G1: pgrep exit 0 = busy, 1 = idle, anything else = pgrep itself failed — the
+# drain must abort, not read the failure as "idle" and move files under a
+# running process. A stub pgrep first on PATH exits 3 while busy.sh runs.
+PGSTUB="$TEST_TMPDIR/pgrepstub"; mkdir -p "$PGSTUB"
+printf '#!/bin/sh\necho "pgrep: stub cannot read the process table" >&2\nexit 3\n' > "$PGSTUB/pgrep"
+chmod +x "$PGSTUB/pgrep"
+bash "$RWT/bin/busy.sh" &
+BUSY_PID=$!
+sleep 0.3
+run env PATH="$PGSTUB:$STUBBIN:$PATH" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --drain-timeout 5
+assert_eq "$rc" "1" "a failing pgrep (exit 3) aborts the release"
+assert_contains "$out" "pgrep -f exited 3: pgrep: stub cannot read the process table" "...naming the pgrep failure and its message"
+assert_contains "$out" "cannot tell whether engine processes are running" "...and saying the drain could not look"
+assert_not_contains "$out" "no engine processes running" "a failing pgrep is not read as idle"
+assert_not_contains "$out" "ff-only merge" "a failing pgrep merges nothing"
+assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$PREV_FULL" "a failing pgrep leaves the engine worktree unchanged"
+assert_eq "$(git -C "$ORIGIN" rev-parse release)" "$PREV_FULL" "a failing pgrep leaves origin/release unchanged"
+[[ -e "$LOCK" ]] && fail "lock removed after a failing pgrep" "lock exists" || pass "lock removed after a failing pgrep"
+kill "$BUSY_PID" 2>/dev/null || true
+wait "$BUSY_PID" 2>/dev/null || true
+
 # G3: a dirty dev tree is refused before the lock and the drain. With a busy
 # engine the old order took the lock, waited the whole --drain-timeout and then
 # blamed the drain, not the tree. The lock acquire always prints "release: lock …":

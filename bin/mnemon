@@ -719,20 +719,38 @@ _release_lock_acquire() {
 
 # PIDs of engine processes whose command line matches the drain pattern $1
 # (see _drain_pattern) — pgrep -f, same user and host only (documented
-# limitation); never this process or its parent.
+# limitation); never this process or its parent. Returns pgrep's verdict so the
+# caller can tell idle from "could not look": 0 = busy (PIDs on stdout),
+# 1 = idle, 2 = pgrep itself failed (exit > 1; its message on stderr). A
+# failing pgrep used to read as idle and the release moved files under
+# running processes.
 _engine_pids() {
-  pgrep -f -- "$1" 2>/dev/null | grep -v -x -e "$$" -e "$PPID" | tr '\n' ' ' | sed 's/ *$//' || true
+  local raw rc=0 pids
+  raw="$(pgrep -f -- "$1" 2>&1)" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) return 1 ;;
+    *) printf 'mnemon release: pgrep -f exited %s%s\n' "$rc" "${raw:+: $raw}" >&2; return 2 ;;
+  esac
+  pids="$(printf '%s\n' "$raw" | grep -E '^[0-9]+$' | grep -v -x -e "$$" -e "$PPID" | tr '\n' ' ' | sed 's/ *$//' || true)"
+  [[ -n "$pids" ]] || return 1
+  printf '%s' "$pids"
 }
 
 # Wait up to $2 seconds for engine processes under $1 (matched by the drain
-# pattern $3) to finish; 1 on timeout.
+# pattern $3) to finish; 1 on timeout, 2 when pgrep cannot answer.
 _release_drain() {
-  local home="$1" timeout="$2" pattern="$3" waited=0 pids
+  local home="$1" timeout="$2" pattern="$3" waited=0 pids rc
   while :; do
-    pids="$(_engine_pids "$pattern")"
-    if [[ -z "$pids" ]]; then
+    rc=0
+    pids="$(_engine_pids "$pattern")" || rc=$?
+    if [[ $rc -eq 1 ]]; then
       echo "release: drain — no engine processes running from $home/bin/"
       return 0
+    elif [[ $rc -ne 0 ]]; then
+      echo "mnemon release: drain — cannot tell whether engine processes are running from $home/bin/ (pgrep failed, see above); not proceeding blind" >&2
+      echo "  nothing was changed; fix pgrep (or the PATH it comes from) and retry" >&2
+      return 2
     fi
     if [[ $waited -ge $timeout ]]; then
       echo "mnemon release: engine busy after ${timeout}s — still running from $home/bin/: $pids" >&2
