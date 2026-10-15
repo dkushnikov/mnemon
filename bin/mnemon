@@ -31,6 +31,8 @@ Usage: mnemon [--instance <name>] [--config <path>] <command> [args...]
 Commands:
   add <gateway options>      Capture a source (knowledge-gateway.sh source-add)
   status                     Pipeline status for the instance
+  site map <url> [--max-pages N] [--include <re>]… [--exclude <re>]… [--out <plan.json>] [--json]
+                             Discover a site's pages into a reviewable plan for `add --site`
   search --query <q> [...]   Search extracts (JSON; --human for text)
   reindex                    Rebuild the vault's index.md
   triage <input> [...]       Content-aware URL triage against the vault
@@ -51,8 +53,8 @@ Commands:
                              record a pass for its version (needed before extraction)
   doctor [--instance <name>] [--json]
                              Health checks: ok|warn|fail <check> — <detail>
-  config get <key> | path | list | dump
-                             Resolved configuration
+  config get <key> | path | list | keys | dump
+                             Resolved configuration (keys: the scalar keys and defaults)
   release [--dry-run] [--now] [--drain-timeout <s>] [--rollback <ref>]
                              Maintainer: promote main → release → installed engine
                              (lock → drain → ff-merge → smoke → push); --rollback resets
@@ -879,7 +881,7 @@ cmd_doctor() {
 # config
 # ---------------------------------------------------------------------------
 
-CONFIG_EXPORTS="MNEMON_ROOT MNEMON_CONFIG MNEMON_CONFIG_FILE MNEMON_CONFIG_SOURCE MNEMON_INSTANCE MNEMON_STATE_DIR MNEMON_VAULT_STATE_DIR VAULT_PATH READER_CONTEXT_PATH CHARTER_PATH SEARCH_PROVIDER QMD_COLLECTION DEFAULT_MODEL DEFAULT_LANGUAGE WHISPER_MODEL AUTO_DETECT_ORIGIN ARCHIVE_DIR WRITER_HOST EXTRACT_TIMEOUT EXTRACT_INLINE_MAX_BYTES EXTRACT_MAX_USD"
+CONFIG_EXPORTS="MNEMON_ROOT MNEMON_CONFIG MNEMON_CONFIG_FILE MNEMON_CONFIG_SOURCE MNEMON_INSTANCE MNEMON_STATE_DIR MNEMON_VAULT_STATE_DIR VAULT_PATH READER_CONTEXT_PATH CHARTER_PATH SEARCH_PROVIDER QMD_COLLECTION DEFAULT_MODEL DEFAULT_LANGUAGE WHISPER_MODEL AUTO_DETECT_ORIGIN ARCHIVE_DIR WRITER_HOST EXTRACT_TIMEOUT EXTRACT_INLINE_MAX_BYTES EXTRACT_MAX_USD EXTERNAL_FETCH EXTERNAL_FETCHERS FETCH_USER_AGENT FETCH_TIMEOUT FETCH_CONNECT_TIMEOUT FETCH_READ_TIMEOUT FETCH_MAX_BYTES RENDER_TIMEOUT RENDER_MAX_BYTES ACQUIRE_TIMEOUT TRANSCRIBE_TIMEOUT SITE_MAX_PAGES SITE_TIMEOUT THIN_WORDS EXTRACT_MAX_PARTS"
 
 cmd_config_list() {
   local dir inst_dir def f name vault marker count=0
@@ -907,7 +909,7 @@ cmd_config_list() {
 
 cmd_config() {
   local sub="${1:-}"
-  [[ -n "$sub" ]] || usage_error "config: expected get <key> | path | list | dump"
+  [[ -n "$sub" ]] || usage_error "config: expected get <key> | path | list | keys | dump"
   shift
   case "$sub" in
     get)
@@ -930,7 +932,9 @@ cmd_config() {
         config_file)         var=MNEMON_CONFIG_FILE ;;
         config_source)       var=MNEMON_CONFIG_SOURCE ;;
         config_dir)          mnemon_config_dir; echo; return 0 ;;
-        *) printf 'mnemon config get: unknown key %s\n' "$key" >&2; exit 2 ;;
+        *) # the scalar keys of MNEMON_CONFIG_KEYS (capture layer §5), one table with bin/lib_config.py
+           var="$(mnemon_config_var_of "$key" 2>/dev/null || true)"
+           [[ -n "$var" ]] || { printf 'mnemon config get: unknown key %s\n' "$key" >&2; exit 2; } ;;
       esac
       _resolve_or_die
       printf '%s\n' "${!var}" ;;
@@ -939,6 +943,10 @@ cmd_config() {
       printf '%s\n' "$MNEMON_CONFIG_FILE" ;;
     list)
       cmd_config_list ;;
+    keys)
+      # the scalar keys with defaults: `key type default` per line (capture layer §5; the
+      # table lives in bin/mnemon-config.sh, mirrored by bin/lib_config.py)
+      mnemon_config_keys ;;
     dump)
       _resolve_or_die
       local v
@@ -946,7 +954,7 @@ cmd_config() {
       for v in $CONFIG_EXPORTS; do
         printf '%s=%s\n' "$v" "${!v}"
       done ;;
-    *) usage_error "config: unknown subcommand '$sub' (expected get | path | list | dump)" ;;
+    *) usage_error "config: unknown subcommand '$sub' (expected get | path | list | keys | dump)" ;;
   esac
 }
 
@@ -1283,6 +1291,18 @@ case "$cmd" in
             exit 2 ;;
   status)   _reject_post_command_selectors "$@"; _resolve_or_die
             exec "$BIN_DIR/knowledge-gateway.sh" status "$@" ;;
+  site)     _reject_post_command_selectors "$@"; _resolve_or_die
+            # mnemon site map <url> … → capture-site.py map (capture layer §3.6): a reviewable plan,
+            # no vault write, no lock; the instance's cap, deadline and policy apply unless given
+            case "${1:-}" in
+              map) shift
+                   site_args=(map)
+                   _has_flag --max-pages "$@" || site_args+=(--max-pages "${SITE_MAX_PAGES:-40}")
+                   _has_flag --site-timeout "$@" || site_args+=(--site-timeout "${SITE_TIMEOUT:-900}")
+                   _has_flag --policy "$@" || site_args+=(--policy "$(jq -cn --arg ua "${FETCH_USER_AGENT:-}" --argjson ct "${FETCH_CONNECT_TIMEOUT:-15}" --argjson rt "${FETCH_READ_TIMEOUT:-45}" --argjson mb "${FETCH_MAX_BYTES:-20000000}" --argjson rmb "${RENDER_MAX_BYTES:-20000000}" --argjson tw "${THIN_WORDS:-60}" --argjson ft "${FETCH_TIMEOUT:-60}" '{user_agent:$ua, connect_timeout:$ct, read_timeout:$rt, max_bytes:$mb, max_redirects:5, fetch_timeout:$ft, render_max_bytes:$rmb, thin_words:$tw}')")
+                   exec "${MNEMON_CAPTURE_SITE_CMD:-$BIN_DIR/capture-site.py}" "${site_args[@]}" "$@" ;;
+              *)   usage_error "site: expected map <url> [--max-pages N] [--include <regex>]… [--exclude <regex>]… [--out <plan.json>] [--json]" ;;
+            esac ;;
   search)   if ! _has_flag --vault "$@"; then _resolve_or_die; fi
             exec python3 "$BIN_DIR/mnemon-search.py" "$@" ;;
   reindex)  _resolve_or_die

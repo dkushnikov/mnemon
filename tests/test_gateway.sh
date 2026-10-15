@@ -150,7 +150,8 @@ rm -f "$VAULT/_meta/charter.md"
 run_gw --url "https://example.com/spa" --render --dry-run
 assert_eq "$rc" "0" "--render dry-run exits 0"
 assert_not_contains "$out" "Unknown option" "--render flag recognized"
-assert_contains "$out" "Raw store: archive — $ARCHIVE/$(date +%Y-%m-%d)_<resource_id>.txt" "--render: the raw is the rendered text (.txt)"
+assert_contains "$out" "Raw store: archive — $ARCHIVE/$(date +%Y-%m-%d)_<resource_id>.html" "--render: the raw is the rendered DOM HTML (.html, capture layer D4)"
+assert_contains "$out" "Fetch: render force" "...the dry-run shows the forced render"
 
 # --- Test 20: PDF origin auto-detected from --file extension ---
 touch "$TEST_TMPDIR/paper.pdf"
@@ -225,7 +226,7 @@ assert_contains "$(grep -F 'mktemp -d' "$RENDER")" 'PROFILE=$(mktemp -d -t rende
 assert_contains "$(grep -F 'trap ' "$RENDER")" 'rm -rf "$TMP" "$PROFILE"' "the EXIT trap removes the profile dir with the dump"
 
 # --- Test 33: the dead letter moved: _inputs/pending-writes is never written ---
-STUB_CURL=fail STUB_RENDER=fail run_gw --url "https://example.com/unreachable" --capture-id dead-1
+STUB_FETCH=fail run_gw --url "https://example.com/unreachable" --capture-id dead-1
 assert_eq "$rc" "1" "fetch failure → exit 1"
 assert_eq "$(result error_class)" "fetch" "...error_class fetch"
 [[ -e "$VAULT/_inputs/pending-writes" ]] && fail "no pending-writes" "exists" || pass "_inputs/pending-writes is no longer written (D6)"
@@ -306,7 +307,9 @@ echo "--- contract fixtures: RESULT shapes ---"
 compare_shape() {
   local scenario="$1" eid="$2" expected actual ok=true k ev av
   expected="$(jq -r --arg s "$1" --arg id "$2" '.scenarios[$s].stdout[] | gsub("<envelope_id>"; $id)' "$CF/gateway-outcomes.json")"
-  actual="$(printf '%s\n' "$out" | grep '^RESULT:' | grep -v '^RESULT:replayed=')"
+  # the phase-2 keys (completeness, canonical_url, acquisition, report) are additive (§4.3): the
+  # phase-1 fixture shapes are compared without them
+  actual="$(printf '%s\n' "$out" | grep '^RESULT:' | grep -vE '^RESULT:(replayed|completeness|canonical_url|acquisition|report)=')"
   assert_eq "$(printf '%s\n' "$actual" | cut -d= -f1 | tr '\n' ' ')" "$(printf '%s\n' "$expected" | cut -d= -f1 | tr '\n' ' ')" "$scenario: RESULT keys and order"
   for k in capture_id status extract error_class retryable; do
     ev="$(printf '%s\n' "$expected" | grep "^RESULT:$k=" | cut -d= -f2-)"; av="$(printf '%s\n' "$actual" | grep "^RESULT:$k=" | cut -d= -f2-)"
@@ -348,7 +351,7 @@ assert_eq "$rc" "4" "exit4-transient on a url capture: exit 4"
 assert_eq "$(result error_class)" "transient" "...error_class transient"
 # exit1-*: fetch (curl + render fail), unsupported (a file no converter reads), archive-exists, integrity
 load_argv url-auto
-STUB_CURL=fail STUB_RENDER=fail run_gw --url "https://example.com/fetch-fails" --capture-id "$(cat "$FXD/url-auto.id")~f"
+STUB_FETCH=fail run_gw --url "https://example.com/fetch-fails" --capture-id "$(cat "$FXD/url-auto.id")~f"
 assert_eq "$rc" "1" "exit1-fetch: exit 1"
 compare_shape exit1-fetch "$(cat "$FXD/url-auto.id")~f"
 printf 'bytes' > "$TEST_TMPDIR/blob.xyz"
@@ -409,6 +412,69 @@ run_case "text-plain~2"
 assert_eq "$rc" "0" "extracted-recapture: exit 0"
 compare_shape extracted-recapture "$(cat "$FXD/text-plain~2.id")"
 assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" supersedes)" '"2026-10-12_aaaaaaaa"' "extracted-recapture: supersedes recorded"
+
+# ---------------------------------------------------------------------------------------------
+# Phase 2 — the capture layer's CLI surface (docs/specs/2026-10-15-capture-layer.md §4.1, §4.3, §5)
+# ---------------------------------------------------------------------------------------------
+echo "--- phase 2: dry-run shows the canonical identity, the kind and the request schema ---"
+run_gw --url "https://Example.com/Post?utm_source=x&s=alpha#intro" --dry-run
+assert_eq "$rc" "0" "a url dry-run exits 0"
+assert_contains "$out" "Canonical URL: https://example.com/Post?s=alpha" "...prints the canonical URL (host lowercased, utm dropped, fragment dropped, s kept)"
+assert_contains "$out" "URL kind: page" "...and the kind"
+assert_contains "$out" "Request schema: mnemon-request/2" "...and the request schema"
+assert_contains "$out" "Fetch: render auto, external off, acquire timeout 300s" "...and the chain settings"
+assert_contains "$out" "chunking decided after acquisition" "...the chunk plan is deferred for a URL"
+run_gw --url "https://arxiv.org/abs/2401.12345v2" --dry-run
+assert_contains "$out" "URL kind: arxiv (requested version 2)" "an arXiv URL: kind arxiv with the requested version"
+assert_contains "$out" "Source type: paper" "...source_type defaults to paper"
+assert_contains "$out" "Canonical URL: https://arxiv.org/abs/2401.12345" "...canonical abs/<id>"
+run_gw --url "https://www.youtube.com/live/abc123xyz00" --dry-run
+assert_contains "$out" "Origin: youtube" "a /live/ form routes to the media path by the canonical kind"
+run_gw --url "https://music.youtube.com/watch?v=abc123xyz00" --dry-run
+assert_contains "$out" "Origin: youtube" "...so does music.youtube.com"
+run_gw --url "https://www.youtube.com/watch?v=abc123xyz00" --origin url --dry-run
+assert_eq "$rc" "0" "an explicit --origin url on a YouTube URL is a page capture (explicit wins)"
+assert_contains "$out" "Origin: url" "...origin url"
+run_gw --url "https://example.com/not-a-video" --origin youtube --dry-run
+assert_eq "$rc" "2" "an explicit --origin youtube on a non-YouTube URL → exit 2"
+run_gw --url "https://example.com/x" --no-render --no-external --dry-run
+assert_eq "$rc" "0" "--no-render / --no-external are accepted"
+assert_contains "$out" "Fetch: render off, external off" "...and shown"
+run_gw --url "https://example.com/x" --render --no-render --dry-run
+assert_eq "$rc" "2" "--render with --no-render → exit 2"
+run_gw --url "https://example.com/x" --assume-cost 0.5 --dry-run
+assert_eq "$rc" "2" "--assume-cost without --resume → exit 2"
+run_gw --url "https://example.com/x" --site auto --dry-run
+assert_eq "$rc" "0" "--site auto dry-run exits 0"
+assert_contains "$out" "Site plan: generated at run time" "...prints the deferral"
+assert_contains "$out" "Source type: website" "...source_type website"
+assert_contains "$out" "_<resource_id>.site/" "...the raw is a bundle directory"
+f0="$(fetch_calls)"
+run_gw --url "https://example.com/" --site "$FIX/reports/site-plan.json" --dry-run
+assert_eq "$rc" "0" "--site <plan> dry-run exits 0 and fetches nothing"
+assert_contains "$out" "Hosts: example.com, docs.example.com" "...lists the plan's hosts"
+assert_contains "$out" "2. https://example.com/product (product)" "...and its included pages"
+assert_not_contains "$out" "privacy" "...not the excluded ones"
+assert_eq "$(fetch_calls)" "$f0" "...nothing fetched"
+run_gw --origin text --file-text "$VAULT/reader-context.md" --dry-run
+assert_contains "$out" "single call:" "a small --file-text shows a single-call chunk plan"
+run_gw --site "$FIX/reports/site-plan.json" --origin text --dry-run </dev/null
+assert_eq "$rc" "2" "--site without a --url landing → exit 2"
+
+echo "--- phase 2: status counts superseded and chunked (§3.9) ---"
+output=$("$GW" status --config "$CONFIG" 2>&1)
+s0="$(printf '%s\n' "$output" | sed -n 's/^Superseded: //p')"; c0="$(printf '%s\n' "$output" | sed -n 's/^Chunked: //p')"
+[[ "$s0" =~ ^[0-9]+$ && "$c0" =~ ^[0-9]+$ ]] && pass "status prints Superseded: and Chunked: counts" || fail "status counts" "'$s0' '$c0'"
+mkdir -p "$VAULT/Sources/2026-04-04_aaaa0001" "$VAULT/Sources/2026-04-05_aaaa0001" "$VAULT/Sources/2026-04-06_bbbb0002"
+printf -- '---\ntype: source\norigin: text\n---\nold\n' > "$VAULT/Sources/2026-04-04_aaaa0001/source.md"
+printf -- '---\ntype: source\norigin: text\nsupersedes: "2026-04-04_aaaa0001"\n---\nnew\n' > "$VAULT/Sources/2026-04-05_aaaa0001/source.md"
+printf -- '---\ntype: extract\nstatus: extracted\ntitle: "New"\nextraction: chunked\nparts: 3\n---\n' > "$VAULT/Sources/2026-04-05_aaaa0001/extract.md"
+printf -- '---\ntype: source\norigin: text\nsupersedes: "Sources/2026-04-04_aaaa0001/extract"\n---\nnewer\n' > "$VAULT/Sources/2026-04-06_bbbb0002/source.md"
+printf -- '---\ntype: extract\nstatus: extracted\ntitle: "Newer"\nextraction: single\n---\n' > "$VAULT/Sources/2026-04-06_bbbb0002/extract.md"
+output=$("$GW" status --config "$CONFIG" 2>&1)
+assert_contains "$output" "Superseded: $((s0 + 1))" "status counts the folders named in any supersedes: (both forms name one folder → +1)"
+assert_contains "$output" "Chunked: $((c0 + 1))" "...and the extract.md files with extraction: chunked (+1)"
+rm -rf "$VAULT/Sources/2026-04-04_aaaa0001" "$VAULT/Sources/2026-04-05_aaaa0001" "$VAULT/Sources/2026-04-06_bbbb0002"
 
 cleanup_capture_test
 summary

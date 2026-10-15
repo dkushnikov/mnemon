@@ -52,5 +52,27 @@ auto_detect_origin: true
 # Extractor fence (optional). The extractor runs `claude -p --restricted --tools ""` in a
 # per-attempt work directory with the content inline; these bound it.
 # extract_timeout: 900              # seconds before the extractor's process group is terminated
-# extract_inline_max_bytes: 400000  # larger capture-text is retained, not extracted (unsupported-size)
-# extract_max_usd: 0.50             # passed as --max-budget-usd when set
+# extract_inline_max_bytes: 400000  # larger capture-text is split into parts (extract_max_parts),
+#                                   # each extracted apart and merged; above that → unsupported-size
+# extract_max_usd: 0.50             # one budget for the capture's lifetime: every billable call
+#                                   # (parts, merge, retries) is debited from it; unset = no cap
+# extract_max_parts: 8              # at most this many parts for an oversized capture-text
+
+# Capture layer (optional; docs/specs/2026-10-15-capture-layer.md §5). Precedence: command-line
+# flag > this file > default. Numeric keys refuse non-numeric, negative and non-finite values,
+# and fractions where an integer is expected (exit 2 at config load).
+# external_fetch: off               # off | auto — auto lets the fetch chain fall back to an
+#                                   # external fetcher (Firecrawl, Jina) after a bot wall, a 403
+#                                   # or a JavaScript shell; never past a login, a paywall or a
+#                                   # rate limit. Keys from FIRECRAWL_API_KEY / JINA_API_KEY.
+# external_fetchers: firecrawl,jina # the order the fetchers are tried in
+# fetch_user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+# fetch_timeout: 60                 # seconds for one direct request: connect = min(15, T/4), read = the rest
+# fetch_max_bytes: 20000000         # a larger (decoded) body fails too-large, never a truncated raw
+# render_timeout: 90                # seconds for the headless-Chrome render stage
+# render_max_bytes: 20000000        # cap on the rendered DOM output
+# acquire_timeout: 300              # seconds for the whole acquisition of one URL (every stage)
+# transcribe_timeout: 3600          # seconds for yt-dlp, ffprobe, whisper and the caption fetch
+# site_max_pages: 40                # pages a site plan may include (mnemon site map / --site)
+# site_timeout: 900                 # seconds for site mapping and for the bundle fetch loop
+# thin_words: 60                    # a page with fewer visible words is thin (rendered once)

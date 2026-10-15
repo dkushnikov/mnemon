@@ -1,0 +1,9 @@
+{
+  "title": "Part title",
+  "summary": "A part summary of at least fifty characters describing what this part of the source covers and claims.",
+  "key_ideas": [
+    {"claim": "Capture contracts make fidelity checkable instead of asserted", "domain": "learning"},
+    {"claim": "Source before LLM leaves no empty revision folder", "domain": "testing"}
+  ],
+  "quotes": ["Source before LLM."]
+}

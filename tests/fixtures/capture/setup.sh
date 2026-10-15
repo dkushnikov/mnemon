@@ -1,15 +1,48 @@
 #!/usr/bin/env bash
-# Shared scaffolding for tests/test_capture.sh, test_fence.sh and test_lock.sh: a temp XDG tree,
-# a vault, an instance config, the stubs of spec §9 (claude, curl, render-url.sh, defuddle,
-# pdftotext, pdfinfo, media-extract.py) and a probe record for the stub's version.
-# Source it after tests/test-helper.sh with MNEMON_ROOT set; it exports everything the gateway
-# needs and defines helpers. bash 3.2.
+# Shared scaffolding for tests/test_capture.sh, test_gateway.sh, test_archival.sh, test_site.sh,
+# test_chunked.sh, test_fence.sh and test_lock.sh: a temp XDG tree, a vault, an instance config,
+# the stubs of the capture contracts §9 and of the capture layer's seams (claude, capture-fetch.py,
+# capture-site.py, render-url.sh, defuddle, pdftotext, pdfinfo, media-extract.py, kb-depth-fold.py)
+# and a probe record for the stub's version. Source it after tests/test-helper.sh with MNEMON_ROOT
+# set; it exports everything the gateway needs and defines helpers. bash 3.2.
+#
+# The seam stubs write complete reports of the frozen schemas in tests/fixtures/capture/reports/
+# (every key of the fixture, values per mode), so the gateway consumes the real shapes:
+#   capture-fetch.py  STUB_FETCH: html (default) · empty · pdf · audio · rendered · external ·
+#                     blocked-botwall · blocked-login · blocked-paywall · rate-limit ·
+#                     js-shell-noenv · timeout · fail;  --canonical-only [--stdin] strips tracking
+#                     keys and fragments, routes youtube/arxiv/github kinds; counts real fetches in
+#                     $STUB_DIR/fetch-count and canonical lookups in $STUB_DIR/canon-count; every
+#                     argv line in $STUB_DIR/fetch-calls; STUB_FETCH_HOOK (alias STUB_CURL_HOOK)
+#                     runs after the raw is written; STUB_FETCH_EXT names the sniffed audio ext;
+#                     STUB_FETCH_PUBLISHED="<date>|<source>" sets metadata.published(_source);
+#                     STUB_FETCH_HTML_META="<meta …>" injects tags into the html raw's <head>
+#   capture-site.py   map · fetch-bundle · verify · assemble (STUB_SITE: ok (default) · page-fail ·
+#                     landing-fail · timeout-after-landing · timeout; STUB_SITE_CONVERT_FAIL=<n>
+#                     makes page n convert-failed); calls in $STUB_DIR/site-calls
+#   kb-depth-fold.py  STUB_DEPTH: off (default) · fold · timeout, the A8 shape (targets, no
+#                     composite_body); argv in $STUB_DIR/depth-calls
+#   media-extract.py  STUB_YT=whisper (the whisper fallback), STUB_MEDIA: ok · timeout · env;
+#                     accepts --timeout and records it in $STUB_DIR/media-calls
 
 FIX="$MNEMON_ROOT/tests/fixtures/capture"
 TEST_TMPDIR="$(cd "$(mktemp -d -t mnemon-cap-XXXX)" && pwd -P)"
 export XDG_CONFIG_HOME="$TEST_TMPDIR/xdg" XDG_STATE_HOME="$TEST_TMPDIR/state"
 unset MNEMON_CONFIG MNEMON_INSTANCE MNEMON_CONFIG_DIR MNEMON_VAULT_LOCK_FD MNEMON_VAULT_LOCK_INODE
-unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT STUB_MODE STUB_FIXTURE_BAD STUB_CURL STUB_RENDER STUB_DEFUDDLE STUB_PDFTOTEXT
+unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT STUB_MODE STUB_FIXTURE_BAD STUB_CURL STUB_FETCH STUB_RENDER STUB_DEFUDDLE STUB_PDFTOTEXT
+# capture layer §7.16: inherited keys, proxies and test hooks never reach a suite
+unset FIRECRAWL_API_KEY JINA_API_KEY HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
+unset MNEMON_POLICY_ALLOW_LOOPBACK MNEMON_FETCH_URL_REWRITE MNEMON_EXTERNAL_FETCH_CMD
+unset MNEMON_CAPTURE_FETCH_CMD MNEMON_CAPTURE_SITE_CMD MNEMON_DEPTH_FOLD_CMD MEDIA_EXTRACT_CMD RENDER_URL_CMD
+unset STUB_SITE STUB_SITE_CONVERT_FAIL STUB_DEPTH STUB_MEDIA STUB_YT STUB_FETCH_HOOK STUB_CURL_HOOK STUB_FETCH_EXT STUB_FETCH_PUBLISHED
+unset STUB_FIXTURE_PART STUB_FIXTURE_PART_BAD STUB_PART_BAD_CALLS STUB_FAIL_CALLS STUB_COST STUB_COST_NULL
+echo "toolchain: $(bash --version | head -1) · $(python3 --version 2>&1)"
+# the legacy run (PATH=/usr/bin:/bin:$PATH, §7.16 / A12): when the system bash is first on PATH
+# the suite must really be running bash 3.2 and python 3.9 — asserted, not assumed
+if [[ "$(command -v bash)" == /bin/bash ]]; then
+  [[ "$(bash --version | head -1)" == *"version 3.2."* ]] && pass "legacy toolchain: bash 3.2.x" || fail "legacy toolchain: bash 3.2.x" "$(bash --version | head -1)"
+  [[ "$(python3 --version 2>&1)" == "Python 3.9."* ]] && pass "legacy toolchain: python 3.9.x" || fail "legacy toolchain: python 3.9.x" "$(python3 --version 2>&1)"
+fi
 VAULT="$TEST_TMPDIR/vault"
 ARCHIVE="$TEST_TMPDIR/archive"
 STUBS="$TEST_TMPDIR/stubs"
@@ -33,22 +66,490 @@ sed '/^archive_dir:/d; s/^instance: captest/instance: captest-noarchive/' "$CONF
 
 # --- stubs ---
 cp "$FIX/stub-claude.sh" "$STUBS/claude"
-cat > "$STUBS/curl" <<'STUB'
-#!/usr/bin/env bash
-# STUB_CURL: html (default) | empty | pdf | fail · counts calls in $STUB_DIR/curl-count ·
-# STUB_CURL_HOOK: a command run after the download (e.g. to remove the probe record mid-capture)
-out=""; prev=""
-for a in "$@"; do [[ "$prev" == "-o" ]] && out="$a"; prev="$a"; done
-echo $(( $(cat "$STUB_DIR/curl-count" 2>/dev/null || echo 0) + 1 )) > "$STUB_DIR/curl-count"
-case "${STUB_CURL:-html}" in
-  html)  [[ -n "$out" ]] && printf '<html><head><title> Stub &amp; Page\n  Title </title></head><body><h1>Hello</h1><p>World <b>bold</b> from curl.</p></body></html>' > "$out" ;;
-  empty) [[ -n "$out" ]] && printf '<html><head><title>Empty</title></head><body></body></html>' > "$out" ;;
-  pdf)   [[ -n "$out" ]] && printf '%%PDF-1.7\n\000\000binary\n%%%%EOF\n' > "$out" ;;
-  audio) [[ -n "$out" ]] && printf 'RIFFstubaudio' > "$out" ;;
-  *)     exit 22 ;;
-esac
-[[ -n "${STUB_CURL_HOOK:-}" ]] && eval "$STUB_CURL_HOOK"
-exit 0
+cat > "$STUBS/capture-fetch.py" <<'STUB'
+#!/usr/bin/env python3
+"""capture-fetch.py stub (capture layer §3.1, §3.3): the seam contract as the fixtures freeze it."""
+import json, os, re, subprocess, sys, hashlib
+from urllib.parse import urlsplit, urlunsplit
+
+STUB_DIR = os.environ.get("STUB_DIR", "")
+TRACKING = {"fbclid", "gclid", "dclid", "gbraid", "wbraid", "msclkid", "yclid", "twclid", "ttclid", "igshid", "igsh",
+            "mc_cid", "mc_eid", "_hsenc", "_hsmi", "hsCtaTracking", "mkt_tok", "_ga", "_gl", "ref_src", "ref_url",
+            "hide_intro_popup"}
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+
+
+def bump(name):
+    if not STUB_DIR:
+        return
+    p = os.path.join(STUB_DIR, name)
+    n = 0
+    if os.path.exists(p):
+        n = int(open(p).read().strip() or 0)
+    open(p, "w").write(str(n + 1) + "\n")
+
+
+def canonical(url):
+    u = url.strip()
+    parts = urlsplit(u)
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+        return None
+    if parts.username or parts.password:
+        return None
+    host = parts.hostname.lower()
+    port = parts.port
+    netloc = host if port in (None, 80, 443) else f"{host}:{port}"
+    path = parts.path
+    query = "&".join(p for p in parts.query.split("&") if p and not (p.split("=", 1)[0] in TRACKING or p.split("=", 1)[0].startswith("utm_")))
+    frag = parts.fragment if parts.fragment.startswith(("!", "/")) else ""
+    kind, requested = "page", None
+    m = re.match(r"^(?:www\.|m\.|music\.)?youtube\.com$", host)
+    if m or host == "youtu.be":
+        vid = None
+        if host == "youtu.be":
+            vid = path.strip("/").split("/")[0]
+        else:
+            mm = re.match(r"^/(?:shorts|embed|live)/([A-Za-z0-9_-]+)", path)
+            if mm:
+                vid = mm.group(1)
+            elif path == "/watch":
+                for p in parts.query.split("&"):
+                    if p.startswith("v="):
+                        vid = p[2:]
+        if vid:
+            return {"canonical_url": f"https://www.youtube.com/watch?v={vid}", "kind": "youtube",
+                    "fetch_url": f"https://www.youtube.com/watch?v={vid}", "requested_version": None}
+    if host == "arxiv.org":
+        mm = re.match(r"^/(?:abs|pdf|html)/([0-9]{4}\.[0-9]{4,5}|[a-z-]+/[0-9]{7})(?:v([0-9]+))?(?:\.pdf)?/?$", path)
+        if mm:
+            requested = int(mm.group(2)) if mm.group(2) else None
+            return {"canonical_url": f"https://arxiv.org/abs/{mm.group(1)}", "kind": "arxiv",
+                    "fetch_url": f"https://arxiv.org/abs/{mm.group(1)}" + (f"v{requested}" if requested else ""),
+                    "requested_version": requested}
+    if host in ("github.com", "www.github.com"):
+        kind = "github"
+    cu = urlunsplit((parts.scheme.lower(), netloc, path, query, frag))
+    return {"canonical_url": cu, "kind": kind, "fetch_url": cu, "requested_version": requested}
+
+
+def canonical_obj(url):
+    c = canonical(url)
+    if c is None:
+        return {"error_class": "invalid-url", "error": f"not an http(s) URL without userinfo: {url.strip()}"}
+    return {"schema": "mnemon-canonical/1", "url": url.strip(), "canonical_url": c["canonical_url"], "canonical_version": 1,
+            "kind": c["kind"], "fetch_url": c["fetch_url"], "requested_version": c["requested_version"]}
+
+
+def main():
+    argv = sys.argv[1:]
+    if "--canonical-only" in argv:
+        bump("canon-count")
+        if "--stdin" in argv:
+            for line in sys.stdin.read().splitlines():
+                if line.strip():
+                    print(json.dumps(canonical_obj(line), ensure_ascii=False))
+            return 0
+        url = [a for a in argv if not a.startswith("--")][0]
+        obj = canonical_obj(url)
+        if "error_class" in obj:
+            print(json.dumps(obj), file=sys.stderr)
+            return 2
+        print(json.dumps(obj, ensure_ascii=False))
+        return 0
+    opts = {"--out": None, "--report": None, "--expect": "page", "--policy": None, "--external": None,
+            "--acquire-timeout": None, "--render-timeout": None, "--render-cmd": None, "--kind": None}
+    flags = set()
+    url = None
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in opts:
+            opts[a] = argv[i + 1]
+            i += 2
+            continue
+        if a.startswith("--"):
+            flags.add(a)
+        else:
+            url = a
+        i += 1
+    bump("fetch-count")
+    if STUB_DIR:
+        with open(os.path.join(STUB_DIR, "fetch-calls"), "a") as fh:
+            fh.write(" ".join(argv) + "\n")
+    mode = os.environ.get("STUB_FETCH", os.environ.get("STUB_CURL", "html"))
+    if "--render" in flags and mode == "html":
+        mode = "rendered"   # a forced render starts at stage 2 (A7): the raw is the rendered DOM
+    c = canonical(url) or {"canonical_url": url, "kind": "page", "fetch_url": url, "requested_version": None}
+    kind = opts["--kind"] or c["kind"]
+    expect = opts["--expect"]
+    policy = json.loads(opts["--policy"]) if opts["--policy"] else {}
+    report = {
+        "schema": "mnemon-fetch/1", "url": url, "fetch_url": c["fetch_url"], "canonical_url": c["canonical_url"],
+        "canonical_version": 1, "kind": kind, "requested_version": c["requested_version"], "final_url": c["fetch_url"],
+        "method": "direct", "raw_kind": "response", "http_status": 200, "content_type": "text/html", "charset": "utf-8",
+        "bytes": 0, "ext": None, "audio_sniff": None, "egress": "direct",
+        "stages": [{"stage": "direct", "outcome": "ok", "kind": None, "status": 200, "bytes": 0, "elapsed_ms": 12, "note": None}],
+        "acquisition": {"outcome": "ok", "kind": None, "evidence": None, "visible_words": 120},
+        "metadata": {"title": None, "authors": [], "published": None, "published_source": None, "arxiv_id": None,
+                     "arxiv_version": None, "arxiv_requested_version": None, "declared_canonical_url": None},
+        "hops": [{"url": c["fetch_url"], "status": 200, "address": "203.0.113.10"}],
+        "elapsed_ms": 12, "error_class": None, "error": None, "retryable": None, "stage": None,
+        "policy": {"user_agent": policy.get("user_agent", UA), "max_bytes": policy.get("max_bytes", 20000000),
+                   "max_redirects": 5, "connect_timeout": policy.get("connect_timeout", 15),
+                   "read_timeout": policy.get("read_timeout", 45)},
+    }
+    pub = os.environ.get("STUB_FETCH_PUBLISHED", "")
+    if pub:
+        value, _, source = pub.partition("|")
+        report["metadata"]["published"], report["metadata"]["published_source"] = value, source or None
+    if kind == "arxiv":
+        aid = c["canonical_url"].rsplit("/", 1)[-1]
+        ver = c["requested_version"] or 3
+        report["metadata"].update({"title": "ArXiv Stub Paper", "authors": ["Ada Lovelace", "Charles Babbage"],
+                                   "published": "2026-01-02", "published_source": "citation_date", "arxiv_id": aid,
+                                   "arxiv_version": ver, "arxiv_requested_version": c["requested_version"]})
+        report["final_url"] = f"https://arxiv.org/html/{aid}v{ver}"
+    raw = None
+    rc = 0
+    if mode == "html":
+        meta = os.environ.get("STUB_FETCH_HTML_META", "").encode("utf-8")
+        raw = b'<html><head><title> Stub &amp; Page\n  Title </title>' + meta + b'</head><body><h1>Hello</h1><p>World <b>bold</b> from fetch.</p></body></html>'
+    elif mode == "empty":
+        raw = b"<html><head><title>Empty</title></head><body></body></html>"
+    elif mode == "pdf":
+        raw = b"%PDF-1.7\n\x00\x00binary\n%%EOF\n"
+        report.update({"content_type": "application/pdf", "raw_kind": "file"})
+    elif mode == "audio":
+        raw = b"RIFFstubaudio"
+        report.update({"content_type": "audio/mpeg", "raw_kind": "file"})
+    elif mode == "rendered":
+        raw = b"<html><head><title>Rendered Page</title></head><body><h1>Rendered</h1><p>rendered text content from the DOM after scripts ran.</p></body></html>"
+        report.update({"method": "render", "raw_kind": "rendered", "http_status": None, "final_url": None,
+                       "content_type": None, "charset": None,
+                       "stages": [{"stage": "direct", "outcome": "js-shell", "kind": "js-shell", "status": 200, "bytes": 1800, "elapsed_ms": 90, "note": "empty #root"},
+                                  {"stage": "render", "outcome": "ok", "kind": None, "status": None, "bytes": 130, "elapsed_ms": 2400, "note": None}]})
+    elif mode == "external":
+        raw = b"<html><head><title>Vendor Page</title></head><body><h1>Vendor</h1><p>text relayed by the vendor after the wall.</p></body></html>"
+        report.update({"method": "firecrawl", "egress": "external",
+                       "stages": [{"stage": "direct", "outcome": "bot-wall", "kind": "bot-wall", "status": 403, "bytes": 900, "elapsed_ms": 50, "note": "cf-chl"},
+                                  {"stage": "render", "outcome": "bot-wall", "kind": "bot-wall", "status": None, "bytes": 900, "elapsed_ms": 3000, "note": None},
+                                  {"stage": "external", "outcome": "ok", "kind": None, "status": 200, "bytes": 120, "elapsed_ms": 900, "note": "firecrawl"}]})
+    elif mode == "blocked-paywall":
+        raw = b"<html><head><title>Teaser</title></head><body><p>the first paragraphs before the wall, real text that stays readable</p><div class=\"paywall\">subscribe to continue reading</div></body></html>"
+        report["acquisition"] = {"outcome": "paywall", "kind": "paywall", "evidence": "subscribe to continue reading", "visible_words": 70}
+        report["stages"][0].update({"outcome": "paywall", "kind": "paywall"})
+    elif mode in ("blocked-botwall", "blocked-login", "rate-limit", "fail", "js-shell-noenv", "timeout"):
+        rc = 1
+        report.update({"method": None, "raw_kind": None, "bytes": 0})
+        if mode == "blocked-botwall":
+            report.update({"http_status": 403, "error_class": "blocked", "error": "bot wall: cf-chl (direct and render)", "retryable": False, "stage": "render",
+                           "acquisition": {"outcome": "bot-wall", "kind": "bot-wall", "evidence": "cf-chl", "visible_words": 20},
+                           "stages": [{"stage": "direct", "outcome": "bot-wall", "kind": "bot-wall", "status": 403, "bytes": 900, "elapsed_ms": 50, "note": "cf-chl"},
+                                      {"stage": "render", "outcome": "bot-wall", "kind": "bot-wall", "status": None, "bytes": 900, "elapsed_ms": 3000, "note": None}]})
+        elif mode == "blocked-login":
+            report.update({"error_class": "blocked", "error": "login wall: sign in to continue (no escalation past a login)", "retryable": False, "stage": "direct",
+                           "acquisition": {"outcome": "login", "kind": "login", "evidence": "sign in to continue", "visible_words": 41},
+                           "stages": [{"stage": "direct", "outcome": "login", "kind": "login", "status": 200, "bytes": 2210, "elapsed_ms": 150, "note": "marker: sign in to continue; visible words 41"}]})
+        elif mode == "rate-limit":
+            report.update({"http_status": 429, "error_class": "blocked", "error": "rate limited (429, Retry-After 120)", "retryable": True, "stage": "direct",
+                           "acquisition": {"outcome": "rate-limit", "kind": "rate-limit", "evidence": "429", "visible_words": 0},
+                           "stages": [{"stage": "direct", "outcome": "rate-limit", "kind": "rate-limit", "status": 429, "bytes": 0, "elapsed_ms": 40, "note": "Retry-After: 120"}]})
+        elif mode == "fail":
+            report.update({"http_status": None, "final_url": None, "hops": [], "error_class": "connection", "error": "connection refused", "retryable": True, "stage": "direct",
+                           "acquisition": {"outcome": "unavailable", "kind": None, "evidence": None, "visible_words": 0},
+                           "stages": [{"stage": "direct", "outcome": "connection", "kind": None, "status": None, "bytes": 0, "elapsed_ms": 30, "note": "connection refused"}]})
+        elif mode == "js-shell-noenv":
+            rc = 3
+            report.update({"error_class": "environment", "error": "js-shell with no renderer and no external fetcher allowed", "retryable": True, "stage": "render",
+                           "acquisition": {"outcome": "js-shell", "kind": "js-shell", "evidence": "empty #root", "visible_words": 12},
+                           "stages": [{"stage": "direct", "outcome": "js-shell", "kind": "js-shell", "status": 200, "bytes": 1800, "elapsed_ms": 90, "note": "empty #root; script bytes 71%"}]})
+        elif mode == "timeout":
+            rc = 124
+            report.update({"error_class": "timeout", "error": "render stage exceeded render_timeout=90", "retryable": True, "stage": "render", "elapsed_ms": 90090,
+                           "acquisition": {"outcome": "js-shell", "kind": "js-shell", "evidence": "empty #root", "visible_words": 12},
+                           "stages": [{"stage": "direct", "outcome": "js-shell", "kind": "js-shell", "status": 200, "bytes": 1800, "elapsed_ms": 90, "note": "empty #root; script bytes 71%"},
+                                      {"stage": "render", "outcome": "timeout", "kind": None, "status": None, "bytes": 0, "elapsed_ms": 90000, "note": "render-url.sh killed with its process group after 90 s"}]})
+    else:
+        print(f"stub capture-fetch: unknown STUB_FETCH {mode}", file=sys.stderr)
+        return 22
+    if rc == 0 and expect == "pdf":
+        raw = b"%PDF-1.7\n\x00\x00binary\n%%EOF\n"
+        report.update({"content_type": "application/pdf", "raw_kind": "file"})
+    if rc == 0 and expect == "audio":
+        raw = b"RIFFstubaudio"
+        ext = os.environ.get("STUB_FETCH_EXT") or None
+        report.update({"content_type": "audio/mpeg" if ext == "mp3" else "application/octet-stream", "raw_kind": "file",
+                       "ext": ext, "audio_sniff": ("audio/mpeg" if ext == "mp3" else None)})
+    if rc == 0:
+        with open(opts["--out"], "wb") as fh:
+            fh.write(raw)
+        report["bytes"] = len(raw)
+        report["stages"][-1]["bytes"] = len(raw)
+    with open(opts["--report"], "w", encoding="utf-8") as fh:
+        json.dump(report, fh, ensure_ascii=False, indent=1)
+        fh.write("\n")
+    hook = os.environ.get("STUB_FETCH_HOOK") or os.environ.get("STUB_CURL_HOOK")
+    if hook and rc == 0:
+        subprocess.run(hook, shell=True)
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+STUB
+cat > "$STUBS/capture-site.py" <<'STUB'
+#!/usr/bin/env python3
+"""capture-site.py stub (capture layer §3.6): map · fetch-bundle · verify · assemble with real canonical-JSON manifests."""
+import hashlib, json, os, re, sys
+from urllib.parse import urlsplit
+
+STUB_DIR = os.environ.get("STUB_DIR", "")
+NOW = "2026-10-15T12:00:00Z"
+UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+
+
+def record(line):
+    if STUB_DIR:
+        with open(os.path.join(STUB_DIR, "site-calls"), "a") as fh:
+            fh.write(line + "\n")
+
+
+def canon_bytes(obj):
+    return (json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def sha(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def opt(argv, name, default=None):
+    if name in argv:
+        return argv[argv.index(name) + 1]
+    return default
+
+
+FLAGS = {"--json", "--no-render", "--no-external"}
+
+
+def positional(argv):
+    """the positional arguments: every token that is neither an option nor an option's value"""
+    out, skip = [], False
+    for a in argv:
+        if skip:
+            skip = False
+            continue
+        if a.startswith("--"):
+            skip = a not in FLAGS
+            continue
+        out.append(a)
+    return out
+
+
+def page_html(title, text):
+    return f"<html><head><title>{title}</title></head><body><h1>{title}</h1><p>{text}</p></body></html>\n".encode("utf-8")
+
+
+def fetch_report(url, nbytes):
+    return {"schema": "mnemon-fetch/1", "url": url, "fetch_url": url, "canonical_url": url, "canonical_version": 1, "kind": "page",
+            "requested_version": None, "final_url": url, "method": "direct", "raw_kind": "response", "http_status": 200,
+            "content_type": "text/html", "charset": "utf-8", "bytes": nbytes, "ext": None, "audio_sniff": None, "egress": "direct",
+            "stages": [{"stage": "direct", "outcome": "ok", "kind": None, "status": 200, "bytes": nbytes, "elapsed_ms": 10, "note": None}],
+            "acquisition": {"outcome": "ok", "kind": None, "evidence": None, "visible_words": 4},
+            "metadata": {"title": None, "authors": [], "published": None, "published_source": None, "arxiv_id": None, "arxiv_version": None,
+                         "arxiv_requested_version": None, "declared_canonical_url": None},
+            "hops": [{"url": url, "status": 200, "address": "203.0.113.10"}], "elapsed_ms": 10, "error_class": None, "error": None,
+            "retryable": None, "stage": None,
+            "policy": {"user_agent": UA, "max_bytes": 20000000, "max_redirects": 5, "connect_timeout": 15, "read_timeout": 45}}
+
+
+def cmd_map(argv):
+    url = positional(argv)[1]
+    out = opt(argv, "--out")
+    base = url if url.endswith("/") else url + "/"
+    host = urlsplit(url).hostname
+    max_pages = int(opt(argv, "--max-pages", "40"))
+    plan = {"schema": "mnemon-site-plan/1", "landing": url, "created": NOW,
+            "discovery": {"sources": [{"name": "landing-links", "yield": 4, "note": None},
+                                      {"name": "sitemap", "yield": 2, "note": "/sitemap.xml via robots.txt Sitemap:"}],
+                          "robots": {"fetched": True, "status": 200, "groups": ["*"], "rules_applied": ["Disallow: /private"]}},
+            "hosts": [host, "docs." + host],
+            "pages": [
+                {"n": 1, "url": url, "canonical_url": url, "role": "landing", "include": True, "reason": "landing", "title": "Example", "discovered_by": "landing", "render": None},
+                {"n": 2, "url": base + "product", "canonical_url": base + "product", "role": "product", "include": True, "reason": "product page", "title": "Product", "discovered_by": "landing-links", "render": None},
+                {"n": 3, "url": f"https://docs.{host}/guide", "canonical_url": f"https://docs.{host}/guide", "role": "docs", "include": True, "reason": "docs", "title": "Guide", "discovered_by": "docs-toc", "render": None},
+                {"n": 4, "url": base + "privacy", "canonical_url": base + "privacy", "role": "legal", "include": False, "reason": "excluded: legal", "title": "Privacy", "discovered_by": "sitemap", "render": None},
+                {"n": 5, "url": base + "private/x", "canonical_url": base + "private/x", "role": "other", "include": False, "reason": "excluded: robots", "title": None, "discovered_by": "sitemap", "render": None},
+            ],
+            "caps": {"max_pages": max_pages}}
+    data = json.dumps(plan, ensure_ascii=False, indent=1) + "\n"
+    if out:
+        with open(out, "w", encoding="utf-8") as fh:
+            fh.write(data)
+    if "--json" in argv or not out:
+        sys.stdout.write(data)
+    return 0
+
+
+def cmd_fetch_bundle(argv):
+    plan_path = positional(argv)[1]
+    out = opt(argv, "--out")
+    report_path = opt(argv, "--report")
+    mode = os.environ.get("STUB_SITE", "ok")
+    plan_bytes = open(plan_path, "rb").read()
+    plan = json.loads(plan_bytes.decode("utf-8"))
+    if mode == "timeout":
+        if report_path:
+            json.dump({"error_class": "timeout", "error": "landing exceeded site_timeout", "retryable": True, "stage": "landing"}, open(report_path, "w"))
+        return 124
+    if mode == "landing-fail":
+        if report_path:
+            json.dump({"error_class": "blocked", "error": "landing: bot wall", "retryable": False, "stage": "landing"}, open(report_path, "w"))
+        return 1
+    os.makedirs(out, exist_ok=True)
+    included = [p for p in plan["pages"] if p.get("include")]
+    members = []
+    pages = []
+    for i, p in enumerate(included):
+        nn = "%02d" % p["n"]
+        if mode == "page-fail" and i == len(included) - 1 and i > 0:
+            fr = fetch_report(p["url"], 0)
+            fr.update({"http_status": 500, "method": None, "raw_kind": None, "error_class": "server-error", "error": "HTTP 500", "retryable": True, "stage": "direct"})
+            frb = canon_bytes(fr)
+            open(os.path.join(out, nn + ".fetch.json"), "wb").write(frb)
+            members.append({"path": nn + ".fetch.json", "bytes": len(frb), "sha256": sha(frb)})
+            pages.append({"n": p["n"], "url": p["url"], "role": p["role"], "file": None, "fetch_report": nn + ".fetch.json", "sha256": None, "bytes": None,
+                          "disposition": "fetch-failed", "error_class": "server-error", "error": "HTTP 500", "raw_kind": None, "http_status": 500})
+            continue
+        if mode == "timeout-after-landing" and i > 0:
+            pages.append({"n": p["n"], "url": p["url"], "role": p["role"], "file": None, "fetch_report": None, "sha256": None, "bytes": None,
+                          "disposition": "skipped-timeout", "error_class": "timeout", "error": "site_timeout reached", "raw_kind": None, "http_status": None})
+            continue
+        html = page_html(p.get("title") or p["role"], f"{p['role']} text of page {p['n']}")
+        frb = canon_bytes(fetch_report(p["url"], len(html)))
+        open(os.path.join(out, nn + ".html"), "wb").write(html)
+        open(os.path.join(out, nn + ".fetch.json"), "wb").write(frb)
+        members.append({"path": nn + ".html", "bytes": len(html), "sha256": sha(html)})
+        members.append({"path": nn + ".fetch.json", "bytes": len(frb), "sha256": sha(frb)})
+        pages.append({"n": p["n"], "url": p["url"], "role": p["role"], "file": nn + ".html", "fetch_report": nn + ".fetch.json", "sha256": sha(html),
+                      "bytes": len(html), "disposition": "captured", "error_class": None, "error": None, "raw_kind": "response", "http_status": 200})
+    open(os.path.join(out, "plan.json"), "wb").write(plan_bytes)
+    members.append({"path": "plan.json", "bytes": len(plan_bytes), "sha256": sha(plan_bytes)})
+    manifest = {"schema": "mnemon-site-bundle/1", "landing": plan["landing"], "created": NOW, "pages": pages, "members": members}
+    mb = canon_bytes(manifest)
+    open(os.path.join(out, "manifest.json"), "wb").write(mb)
+    if report_path:
+        json.dump({"error_class": None, "error": None, "retryable": None, "stage": None, "pages": len(pages)}, open(report_path, "w"))
+    print(json.dumps({"raw_sha256": sha(mb), "raw_bytes": sum(m["bytes"] for m in members)}))
+    return 0
+
+
+def verify_dir(d, expected):
+    mp = os.path.join(d, "manifest.json")
+    if not os.path.isfile(mp):
+        return "evidence-missing manifest.json"
+    mb = open(mp, "rb").read()
+    if sha(mb) != expected:
+        return "evidence-mismatch manifest"
+    manifest = json.loads(mb.decode("utf-8"))
+    for m in manifest["members"]:
+        p = os.path.join(d, m["path"])
+        if ".." in m["path"].split("/") or m["path"].startswith("/"):
+            return "evidence-mismatch " + m["path"]
+        if os.path.islink(p):
+            return "evidence-mismatch " + m["path"]
+        if not os.path.isfile(p):
+            return "evidence-missing " + m["path"]
+        b = open(p, "rb").read()
+        if len(b) != m["bytes"] or sha(b) != m["sha256"]:
+            return "evidence-mismatch " + m["path"]
+    return None
+
+
+def cmd_verify(argv):
+    d = positional(argv)[1]
+    err = verify_dir(d, opt(argv, "--sha256"))
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_assemble(argv):
+    d = positional(argv)[1]
+    out = opt(argv, "--out")
+    report_path = opt(argv, "--report")
+    manifest = json.loads(open(os.path.join(d, "manifest.json"), "rb").read().decode("utf-8"))
+    plan = json.loads(open(os.path.join(d, "plan.json"), "rb").read().decode("utf-8"))
+    titles = {p["n"]: p.get("title") for p in plan["pages"]}
+    cfail = os.environ.get("STUB_SITE_CONVERT_FAIL", "")
+    cfail = {int(x) for x in cfail.split(",") if x.strip()}
+    landing_title = titles.get(1) or "Site"
+    parts = [f"# {landing_title} — site capture\n"]
+    pages = []
+    converters = ["pandoc", "dom-text", "pandoc", "pandoc"]
+    for idx, p in enumerate(manifest["pages"]):
+        if p["disposition"] != "captured":
+            pages.append({"n": p["n"], "url": p["url"], "role": p["role"], "disposition": p["disposition"], "converter": None, "completeness": None,
+                          "missing_count": None, "glued_count": None, "words": 0, "bytes": 0, "error_class": p["error_class"], "error": p["error"]})
+            continue
+        if p["n"] in cfail:
+            pages.append({"n": p["n"], "url": p["url"], "role": p["role"], "disposition": "convert-failed", "converter": None, "completeness": None,
+                          "missing_count": None, "glued_count": None, "words": 0, "bytes": 0, "error_class": "convert", "error": "empty conversion output"})
+            continue
+        html = open(os.path.join(d, p["file"]), "rb").read().decode("utf-8")
+        m = re.search(r"<p>(.*?)</p>", html, re.S)
+        text = m.group(1) if m else ""
+        body = f"# {titles.get(p['n']) or p['role']}\n\n{text}\n"
+        conv = converters[idx % len(converters)]
+        pages.append({"n": p["n"], "url": p["url"], "role": p["role"], "disposition": "converted", "converter": conv, "completeness": "complete",
+                      "missing_count": 0, "glued_count": 0, "words": len(body.split()), "bytes": len(body.encode("utf-8")), "error_class": None, "error": None})
+        if p["n"] == 1:
+            parts.append(f"\n## Part 1 — {p['url']}\n\n{body}")
+        else:
+            parts.append(f"\n## Part {len(parts)} — {p['url']} ({p['role']})\n\n{body}")
+    composite = "".join(parts)
+    included = len(manifest["pages"])
+    captured = sum(1 for p in manifest["pages"] if p["disposition"] == "captured")
+    converted = sum(1 for p in pages if p["disposition"] == "converted")
+    if converted == included:
+        completeness = "complete"
+    else:
+        completeness = "partial"
+    report = {"schema": "mnemon-site/1", "pages": pages, "included": included, "captured": captured, "converted": converted,
+              "completeness": completeness, "words": len(composite.split()), "bytes": len(composite.encode("utf-8"))}
+    if report_path:
+        with open(report_path, "w", encoding="utf-8") as fh:
+            json.dump(report, fh, ensure_ascii=False, indent=1)
+            fh.write("\n")
+    landing_ok = any(p["n"] == 1 and p["disposition"] == "converted" for p in pages)
+    if not landing_ok:
+        print("assemble: the landing page did not convert", file=sys.stderr)
+        return 1
+    tmp = out + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(composite)
+    os.rename(tmp, out)
+    return 0
+
+
+def main():
+    argv = sys.argv[1:]
+    cmd = argv[0] if argv else ""
+    record(" ".join(argv))
+    if cmd == "map":
+        return cmd_map(argv)
+    if cmd == "fetch-bundle":
+        return cmd_fetch_bundle(argv)
+    if cmd == "verify":
+        return cmd_verify(argv)
+    if cmd == "assemble":
+        return cmd_assemble(argv)
+    print("stub capture-site: usage", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
 STUB
 cat > "$STUBS/render-url.sh" <<'STUB'
 #!/usr/bin/env bash
@@ -81,43 +582,56 @@ STUB
 cat > "$STUBS/media-extract.py" <<'STUB'
 #!/usr/bin/env bash
 # media-extract.py stub: youtube <url> --out-dir D … | audio --out-dir D (--url U | --file F) …
-# STUB_YT=whisper makes the youtube run report a downloaded audio (the whisper fallback);
-# every call is appended to $STUB_DIR/media-calls (the command and its --url/--file)
+# [--timeout S]. STUB_YT=whisper makes the youtube run report a downloaded audio (the whisper
+# fallback); STUB_MEDIA: ok (default) · timeout (error.json + exit 124) · env (exit 3). Every call is
+# appended to $STUB_DIR/media-calls (the command, its --url/--file and the --timeout it received).
 cmd="$1"; shift
-out=""; url=""; file=""; prev=""
+out=""; url=""; file=""; timeout=""; prev=""
 for a in "$@"; do
-  case "$prev" in --out-dir) out="$a" ;; --url) url="$a" ;; --file) file="$a" ;; esac
+  case "$prev" in --out-dir) out="$a" ;; --url) url="$a" ;; --file) file="$a" ;; --timeout) timeout="$a" ;; esac
   prev="$a"
 done
 [[ -n "$out" ]] || { echo "stub media-extract: --out-dir required" >&2; exit 1; }
-[[ -n "${STUB_DIR:-}" ]] && printf '%s url=%s file=%s\n' "$cmd" "$url" "$file" >> "$STUB_DIR/media-calls"
+[[ -n "${STUB_DIR:-}" ]] && printf '%s url=%s file=%s timeout=%s\n' "$cmd" "$url" "$file" "$timeout" >> "$STUB_DIR/media-calls"
 mkdir -p "$out"
+case "${STUB_MEDIA:-ok}" in
+  timeout) printf '{"schema":"mnemon-media-error/1","error_class":"timeout","stage":"download","elapsed_s":%s}\n' "${timeout:-0}" > "$out/error.json"; exit 124 ;;
+  env)     echo "stub media-extract: yt-dlp missing" >&2; exit 3 ;;
+esac
 printf 'transcript line one\ntranscript line two\n' > "$out/transcript.txt"
 if [[ "$cmd" == "youtube" ]]; then
   if [[ "${STUB_YT:-captions}" == "whisper" ]]; then
     printf 'RIFFstubytaudio' > "$out/audio.wav"
-    printf '{"schema":"mnemon-media/1","method":"whisper:tiny","audio_path":"%s","title":"Stub Video","duration":"0:10:00","upload_date":"20260101","video_id":"abc123xyz00"}\n' "$out/audio.wav" > "$out/media.json"
+    printf '{"schema":"mnemon-media/1","method":"whisper:tiny","audio_path":"%s","title":"Stub Video","duration":"0:10:00","upload_date":"20260101","video_id":"abc123xyz00","language":"en","original_language":"pt","track":null,"channel":"Stub Channel"}\n' "$out/audio.wav" > "$out/media.json"
   else
-    printf '{"schema":"mnemon-media/1","method":"captions:en:manual","audio_path":null,"title":"Stub Video","duration":"0:10:00","upload_date":"20260101","video_id":"abc123xyz00"}\n' > "$out/media.json"
+    printf '{"schema":"mnemon-media/1","method":"captions:en:manual","audio_path":null,"title":"Stub Video","duration":"0:10:00","upload_date":"20260101","video_id":"abc123xyz00","language":"en","original_language":"pt","track":{"lang":"en","kind":"manual","orig":false},"channel":"Stub Channel"}\n' > "$out/media.json"
   fi
 else
   if [[ -n "$file" ]]; then audio="$file"; else audio="$out/audio.wav"; printf 'RIFFstubaudio' > "$audio"; fi
-  printf '{"schema":"mnemon-media/1","method":"whisper:tiny","audio_path":"%s","title":"Stub Audio","duration":"0:01:00","upload_date":null,"video_id":null}\n' "$audio" > "$out/media.json"
+  printf '{"schema":"mnemon-media/1","method":"whisper:tiny","audio_path":"%s","title":"Stub Audio","duration":"0:01:00","upload_date":null,"video_id":null,"language":null,"original_language":null,"track":null,"channel":null}\n' "$audio" > "$out/media.json"
 fi
 STUB
 cat > "$STUBS/kb-depth-fold.py" <<'STUB'
 #!/usr/bin/env bash
-# depth-fold stub: STUB_DEPTH=off (default) answers not applied; STUB_DEPTH=fold answers a composite
-if [[ "${STUB_DEPTH:-off}" == "fold" ]]; then
-  printf '{"applied": true, "reason": "folded", "composite_body": "# Landing\\n\\nthin landing text\\n\\n# Folded: https://example.com/deeper\\n\\nfolded body\\n", "manifest_yaml": "posted_url: \\"https://example.com/thin\\"\\nfinal_url: \\"https://example.com/thin\\"\\nfolded_sources:\\n  - url: https://example.com/deeper\\n    confidence: high\\nfetch_status: ok\\nsecret_key: never-merged\\n", "folded": ["https://example.com/deeper"], "errors": []}\n'
-else
-  printf '{"applied": false, "reason": "depth off (stub)"}\n'
-fi
+# depth-fold stub (capture layer §4.2, §12 A8): the gateway calls it after the landing fetch with
+# --landing-file <staged raw> --budget-s <remaining> --context <json>; the answer lists the folded
+# targets only (no composite_body — the gateway assembles converted landing + targets once).
+# STUB_DEPTH=off (default) answers not applied; fold answers two targets; timeout answers a timeout.
+[[ -n "${STUB_DIR:-}" ]] && printf '%s\n' "$*" >> "$STUB_DIR/depth-calls"
+case "${STUB_DEPTH:-off}" in
+  fold)
+    printf '{"applied": true, "reason": "folded", "targets": [{"url": "https://example.com/deeper", "role": "docs", "header": "# Folded: https://example.com/deeper", "text": "folded body\\n", "status": 200, "sha256": "0000000000000000000000000000000000000000000000000000000000000001"}], "manifest_yaml": "posted_url: \\"https://example.com/thin\\"\\nfinal_url: \\"https://example.com/thin\\"\\ncanonical_url: \\"https://example.com/thin-declared\\"\\nfolded_sources:\\n  - url: https://example.com/deeper\\n    confidence: high\\nfetch_status: ok\\nsecret_key: never-merged\\n", "folded": ["https://example.com/deeper"], "errors": []}\n' ;;
+  timeout)
+    printf '{"applied": false, "reason": "timeout: budget exhausted before any target was fetched", "targets": [], "errors": ["timeout"]}\n' ;;
+  *)
+    printf '{"applied": false, "reason": "depth off (stub)"}\n' ;;
+esac
 STUB
 chmod +x "$STUBS"/*
 export PATH="$STUBS:$PATH"
 export RENDER_URL_CMD="$STUBS/render-url.sh" MEDIA_EXTRACT_CMD="$STUBS/media-extract.py" MNEMON_DEPTH_FOLD_CMD="$STUBS/kb-depth-fold.py"
-export STUB_DIR STUB_VAULT="$VAULT" STUB_FIXTURE="$FIX/extract-good.json"
+export MNEMON_CAPTURE_FETCH_CMD="$STUBS/capture-fetch.py" MNEMON_CAPTURE_SITE_CMD="$STUBS/capture-site.py"
+export STUB_DIR STUB_VAULT="$VAULT" STUB_FIXTURE="$FIX/extract-good.json" STUB_FIXTURE_PART="$FIX/extract-part-good.json"
 
 # probe record for the stub's version (D13)
 write_probe_record() {
@@ -128,7 +642,14 @@ write_probe_record
 # --- helpers ---
 stub_reset() { rm -rf "$STUB_DIR"; mkdir -p "$STUB_DIR"; }
 stub_calls() { cat "$STUB_DIR/count" 2>/dev/null || echo 0; }
-curl_calls() { cat "$STUB_DIR/curl-count" 2>/dev/null || echo 0; }
+fetch_calls() { cat "$STUB_DIR/fetch-count" 2>/dev/null || echo 0; }
+curl_calls() { fetch_calls; }   # the phase-1 name: real acquisitions through the fetch seam
+canon_calls() { cat "$STUB_DIR/canon-count" 2>/dev/null || echo 0; }
+site_calls() { local n; n="$(grep -c "^${1:-}" "$STUB_DIR/site-calls" 2>/dev/null)" || true; echo "${n:-0}"; }
+depth_calls() { cat "$STUB_DIR/depth-calls" 2>/dev/null || true; }
+# a stub `file` on PATH answering one mime type for everything (the §3.7 sniff); stub_file_off removes it
+stub_file_mime() { printf '#!/usr/bin/env bash\necho "%s"\n' "$1" > "$STUBS/file"; chmod +x "$STUBS/file"; }
+stub_file_off() { rm -f "$STUBS/file"; }
 
 # run_gw <args…>: runs the gateway with the test instance; sets out (stdout), err (stderr), rc
 out=""; err=""; rc=0
@@ -161,4 +682,6 @@ print(hashlib.sha256(d[i + 5:]).hexdigest())
 PY
 }
 fm() { awk -v k="$2" 'NR==1&&$0=="---"{f=1;next} f&&$0=="---"{exit} f{p=k": "; if(substr($0,1,length(p))==p){print substr($0,length(p)+1);exit}}' "$1"; }
+# capfm <source.md> <key>: a `  key: value` line of the capture: block
+capfm() { awk -v k="$2" 'NR==1&&$0=="---"{f=1;next} f&&$0=="---"{exit} f&&$0=="capture:"{c=1;next} c&&substr($0,1,1)!=" "{exit} c{p="  "k": "; if(substr($0,1,length(p))==p){print substr($0,length(p)+1);exit}}' "$1"; }
 cleanup_capture_test() { cd /; rm -rf "$TEST_TMPDIR"; }

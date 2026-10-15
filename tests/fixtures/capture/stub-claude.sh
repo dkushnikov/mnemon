@@ -15,6 +15,15 @@
 #   STUB_SLEEP        seconds to sleep in `sleep` mode (a child `sleep` is spawned too, so the
 #                     timeout test can check that the whole process group is reaped)
 #   STUB_MARKER       a string put on the child sleep's command line (pgrep -f target)
+#   STUB_FIXTURE_PART structured_output for a PART call of a chunked extraction (capture layer
+#                     §3.8): used when the prompt on stdin carries the part template's marker
+#                     line `<!-- mnemon:part-template -->`
+#   STUB_FIXTURE_PART_BAD + STUB_PART_BAD_CALLS="n,m"  call numbers that answer the bad part
+#                     fixture instead (the gateway's one validation re-run)
+#   STUB_FAIL_CALLS   "n,m": call numbers that exit 1 (a failing part)
+#   STUB_COST         total_cost_usd of every answer (default 0.012); STUB_COST_NULL=1 omits it
+#   STUB_BODY_FROM_TEMPLATE=1  rebuild the fixture's `body` from the `### ` headings of the prompt's
+#                     EXTRACTION TEMPLATE Body section (any source type's template validates)
 set -uo pipefail
 
 case "${1:-}" in
@@ -55,16 +64,47 @@ if [[ "$mode" == "bad-then-ok" ]]; then
   if [[ "$n" -eq 1 ]]; then fixture="${STUB_FIXTURE_BAD:?}"; fi
   mode=ok
 fi
+# a part call of a chunked extraction: the prompt carries the part template's marker line
+if grep -qF -- '<!-- mnemon:part-template -->' "$STUB_DIR/call-$n.stdin"; then
+  fixture="${STUB_FIXTURE_PART:-}"
+  echo part > "$STUB_DIR/call-$n.kind"
+  case ",${STUB_PART_BAD_CALLS:-}," in *",$n,"*) fixture="${STUB_FIXTURE_PART_BAD:?}" ;; esac
+else
+  echo main > "$STUB_DIR/call-$n.kind"
+fi
+case ",${STUB_FAIL_CALLS:-}," in *",$n,"*) echo "stub claude: simulated failure of call $n" >&2; exit 1 ;; esac
 
 emit() {  # <structured_output file or empty> <extra jq filter>
-  local so="$1" extra="${2:-.}"
+  local so="$1" extra="${2:-.}" cost
+  cost="${STUB_COST:-0.012}"
+  [[ "${STUB_COST_NULL:-}" == "1" ]] && cost=null
   if [[ -n "$so" ]]; then
-    jq -c --slurpfile so "$so" '{type:"result", subtype:"success", is_error:false, total_cost_usd:0.012, duration_ms:1500, num_turns:1, permission_denials:[], structured_output:$so[0]} | '"$extra"
+    jq -c --slurpfile so "$so" --argjson cost "$cost" '{type:"result", subtype:"success", is_error:false, total_cost_usd:$cost, duration_ms:1500, num_turns:1, permission_denials:[], structured_output:$so[0]} | '"$extra"
   else
-    jq -n -c '{type:"result", subtype:"success", is_error:false, total_cost_usd:0.012, duration_ms:1500, num_turns:1, permission_denials:[]} | '"$extra"
+    jq -n -c --argjson cost "$cost" '{type:"result", subtype:"success", is_error:false, total_cost_usd:$cost, duration_ms:1500, num_turns:1, permission_denials:[]} | '"$extra"
   fi
 }
 
+if [[ "${STUB_BODY_FROM_TEMPLATE:-}" == "1" && "$mode" == "ok" && -n "$fixture" && "$(cat "$STUB_DIR/call-$n.kind")" == "main" ]]; then
+  python3 - "$fixture" "$STUB_DIR/call-$n.stdin" > "$STUB_DIR/so-$n.json" <<'PYB'
+import json, sys
+so = json.load(open(sys.argv[1], encoding="utf-8"))
+prompt = open(sys.argv[2], encoding="utf-8", errors="replace").read()
+template = prompt.split("=== EXTRACTION TEMPLATE ===", 1)[-1].split("=== CONTENT ===", 1)[0].split("=== PART EXTRACTS", 1)[0]
+parts = template.split("\n## Body", 1)
+headings = []
+if len(parts) == 2:
+    for line in parts[1].split("\n")[1:]:
+        if line.startswith("## "):
+            break
+        if line.startswith("### "):
+            headings.append(line[4:].strip())
+if headings:
+    so["body"] = "".join("### %s\n\nStub text for %s.\n\n" % (h, h.lower()) for h in headings)
+print(json.dumps(so, ensure_ascii=False))
+PYB
+  fixture="$STUB_DIR/so-$n.json"
+fi
 case "$mode" in
   ok)            emit "${fixture:?STUB_FIXTURE must be set for ok}" <<< '{}' ;;
   exit1)         echo "stub claude: simulated failure" >&2; exit 1 ;;

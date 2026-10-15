@@ -61,12 +61,19 @@ Options:
   --dry-run             Print what would happen, the extractor argv and the prompt; write nothing
   --whisper-model <m>   Whisper model (default from config)
   --no-whisper          Disable whisper fallback for YouTube
-  --render              Pre-render URL via Chrome headless (SPAs); the rendered text is the raw
-  --depth auto|off|force  Depth-aware capture of thin landing pages (default auto)
+  --render              Force the rendered stage (headless Chrome); the raw is the rendered DOM HTML
+  --no-render           Never render (implies --no-external: no rendering, local or remote)
+  --no-external         Never fall back to an external fetcher (Firecrawl, Jina), whatever the instance allows
+  --site <plan|auto>    Site capture of the --url landing from a plan (`mnemon site map`) or an
+                        auto-generated one: the bundle of pages is the raw, the composite the text
+  --depth auto|off|force  Depth-aware capture of thin landing pages (default auto; off for --site)
+  --assume-cost <usd>   With --resume: reconcile every extractor call whose cost is unknown at this
+                        cost (the budget rule of a chunked extraction)
 
 Exit codes: 0 extracted / skipped-duplicate / replay · 1 failed or integrity-error · 2 usage or
-contract (unknown context, ref:mcp, writer_host, capture-id reuse with a different request) ·
-3 extractor environment missing before publication · 4 source published, extract not · 75 lock held
+contract (unknown context, ref:mcp, writer_host, capture-id reuse with a different request, an
+invalid URL, a refused site plan) · 3 extractor or capture-layer environment missing before
+publication · 4 source published, extract not · 75 lock held
 USAGE
   exit 1
 }
@@ -109,6 +116,11 @@ DRY_RUN=false
 WHISPER_MODEL_FLAG=""
 NO_WHISPER=false
 RENDER=false
+NO_RENDER=false
+NO_EXTERNAL=false
+SITE_MODE=""
+SITE_PLAN_FILE=""
+ASSUME_COST=""
 DEPTH="auto"
 BOUND_GIVEN=false
 
@@ -146,6 +158,10 @@ while [[ $# -gt 0 ]]; do
     --whisper-model) _need "$@"; WHISPER_MODEL_FLAG="$2"; shift 2 ;;
     --no-whisper)    NO_WHISPER=true; shift ;;
     --render)        RENDER=true; BOUND_GIVEN=true; shift ;;
+    --no-render)     NO_RENDER=true; BOUND_GIVEN=true; shift ;;
+    --no-external)   NO_EXTERNAL=true; BOUND_GIVEN=true; shift ;;
+    --site)          _need "$@"; if [[ "$2" == "auto" ]]; then SITE_MODE=auto; else SITE_MODE=file; SITE_PLAN_FILE="$2"; fi; BOUND_GIVEN=true; shift 2 ;;
+    --assume-cost)   _need "$@"; ASSUME_COST="$2"; shift 2 ;;
     --depth)         _need "$@"; DEPTH="$2"; BOUND_GIVEN=true; shift 2 ;;
     -h|--help)       usage ;;
     *)               echo "Unknown option: $1" >&2; usage ;;
@@ -153,6 +169,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$DEPTH" in auto|off|force) ;; *) echo "ERROR: --depth takes auto|off|force" >&2; exit 2 ;; esac
+if $RENDER && $NO_RENDER; then echo "ERROR: --render and --no-render are exclusive" >&2; exit 2; fi
+if [[ -n "$ASSUME_COST" ]]; then
+  [[ "$ASSUME_COST" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "ERROR: --assume-cost takes a non-negative number of dollars" >&2; exit 2; }
+  [[ -n "$RESUME" ]] || { echo "ERROR: --assume-cost only goes with --resume <revision|capture_id>" >&2; exit 2; }
+fi
+# a site capture is an acquisition mode of the landing resource (D9): no depth fold
+[[ -n "$SITE_MODE" ]] && DEPTH=off
 
 # Selectors: --config (explicit path) outranks --instance outranks the inherited
 # MNEMON_CONFIG / MNEMON_INSTANCE pair; both flags on one command line is an error.
@@ -172,7 +195,14 @@ load_config "$CONFIG_PATH"
 MODEL="${MODEL_FLAG:-$DEFAULT_MODEL}"
 [[ -n "$WHISPER_MODEL_FLAG" ]] && WHISPER_MODEL="$WHISPER_MODEL_FLAG"
 
+# --- Libraries: L1 archive helpers (RENDER_URL_CMD, backfill) and the capture contract ---
+source "$SCRIPT_DIR/lib-archive.sh"
+source "$SCRIPT_DIR/lib-capture.sh"
+
 # --- Auto-detect origin ---
+# A URL's kind comes from the capture layer's canonicalization (`capture-fetch.py --canonical-only`,
+# no network; §12 A12): youtube (watch, youtu.be, shorts, embed, live, music, m.) → the media path;
+# a .pdf URL → pdf; everything else (page, arxiv, github) → url. An explicit --origin wins.
 
 if [[ -z "$ORIGIN" && "$AUTO_DETECT_ORIGIN" == "true" ]]; then
   if [[ -n "$MANIFEST" ]]; then
@@ -184,7 +214,8 @@ if [[ -z "$ORIGIN" && "$AUTO_DETECT_ORIGIN" == "true" ]]; then
   elif [[ -n "$FILE_TEXT" ]]; then
     ORIGIN="text"
   elif [[ -n "$URL" ]]; then
-    if [[ "$URL" =~ (youtube\.com/watch|youtu\.be/|youtube\.com/shorts/) ]]; then
+    cap_canonical_lookup "$URL"
+    if [[ "$URL_KIND" == "youtube" ]]; then
       ORIGIN="youtube"
     elif [[ "$URL" =~ \.pdf(\?|#|$) ]]; then
       ORIGIN="pdf"
@@ -209,7 +240,9 @@ fi
 
 if [[ -z "$SOURCE_TYPE" ]]; then
   case "${ORIGIN:-}" in
-    url)        SOURCE_TYPE="article" ;;
+    url)        SOURCE_TYPE="article"
+                [[ -n "$URL" ]] && { cap_canonical_lookup "$URL"; [[ "$URL_KIND" == "arxiv" ]] && SOURCE_TYPE="paper"; }
+                [[ -n "$SITE_MODE" ]] && SOURCE_TYPE="website" ;;
     youtube)    SOURCE_TYPE="video" ;;
     audio)      SOURCE_TYPE="podcast" ;;
     pdf)        SOURCE_TYPE="paper" ;;
@@ -223,16 +256,26 @@ if [[ -z "$SOURCE_TYPE" ]]; then
   esac
 fi
 
-# --- Libraries: L1 archive helpers (RENDER_URL_CMD, backfill) and the capture contract ---
-source "$SCRIPT_DIR/lib-archive.sh"
-source "$SCRIPT_DIR/lib-capture.sh"
-
 # ---------------------------------------------------------------------------------------------
 # Contract checks that need no lock (exit 2 before any write)
 # ---------------------------------------------------------------------------------------------
 cap_contract_checks() {
   if [[ "$ORIGIN" == "ref:mcp" ]]; then
     cap_die2 "ref:mcp is not supported in phase 1 (D11): there is no acquisition step for MCP content. Capture it through an inbox producer (mnemon ingest) or paste it as --origin text."
+  fi
+  # the routing contract of §12 A12: an explicit --origin youtube needs a YouTube URL
+  if [[ "$ORIGIN" == "youtube" && -n "$URL" ]]; then
+    cap_canonical_lookup "$URL"
+    [[ "$URL_KIND" == "youtube" ]] || cap_die2 "--origin youtube needs a YouTube URL (watch, youtu.be, shorts, embed, live); $URL is a $URL_KIND"
+  fi
+  if [[ -n "$SITE_MODE" ]]; then
+    [[ -n "$URL" && "$ORIGIN" == "url" ]] || cap_die2 "--site needs a --url landing (a site capture is an acquisition mode of the landing page)"
+    if [[ "$SITE_MODE" == "file" ]]; then
+      [[ -f "$SITE_PLAN_FILE" ]] || cap_input_missing_exit "site plan not found: $SITE_PLAN_FILE"
+      cap_canonical_lookup "$URL"
+      # a plan whose landing is not --url, that exceeds the cap or includes a robots-disallowed page is refused (§3.6)
+      cap_py site-plan-check "$SITE_PLAN_FILE" "$CANONICAL_URL" "${SITE_MAX_PAGES:-40}" "$CAP_FETCH_CMD" >/dev/null || exit 2
+    fi
   fi
   if [[ -n "${WRITER_HOST:-}" && "$WRITER_HOST" != "$(cap_host)" ]]; then
     cap_die2 "this host ($(cap_host)) must not write vault $VAULT_PATH (writer_host $WRITER_HOST)"
@@ -270,7 +313,7 @@ cap_input_missing_exit() {
 # Dry run (§3.4): no lock, no receipt, no attempt dir — the plan, the extractor argv, the prompt
 # ---------------------------------------------------------------------------------------------
 cap_dry_run() {
-  local kind key label raw_ext="" raw_note="none (raw == capture-text)" tmp content="" template reader
+  local kind key label raw_ext="" raw_note="none (raw == capture-text)" tmp content="" template reader schema="$CAP_REQUEST_SCHEMA" bytes
   kind="$(cap_resource_kind "$ORIGIN")"
   case "$kind" in
     url) key="$URL" ;;
@@ -278,8 +321,12 @@ cap_dry_run() {
     file) key="sha256 of $FILE_PATH" ;;
     text) if [[ -n "$FILE_TEXT" ]]; then key="sha256 of $FILE_TEXT"; else key="sha256 of the stdin bytes"; fi ;;
   esac
+  if [[ "$kind" == "url" && -n "$URL" ]]; then
+    cap_canonical_lookup "$URL"
+    key="$CANONICAL_URL (canonical v${CANONICAL_VERSION:-1} of $URL)"
+  fi
   case "$ORIGIN" in
-    url)     if $RENDER; then raw_ext=txt; else raw_ext=html; fi ;;
+    url)     if [[ -n "$SITE_MODE" ]]; then raw_ext="site/"; else raw_ext=html; fi ;;
     pdf)     raw_ext=pdf ;;
     youtube) raw_ext=txt ;;
     audio)   raw_ext="<audio ext>" ;;
@@ -298,14 +345,50 @@ cap_dry_run() {
   echo "Context: $CONTEXT"
   if $CAPTURE_ID_GIVEN; then echo "Capture id: $CAPTURE_ID"; else echo "Capture id: (generated at run time)"; fi
   echo "Resource: $kind — $key"
+  if [[ "$kind" == "url" && -n "$URL" ]]; then
+    echo "Canonical URL: $CANONICAL_URL"
+    echo "URL kind: $URL_KIND${REQUESTED_VERSION:+ (requested version $REQUESTED_VERSION)}"
+  fi
+  echo "Request schema: $schema"
   echo "Revision: $(cap_today)_<resource_id> (allocated under the vault lock at run time)"
   [[ -n "$FILE_PATH" ]] && echo "Origin path: $FILE_PATH"
   echo "Raw store: $raw_note"
   $RECAPTURE && echo "Recapture: yes (supersedes ${SUPERSEDES:-the latest revision})"
+  if [[ "$SITE_MODE" == "file" ]]; then
+    cap_py site-plan-summary "$SITE_PLAN_FILE"
+  elif [[ "$SITE_MODE" == "auto" ]]; then
+    echo "Site plan: generated at run time (capture-site.py map, at most ${SITE_MAX_PAGES:-40} pages); kept as attempt-1/plan.json"
+  fi
+  if [[ "$kind" == "url" ]]; then
+    echo "Fetch: render $( $RENDER && echo force || { $NO_RENDER && echo off || echo auto; } ), external $( { [[ "${EXTERNAL_FETCH:-off}" == auto ]] && ! $NO_EXTERNAL && ! $NO_RENDER; } && echo auto || echo off ), acquire timeout ${ACQUIRE_TIMEOUT:-300}s"
+  fi
   echo "Vault state: $MNEMON_VAULT_STATE_DIR"
+  echo "=== CHUNK PLAN ==="
+  content=""
+  [[ "$ORIGIN" == "ref:vault" && -f "$REF_PATH" ]] && content="$REF_PATH"
+  [[ -n "$FILE_TEXT" && -f "$FILE_TEXT" ]] && content="$FILE_TEXT"
+  if [[ -n "$content" ]]; then
+    bytes="$(cap_bytes "$content")"
+    if [[ "$bytes" -gt "${EXTRACT_INLINE_MAX_BYTES:-400000}" ]]; then
+      CAP_DRY_SPLIT="$(mktemp -d -t mnemon-dry-split.XXXXXX)"
+      if python3 "$SCRIPT_DIR/extract-publish.py" split --in "$content" --max-bytes "${EXTRACT_INLINE_MAX_BYTES:-400000}" --max-parts "${EXTRACT_MAX_PARTS:-8}" --out-dir "$CAP_DRY_SPLIT" > "$CAP_DRY_SPLIT/split.txt" 2>&1; then
+        echo "chunked: $bytes bytes > extract_inline_max_bytes=${EXTRACT_INLINE_MAX_BYTES:-400000} → $(jq 'length' "$CAP_DRY_SPLIT/parts.json") part(s) + 1 merge call"
+        jq -r '.[] | "  part \(.n): \(.bytes) bytes — \(.first_line)"' "$CAP_DRY_SPLIT/parts.json"
+      else
+        echo "unsupported-size: $(head -1 "$CAP_DRY_SPLIT/split.txt")"
+      fi
+      rm -rf "$CAP_DRY_SPLIT"
+    else
+      echo "single call: $bytes bytes ≤ extract_inline_max_bytes=${EXTRACT_INLINE_MAX_BYTES:-400000}"
+    fi
+  elif [[ "$kind" == "text" ]]; then
+    echo "decided at run time from the stdin bytes (inline limit ${EXTRACT_INLINE_MAX_BYTES:-400000} bytes, at most ${EXTRACT_MAX_PARTS:-8} parts)"
+  else
+    echo "chunking decided after acquisition (inline limit ${EXTRACT_INLINE_MAX_BYTES:-400000} bytes, at most ${EXTRACT_MAX_PARTS:-8} parts)"
+  fi
   echo "=== EXTRACTOR ARGV ==="
   local argv='claude -p --restricted --tools "" --permission-prompts none --strict-mcp-config --no-session-persistence --output-format json --json-schema <extract/1> --max-turns 4 --model '"$MODEL"
-  [[ -n "${EXTRACT_MAX_USD:-}" ]] && argv="$argv --max-budget-usd $EXTRACT_MAX_USD"
+  [[ -n "${EXTRACT_MAX_USD:-}" ]] && argv="$argv --max-budget-usd <extract_max_usd − spent, per call>"
   echo "$argv"
   echo "(working directory: <vault state>/runs/<capture_id>/attempt-1; prompt on stdin; timeout ${EXTRACT_TIMEOUT:-900}s; inline limit ${EXTRACT_INLINE_MAX_BYTES:-400000} bytes)"
   echo "=== PROMPT ==="
@@ -317,8 +400,6 @@ cap_dry_run() {
   case "$ORIGIN" in youtube|audio) CONTENT_FORMAT=transcript ;; pdf) CONTENT_FORMAT=pdf ;; ref:vault) CONTENT_FORMAT=reference ;; esac
   template="$(cap_template_file "$SOURCE_TYPE")"
   reader="$(cap_reader_file)"
-  [[ "$ORIGIN" == "ref:vault" && -f "$REF_PATH" ]] && content="$REF_PATH"
-  [[ -n "$FILE_TEXT" && -f "$FILE_TEXT" ]] && content="$FILE_TEXT"
   cap_write_prompt "$content" "$template" "$reader" "$tmp/prompt.md"
   cat "$tmp/prompt.md"
   return 0
@@ -347,21 +428,54 @@ cap_restore_from_receipt() {   # globals from the receipt's request + metadata (
     "TEXT_SHA256=" + s(.text_sha256), "TEXT_BYTES=" + s(.text_bytes), "RECEIPT_STATE=" + s(.state),
     "RECEIPT_CLASS=" + s(.error_class), "RECEIPT_ATTEMPTS=" + s(.attempts // 0),
     "RESOLVED_REV=" + s(.resolved_to_revision), "RESOLVED_CID=" + s(.resolved_to_capture_id),
-    "LEGACY_MATCH=" + s(.legacy_match // false)' "$r")"
+    "LEGACY_MATCH=" + s(.legacy_match // false),
+    "REQUEST_SCHEMA=" + s(.request.schema // "mnemon-request/1"), "CANONICAL_URL=" + s(.canonical_url), "CANONICAL_VERSION=" + s(.canonical_version),
+    "REQ_RENDER=" + s(.request.render), "REQ_EXTERNAL=" + s(.request.external), "REQ_SITE=" + s(.request.site),
+    "REQUESTED_VERSION=" + s(.request.requested_version), "SITE_PLAN_SHA256=" + s(.site_plan_sha256), "REPORT_STATE=" + s(.report_state)' "$r")"
   eval "$assignments"
   FILE_PATH=""
   if [[ "$RESOURCE_KIND" == "file" ]]; then FILE_PATH="$INPUT_PATH"; fi
   if [[ "$RESOURCE_KIND" == "text" && -n "$INPUT_PATH" && "$INPUT_PATH" != "$RUNS_DIR/$CAPTURE_ID/attempt-1/capture.md" ]]; then FILE_TEXT="$INPUT_PATH"; fi
+  # identity and the request schema come from the receipt, never recomputed (D5); the bound
+  # flags of a /2 request are restored as flags so a re-acquisition runs the same chain
+  CAP_BIND_SCHEMA="$REQUEST_SCHEMA"
+  NO_RENDER=false; NO_EXTERNAL=false; SITE_MODE=""; SITE_PLAN_FILE=""; URL_KIND=page
+  if [[ "$REQUEST_SCHEMA" == "$CAP_REQUEST_SCHEMA_V1" ]]; then
+    case "$REQ_RENDER" in true) RENDER=true ;; *) RENDER=false ;; esac
+    CANONICAL_URL=""; CANONICAL_VERSION=""
+  else
+    case "$REQ_RENDER" in force) RENDER=true ;; off) RENDER=false; NO_RENDER=true ;; *) RENDER=false ;; esac
+    [[ "$REQ_EXTERNAL" == "off" ]] && NO_EXTERNAL=true
+    case "$REQ_SITE" in "") ;; auto) SITE_MODE=auto ;; *) SITE_MODE=file; SITE_PLAN_FILE="$INPUT_PATH" ;; esac
+    if [[ "$RESOURCE_KIND" == "url" && -n "$URL" ]]; then
+      # the kind routes the acquisition; the identity stays the receipt's whatever the lookup says
+      local keep_c="$CANONICAL_URL" keep_v="$CANONICAL_VERSION" keep_rv="$REQUESTED_VERSION"
+      cap_canonical_lookup "$URL" 2>/dev/null || true
+      CANONICAL_URL="$keep_c"; CANONICAL_VERSION="$keep_v"; REQUESTED_VERSION="$keep_rv"
+    fi
+  fi
+  [[ "$ORIGIN" == "youtube" ]] && URL_KIND=youtube
   KEEP_LOCATOR=false
   [[ "$RESOURCE_KIND" == "text" && -z "$FILE_TEXT" ]] && KEEP_LOCATOR=true
+  [[ "$SITE_MODE" == "auto" ]] && KEEP_LOCATOR=true
   return 0
 }
 
-# The binding check: other bound arguments on the command line must describe the same request.
+# The binding check: other bound arguments on the command line must describe the same request,
+# compared under the receipt's request schema (§12 A4): a /1 receipt binds the literal URL and
+# knows no render/external/site fields — those flags mismatch only when they are not their
+# defaults; a /2 receipt binds the canonical identity and the new fields.
 cap_binding_check() {
   $BOUND_GIVEN || return 0
-  local want have_json have_sha tmp
+  local want have_json have_sha tmp schema
   want="$(cap_receipt_get "$CAPTURE_ID" '.request_sha256')"
+  schema="$(cap_receipt_get "$CAPTURE_ID" '.request.schema // "mnemon-request/1"')"
+  CAP_BIND_SCHEMA="$schema"
+  if [[ "$schema" == "$CAP_REQUEST_SCHEMA_V1" ]]; then
+    if $NO_RENDER || $NO_EXTERNAL || [[ -n "$SITE_MODE" ]]; then
+      cap_die2 "capture-id reuse with a different request: '$CAPTURE_ID' is a phase-1 request (mnemon-request/1) that binds no --no-render / --no-external / --site"
+    fi
+  fi
   # Compute the current request without touching the ledger.
   if [[ -z "$ORIGIN" ]]; then cap_die2 "capture-id reuse with a different request: no origin"; fi
   if $CONTEXT_GIVEN; then cap_validate_context "$CONTEXT"; else CONTEXT="$(cap_default_context)"; fi
@@ -375,8 +489,9 @@ cap_binding_check() {
   if $RECAPTURE && [[ -z "$SUPERSEDES" ]]; then SUPERSEDES="$(cap_receipt_get "$CAPTURE_ID" '.request.supersedes // ""')"; fi
   cap_canonical_request
   [[ -n "${tmp:-}" ]] && rm -f "$tmp"
+  CAP_BIND_SCHEMA=""
   if [[ "$REQUEST_SHA256" != "$want" ]]; then
-    cap_die2 "capture-id reuse with a different request: '$CAPTURE_ID' is bound to $(cap_receipt_get "$CAPTURE_ID" '.request | "\(.origin) \(.resource_kind) \(.resource_key)"') (context $(cap_receipt_get "$CAPTURE_ID" '.request.context'))"
+    cap_die2 "capture-id reuse with a different request: '$CAPTURE_ID' is bound to $(cap_receipt_get "$CAPTURE_ID" '.request | "\(.origin) \(.resource_kind) \(.resource_key)"') (context $(cap_receipt_get "$CAPTURE_ID" '.request.context'), schema $schema)"
   fi
   return 0
 }
@@ -425,6 +540,7 @@ cap_replay() {
       # (an integrity-error receipt is re-verified: when the operator restored the file the
       # capture goes on from the files as they are, §12 A3)
       cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+      cap_sidecar_recover
       if [[ ! -f "$VAULT_PATH/Sources/$REVISION/extract.md" ]]; then
         cap_run_extract_step true "$KEEP_LOCATOR"
       fi
@@ -436,6 +552,7 @@ cap_replay() {
       exit 0 ;;
     source-published|extract-failed)
       cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+      cap_sidecar_recover
       if cap_extract_belongs; then cap_reconcile_extracted "$KEEP_LOCATOR"; fi
       cap_run_extract_step true "$KEEP_LOCATOR" ;;
     started|failed)
@@ -444,6 +561,7 @@ cap_replay() {
         # is verified (§12 A3 — verification applies once a source.md with this id exists)
         cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
         cap_receipt_update "$CAPTURE_ID" '.state="source-published" | .source_published=true | .error_class=null | .error=null | .retryable=null'
+        cap_sidecar_recover
         if cap_extract_belongs; then cap_reconcile_extracted "$KEEP_LOCATOR"; fi
         cap_run_extract_step true "$KEEP_LOCATOR"
       fi
@@ -515,41 +633,45 @@ cap_recover_acquire() {
   if [[ "$RAW_STORE" != "none" && -n "$RAW_PATH" ]]; then
     RAW_DIR="$(dirname "$RAW_PATH")"
     if [[ "$RAW_PUBLISHED" == "true" ]]; then
-      # a published raw must still be there, unchanged — it is the evidence, never refetched
-      if [[ -n "$RAW_SHA256" && -f "$RAW_PATH" && "$(cap_sha256 "$RAW_PATH")" == "$RAW_SHA256" ]]; then
+      # a published raw must still be there, unchanged — it is the evidence, never refetched; a
+      # published bundle is verified member by member (§12 A5: evidence-mismatch for any change)
+      if [[ -n "$RAW_SHA256" && -e "$RAW_PATH" ]] && cap_raw_matches "$RAW_PATH" "$RAW_SHA256"; then
         cap_reconvert || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
-      elif [[ -f "$RAW_PATH" ]]; then
-        cap_fail_exit evidence-mismatch "the published raw $RAW_PATH no longer matches its recorded hash (recorded raw evidence is never refetched; operator)"
+      elif [[ -e "$RAW_PATH" ]]; then
+        cap_fail_exit evidence-mismatch "the published raw $RAW_PATH no longer matches its recorded hash${CAP_VERIFY_NOTE:+ ($CAP_VERIFY_NOTE)} (recorded raw evidence is never refetched; operator)"
       else
         cap_fail_exit evidence-mismatch "the published raw $RAW_PATH is missing (recorded raw evidence is never refetched; operator)"
       fi
     elif [[ -n "$RAW_SHA256" ]]; then
       # recorded, not yet published: finish from the staged or final copy carrying that hash
-      if [[ -n "$RAW_STAGED" && -f "$RAW_STAGED" ]]; then
-        if [[ "$(cap_sha256 "$RAW_STAGED")" == "$RAW_SHA256" ]]; then
-          if [[ -e "$RAW_PATH" && "$(cap_sha256 "$RAW_PATH")" != "$RAW_SHA256" ]]; then
+      # (staged and final trees of a bundle are verified before the collision is reconciled, A5)
+      if [[ -n "$RAW_STAGED" && -e "$RAW_STAGED" ]]; then
+        if cap_raw_matches "$RAW_STAGED" "$RAW_SHA256"; then
+          if [[ -e "$RAW_PATH" ]] && ! cap_raw_matches "$RAW_PATH" "$RAW_SHA256"; then
             cap_fail_exit archive-exists "a different file sits at $RAW_PATH (no receipt accounts for it)"
           fi
-          if [[ -e "$RAW_PATH" ]]; then rm -f "$RAW_STAGED"
-          elif ! cap_py fsync-rename "$RAW_STAGED" "$RAW_PATH"; then
+          if [[ -e "$RAW_PATH" ]]; then rm -rf "$RAW_STAGED"
+          elif ! cap_raw_rename_into_place "$RAW_STAGED" "$RAW_PATH"; then
             cap_fail_exit fetch "could not publish the staged raw into $RAW_PATH (the staged copy and its hash are retained)"
           fi
           staged_match=true
         else
-          cap_fail_exit archive-exists "the staged raw $RAW_STAGED does not match the recorded hash (no receipt accounts for it)"
+          cap_fail_exit archive-exists "the staged raw $RAW_STAGED does not match the recorded hash${CAP_VERIFY_NOTE:+ ($CAP_VERIFY_NOTE)} (no receipt accounts for it)"
         fi
-      elif [[ -f "$RAW_PATH" ]]; then
-        if [[ "$(cap_sha256 "$RAW_PATH")" == "$RAW_SHA256" ]]; then staged_match=true
+      elif [[ -e "$RAW_PATH" ]]; then
+        if cap_raw_matches "$RAW_PATH" "$RAW_SHA256"; then staged_match=true
         else cap_fail_exit archive-exists "a different file sits at $RAW_PATH (no receipt accounts for it)"; fi
       else
         cap_fail_exit evidence-missing "the raw recorded for $RAW_PATH (sha256 $RAW_SHA256) exists neither staged nor published (recorded raw evidence is never refetched; operator)"
       fi
+      cap_crash_at after-raw-renamed
       cap_receipt_update "$CAPTURE_ID" '.raw_published=true | .raw_staged_path=null'
       cap_reconvert || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
     else
-      # nothing recorded: a stale staged file is discarded and the input is acquired again — this
-      # is the one place the locator is consulted
-      [[ -n "$RAW_STAGED" && -f "$RAW_STAGED" ]] && rm -f "$RAW_STAGED"
+      # nothing recorded: a stale staged file or directory is discarded and the input is acquired
+      # again — this is the one place the locator is consulted (a --site auto plan frozen in
+      # attempt-1/plan.json is reused by cap_acquire_site)
+      [[ -n "$RAW_STAGED" && -e "$RAW_STAGED" ]] && rm -rf "$RAW_STAGED"
       cap_restore_input
       cap_acquire_fresh
     fi
@@ -563,26 +685,20 @@ cap_recover_acquire() {
 
 cap_acquire_fresh() {
   RAW_SHA256=""; RAW_BYTES=""
-  cap_depth_preflight
+  DEPTH_MANIFEST_FILE=""
+  # (the depth preflight of §4.2 runs inside cap_acquire_url, after the landing fetch, on the staged raw)
   cap_acquire || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
 }
 
-# Depth-aware preflight (url origin, --depth auto|force): a thin/SPA landing becomes a composite.
-cap_depth_preflight() {
-  DEPTH_MANIFEST_FILE=""
-  [[ "$ORIGIN" == "url" && -n "$URL" && "$DEPTH" != "off" ]] || return 0
-  $RENDER && return 0
-  local fold="${MNEMON_DEPTH_FOLD_CMD:-$SCRIPT_DIR/kb-depth-fold.py}"
-  [[ -x "$fold" ]] || return 0
-  local depth_json
-  depth_json="$("$fold" "$URL" --depth "$DEPTH" 2>/dev/null)" || depth_json=""
-  [[ -n "$depth_json" ]] || return 0
-  if printf '%s' "$depth_json" | jq -e '.applied == true' >/dev/null 2>&1; then
-    printf '%s' "$depth_json" | jq -j '.composite_body' > "$ATTEMPT_DIR/composite.txt"
-    printf '%s' "$depth_json" | jq -j '.manifest_yaml' > "$ATTEMPT_DIR/depth-manifest.yaml"
-    DEPTH_MANIFEST_FILE="$ATTEMPT_DIR/depth-manifest.yaml"
-  fi
-  return 0
+# A raw (file or bundle directory) carries the recorded hash: a file by its bytes, a bundle by
+# capture-site.py verify (the manifest hash and every member — CAP_VERIFY_NOTE names a miss).
+cap_raw_matches() {   # <path> <sha256>
+  CAP_VERIFY_NOTE=""
+  if [[ -d "$1" ]]; then cap_bundle_verify "$1" "$2"; else [[ -f "$1" && "$(cap_sha256 "$1")" == "$2" ]]; fi
+}
+
+cap_raw_rename_into_place() {   # <staged> <final>
+  if [[ -d "$1" ]]; then cap_py publish-dir "$1" "$2"; else cap_py fsync-rename "$1" "$2"; fi
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -611,8 +727,14 @@ cap_fresh() {
   cap_resource_identity
   cap_canonical_request
 
-  # 2. dedup / resume against the resource's revisions (never a new folder unless --recapture)
-  latest="$(cap_latest_revision "$RESOURCE_ID" "$RESOURCE_SHA256" "$URL")"
+  # 2. dedup / resume against the resource's revisions (never a new folder unless --recapture):
+  # the candidate/head rule of §4.1 (a cycle exits 1 here, under the id this run reports)
+  $CAPTURE_ID_GIVEN || CAPTURE_ID="$(cap_generate_capture_id "$RESOURCE_ID")"
+  cap_lookup_head
+  latest=""
+  if [[ -n "$CAP_HEAD" ]]; then
+    if [[ "$CAP_HEAD_MANAGED" == "true" ]]; then latest="$CAP_HEAD false"; else latest="$CAP_HEAD true"; fi
+  fi
   if [[ -n "$latest" ]] && ! $RECAPTURE; then
     folder="${latest%% *}"; legacy="${latest##* }"
     folder_cid="$(_mnemon_yaml_literal capture_id "$VAULT_PATH/Sources/$folder/source.md")"
@@ -624,7 +746,13 @@ cap_fresh() {
       # an edited body is integrity-error/evidence-mismatch (exit 1), never skipped-duplicate;
       # a legacy source without the field is verified by existence only
       cap_verify_folder_source "$folder" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
-      echo "WARNING: already captured at Sources/$folder/ — skipping (use --recapture for a new revision)" >&2
+      if [[ -n "$SITE_MODE" ]]; then
+        echo "WARNING: the landing is already captured at Sources/$folder/ — skipping; a site capture of a captured landing needs --recapture (the site revision supersedes it)" >&2
+      elif [[ "${URL_KIND:-}" == "arxiv" && -n "${REQUESTED_VERSION:-}" ]]; then
+        echo "WARNING: already captured at Sources/$folder/ (arXiv version $(_mnemon_yaml_literal arxiv_version "$VAULT_PATH/Sources/$folder/source.md")) — skipping; another version is a --recapture" >&2
+      else
+        echo "WARNING: already captured at Sources/$folder/ — skipping (use --recapture for a new revision)" >&2
+      fi
       if $CAPTURE_ID_GIVEN; then
         TEXT_SHA256="$(cap_source_text_sha "$folder" 2>/dev/null || true)"
         ATTEMPT_DIR=""; RAW_STORE=none; RAW_PATH=""; RAW_STAGED=""; INPUT_PATH=""
@@ -647,7 +775,6 @@ cap_fresh() {
       if cap_extract_belongs; then cap_reconcile_extracted "$KEEP_LOCATOR"; fi
       cap_run_extract_step true "$KEEP_LOCATOR"
     fi
-    $CAPTURE_ID_GIVEN || CAPTURE_ID="$(cap_generate_capture_id "$RESOURCE_ID")"
     TEXT_SHA256="$(cap_source_text_sha "$folder" 2>/dev/null || true)"
     ATTEMPT_DIR=""; RAW_STORE=none; RAW_PATH=""; RAW_STAGED=""; INPUT_PATH=""
     CAP_INIT_ATTEMPTS=0 cap_receipt_create source-published "$folder" "$folder_cid" false
@@ -663,7 +790,6 @@ cap_fresh() {
 
   # 3. a new revision: reserve the name, bind the id, record the intent
   REVISION="$(cap_allocate_revision "$RESOURCE_ID")"
-  $CAPTURE_ID_GIVEN || CAPTURE_ID="$(cap_generate_capture_id "$RESOURCE_ID")"
   cap_new_attempt "$CAPTURE_ID"
   INPUT_PATH=""
   case "$RESOURCE_KIND" in
@@ -671,13 +797,15 @@ cap_fresh() {
       if [[ -n "$incoming" ]]; then mv "$incoming" "$ATTEMPT_DIR/capture.md"; TEXT_INPUT="$ATTEMPT_DIR/capture.md"; INPUT_PATH="$TEXT_INPUT"
       else INPUT_PATH="$FILE_TEXT"; fi ;;
     file) INPUT_PATH="$FILE_PATH" ;;
+    url)  [[ "$SITE_MODE" == "file" ]] && INPUT_PATH="$SITE_PLAN_FILE" ;;   # the plan is the input locator (D9)
   esac
+  [[ "$SITE_MODE" == "auto" ]] && KEEP_LOCATOR=true   # attempt-1/plan.json, kept with the receipt
   RAW_STORE=none; RAW_PATH=""; RAW_STAGED=""; RAW_KIND=none
   case "$ORIGIN" in
-    url)     if $RENDER; then cap_raw_prepare txt; else cap_raw_prepare html; fi ;;
+    url)     if [[ -n "$SITE_MODE" ]]; then cap_raw_prepare site; RAW_KIND=site; else cap_raw_prepare html; fi ;;
     pdf)     cap_raw_prepare pdf ;;
     youtube) cap_raw_prepare txt ;;
-    audio)   cap_raw_prepare audio ;;
+    audio)   if [[ -n "$FILE_PATH" ]]; then cap_raw_prepare "$(cap_ext_of "$FILE_PATH" audio)"; else cap_raw_prepare "$(cap_url_ext "$URL" bin)"; fi ;;
     file|book) cap_raw_prepare "$(cap_ext_of "$FILE_PATH" bin)" ;;
   esac
   TEXT_SHA256=""
@@ -911,8 +1039,13 @@ case "$ACTION" in
     fi
     total=$(find "$VAULT_PATH/Sources" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
     extracted=$(grep -l '^status: extracted' "$VAULT_PATH/Sources/"*/extract.md 2>/dev/null | wc -l | tr -d ' ') || extracted=0
+    # §3.9: superseded = folders named in any published source.md's supersedes: (both forms);
+    # chunked = extract.md files with extraction: chunked
+    counts="$(cap_py status-counts "$VAULT_PATH/Sources" 2>/dev/null || echo 'superseded=0 chunked=0')"
     echo "Total sources: $total"
     echo "Extracted: $extracted"
+    echo "Superseded: ${counts#superseded=}" | sed 's/ chunked=.*//'
+    echo "Chunked: ${counts##*chunked=}"
     echo ""
     echo "Recent additions:"
     find "$VAULT_PATH/Sources" -maxdepth 1 -mindepth 1 -type d -name "20*" 2>/dev/null | sort -r | head -5 | while read -r d; do
