@@ -324,13 +324,13 @@ cap_charter_contexts() {   # prints one context per line (deduplicated, lowercas
 cap_default_context() {
   local list
   list="$(cap_charter_contexts)"
-  if printf '%s\n' "$list" | grep -qx personal; then printf 'personal'; else printf '%s' "$list" | head -1; fi
+  if printf '%s\n' "$list" | grep -qxF personal; then printf 'personal'; else printf '%s' "$list" | head -1; fi
 }
 
-cap_validate_context() {   # <ctx> → exit 2 when undeclared
+cap_validate_context() {   # <ctx> → exit 2 when undeclared (a literal, whole-line comparison — never a pattern)
   local ctx="$1" list declared
   list="$(cap_charter_contexts)"
-  printf '%s\n' "$list" | grep -qx -- "$ctx" && return 0
+  [[ -n "$ctx" ]] && printf '%s\n' "$list" | grep -qxF -- "$ctx" && return 0
   declared="$(printf '%s' "$list" | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
   cap_die2 "context '$ctx' is not declared in ${CHARTER_PATH:-charter} (declared: $declared)"
 }
@@ -343,7 +343,7 @@ cap_resource_kind() {   # <origin>
     text|idea)   printf 'text' ;;
     ref:vault)   printf 'ref' ;;
     url|youtube) printf 'url' ;;
-    pdf|audio|file) if [[ -n "${FILE_PATH:-}" ]]; then printf 'file'; else printf 'url'; fi ;;
+    pdf|audio|file|book) if [[ -n "${FILE_PATH:-}" ]]; then printf 'file'; else printf 'url'; fi ;;
     *)           printf 'url' ;;
   esac
 }
@@ -1036,10 +1036,13 @@ cap_publish_source() {
 # ---------------------------------------------------------------------------------------------
 # Verification (§3.4 step 5, §3.6)
 # ---------------------------------------------------------------------------------------------
-# cap_verify_source <revision> <capture_id> <text_sha256> → 0, or 1 with VERIFY_CLASS/VERIFY_MSG
+# cap_verify_source <revision> <capture_id> <text_sha256> [legacy true|false] → 0, or 1 with
+# VERIFY_CLASS/VERIFY_MSG. A legacy folder (matched by `url:`, no capture_id / revision /
+# capture block, §3.1) is verified by existence only — it predates the fields and is never modified.
 cap_verify_source() {
-  local rev="$1" cid="$2" want="$3" f="$VAULT_PATH/Sources/$1/source.md" got
+  local rev="$1" cid="$2" want="$3" legacy="${4:-false}" f="$VAULT_PATH/Sources/$1/source.md" got
   if [[ ! -f "$f" ]]; then VERIFY_CLASS=evidence-missing; VERIFY_MSG="Sources/$rev/source.md is missing"; return 1; fi
+  [[ "$legacy" == true ]] && return 0
   if [[ "$(_mnemon_yaml_literal capture_id "$f")" != "$cid" ]]; then VERIFY_CLASS=evidence-mismatch; VERIFY_MSG="Sources/$rev/source.md carries another capture_id"; return 1; fi
   if [[ "$(_mnemon_yaml_literal revision "$f")" != "$rev" ]]; then VERIFY_CLASS=evidence-mismatch; VERIFY_MSG="Sources/$rev/source.md carries another revision"; return 1; fi
   got="$(cap_py body-sha256 "$f")"
@@ -1301,6 +1304,19 @@ cap_reindex() {
   python3 "$_LIB_CAPTURE_DIR/knowledge-reindex.py" "$VAULT_PATH" >/dev/null 2>&1 || true
 }
 
+# The exit of a success path that changed the vault. The qmd refresh keeps its own index outside
+# the vault, so it may run in the background — with the inherited lock descriptor closed and the
+# MNEMON_VAULT_LOCK_* variables scrubbed first, so the background job never keeps the vault lock
+# alive (D15, §12 A1/A8). Every success path exits inside cap_main, so the refresh lives here,
+# not in a post-hook after it.
+cap_success_exit() {
+  if [[ "${SEARCH_PROVIDER:-}" == "qmd" ]] && ! ${DRY_RUN:-false} && command -v qmd >/dev/null 2>&1; then
+    (cap_release_inherited_fd; qmd update >/dev/null 2>&1 && qmd embed >/dev/null 2>&1) &
+    disown 2>/dev/null || true
+  fi
+  exit 0
+}
+
 # The common tail of a successful extraction: receipt extracted → verify → reindex → cleanup → RESULT.
 cap_finish_extracted() {   # <replayed true|false> <keep_locator true|false>
   cap_crash_at after-extract-published
@@ -1308,7 +1324,7 @@ cap_finish_extracted() {   # <replayed true|false> <keep_locator true|false>
   cap_reindex
   cap_cleanup_attempts "$CAPTURE_ID" "$2"
   cap_result extracted ok "" "" "$1"
-  exit 0
+  cap_success_exit
 }
 
 cap_finish_extract_failed() {   # <replayed>
@@ -1326,5 +1342,9 @@ cap_finish_extract_failed() {   # <replayed>
 cap_run_extract_step() {   # <replayed> <keep_locator>
   cap_new_attempt "$CAPTURE_ID"
   cap_py body-extract "$VAULT_PATH/Sources/$REVISION/source.md" "$ATTEMPT_DIR/capture.md"
+  # the published source is authoritative for the content format (the receipt does not carry it):
+  # a resumed pdf / transcript / reference / markdown capture keeps its format in extract.md
+  CONTENT_FORMAT="$(_mnemon_yaml_literal content_format "$VAULT_PATH/Sources/$REVISION/source.md")"
+  [[ -n "$CONTENT_FORMAT" ]] || CONTENT_FORMAT=text
   if cap_extract; then cap_finish_extracted "$1" "$2"; else cap_finish_extract_failed "$1"; fi
 }

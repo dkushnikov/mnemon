@@ -255,6 +255,19 @@ assert_contains "$(cat "$ex")" '### Key Ideas' "extract.md: body"
 assert_eq "$(rget rec-0 '.extract_sha256')" "$(shasum -a 256 "$ex" | cut -c1-64)" "receipt extract_sha256 == sha256(extract.md)"
 assert_contains "$(cat "$VAULT/index.md")" "[[Sources/$rev0/extract|Plain T]]" "index.md rebuilt before the gateway exits"
 assert_eq "$(rget rec-0 '.argv[2]')" "--restricted" "receipt argv shows the fence"
+# the qmd refresh runs after a successful extraction (every success path exits inside cap_main,
+# so a post-hook after it never ran), in the background, without the vault lock descriptor
+sed 's/^instance: captest/instance: captest-qmd/; s/^search_provider: grep/search_provider: qmd/' "$CONFIG" > "$TEST_TMPDIR/qmd.yaml"
+printf '#!/usr/bin/env bash\necho "$1 fd=${MNEMON_VAULT_LOCK_FD:-unset}" >> "$STUB_DIR/qmd-calls"\n' > "$STUBS/qmd"
+chmod +x "$STUBS/qmd"
+stub_reset
+rc=0; "$GW" source-add --config "$TEST_TMPDIR/qmd.yaml" --url "https://example.com/qmd" --capture-id qmd-1 >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+out="$(cat "$TEST_TMPDIR/run.out")"
+assert_eq "$rc" "0" "a capture with search_provider qmd exits 0"
+assert_eq "$(result status)" "extracted" "...extracted"
+i=0; while [[ $i -lt 50 ]]; do [[ -f "$STUB_DIR/qmd-calls" && "$(wc -l < "$STUB_DIR/qmd-calls" | tr -d ' ')" == "2" ]] && break; sleep 0.1; i=$((i + 1)); done
+assert_eq "$(cat "$STUB_DIR/qmd-calls" 2>/dev/null | tr '\n' ' ')" "update fd=unset embed fd=unset " "...qmd update and qmd embed ran after the extraction, without the lock descriptor"
+rm -f "$STUBS/qmd"
 
 # ---------------------------------------------------------------------------------------------
 echo "--- 5. identity, binding, replay ---"
@@ -496,6 +509,22 @@ STUB_PDFTOTEXT=empty run_gw --file "$TEST_TMPDIR/paper.pdf" --recapture --captur
 assert_eq "$rc" "1" "empty pdf text → exit 1"
 assert_eq "$(result error_class)" "no-text" "...no-text"
 assert_file_exists "$ARCHIVE/$(rget pdf-empty '.revision').pdf" "...raw retained"
+# a resumed capture keeps the published source's content format in extract.md
+stub_reset
+STUB_MODE=exit1 run_gw --file "$TEST_TMPDIR/paper.pdf" --recapture --capture-id pdf-resume --source-type article
+assert_eq "$rc" "4" "fixture: a pdf capture whose extraction failed"
+run_gw --resume "$(rget pdf-resume '.revision')"
+assert_eq "$rc" "0" "--resume of the pdf capture exits 0"
+assert_contains "$(cat "$VAULT/Sources/$(rget pdf-resume '.revision')/extract.md")" 'content_format: pdf' "...extract.md carries content_format pdf (read from the published source, not defaulted to text)"
+# a local book is a file resource: identity from its bytes, never one empty url key for every book
+printf 'book one\n' > "$TEST_TMPDIR/b1.epub"
+printf 'book two\n' > "$TEST_TMPDIR/b2.epub"
+run_gw --origin book --file "$TEST_TMPDIR/b1.epub" --capture-id book-1
+assert_eq "$(rget book-1 '.request.resource_kind')" "file" "--origin book --file: resource_kind file"
+assert_eq "$(rget book-1 '.request.input_sha256')" "$(shasum -a 256 "$TEST_TMPDIR/b1.epub" | cut -c1-64)" "...input_sha256 = the book's bytes"
+run_gw --origin book --file "$TEST_TMPDIR/b2.epub" --capture-id book-2
+[[ "$(rget book-1 '.resource_sha256')" != "$(rget book-2 '.resource_sha256')" ]] && pass "...two books are two resources" || fail "two books are two resources" "same resource_sha256"
+assert_eq "$(result status)" "failed" "...the second book is not a duplicate of the first (exit 1 unsupported from the stub-less pandoc, never skipped-duplicate)"
 printf 'binary\000stuff' > "$TEST_TMPDIR/weird.xyz"
 run_gw --file "$TEST_TMPDIR/weird.xyz" --capture-id file-xyz
 assert_eq "$rc" "1" "unsupported file type → exit 1"

@@ -186,6 +186,10 @@ run_gw --url "https://example.com/ctx" --context fake --dry-run
 assert_eq "$rc" "2" "a ### heading inside a fenced block is ignored"
 run_gw --url "https://example.com/ctx" --context nope --dry-run
 assert_eq "$rc" "2" "a ### heading outside ## Contexts is ignored"
+run_gw --url "https://example.com/ctx" --context '.*' --dry-run
+assert_eq "$rc" "2" "a context is compared literally, never as a pattern ('.*' is undeclared)"
+run_gw --url "https://example.com/ctx" --context 'w.rk' --dry-run
+assert_eq "$rc" "2" "...'w.rk' does not match work"
 run_gw --url "https://example.com/ctx" --dry-run
 assert_contains "$out" "Context: personal" "omitted --context → personal when declared"
 

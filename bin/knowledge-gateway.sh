@@ -339,7 +339,8 @@ cap_restore_from_receipt() {   # globals from the receipt's request + metadata (
     "RAW_SHA256=" + s(.raw_sha256), "RAW_BYTES=" + s(.raw_bytes), "RAW_PUBLISHED=" + s(.raw_published),
     "TEXT_SHA256=" + s(.text_sha256), "TEXT_BYTES=" + s(.text_bytes), "RECEIPT_STATE=" + s(.state),
     "RECEIPT_CLASS=" + s(.error_class), "RECEIPT_ATTEMPTS=" + s(.attempts // 0),
-    "RESOLVED_REV=" + s(.resolved_to_revision), "RESOLVED_CID=" + s(.resolved_to_capture_id)' "$r")"
+    "RESOLVED_REV=" + s(.resolved_to_revision), "RESOLVED_CID=" + s(.resolved_to_capture_id),
+    "LEGACY_MATCH=" + s(.legacy_match // false)' "$r")"
   eval "$assignments"
   FILE_PATH=""
   if [[ "$RESOURCE_KIND" == "file" ]]; then FILE_PATH="$INPUT_PATH"; fi
@@ -412,7 +413,7 @@ cap_replay() {
   # --- alias receipts: the fixed target revision, never the acquisition rows ---
   if [[ -n "$RESOLVED_REV" ]]; then
     REVISION="$RESOLVED_REV"
-    cap_verify_source "$REVISION" "$RESOLVED_CID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+    cap_verify_source "$REVISION" "$RESOLVED_CID" "$TEXT_SHA256" "$LEGACY_MATCH" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
     if [[ "$RECEIPT_STATE" == "extracted" && "$RECEIPT_ATTEMPTS" -eq 0 ]]; then
       cap_result skipped-duplicate "$(cap_extract_state_of "$REVISION")" "" "" true
       exit 0
@@ -831,16 +832,10 @@ cap_main() {
 
 case "$ACTION" in
   source-add)
+    # Every success path exits inside cap_main (cap_success_exit runs the qmd refresh there, with
+    # the lock descriptor closed first — D15, §12 A1/A8); batch items run their own.
     rc=0
     cap_main || rc=$?
-    # Post-success hook: keep the qmd index fresh — its own index outside the vault, so it may
-    # run in the background; the inherited lock descriptor is closed and the MNEMON_VAULT_LOCK_*
-    # variables scrubbed there first, so the background job never keeps the vault lock (D15,
-    # §12 A1/A8).
-    if [[ $rc -eq 0 && "$SEARCH_PROVIDER" == "qmd" ]] && ! $DRY_RUN && command -v qmd >/dev/null 2>&1; then
-      (cap_release_inherited_fd; qmd update >/dev/null 2>&1 && qmd embed >/dev/null 2>&1) &
-      disown 2>/dev/null || true
-    fi
     exit $rc
     ;;
 
