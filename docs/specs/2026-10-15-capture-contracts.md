@@ -195,6 +195,7 @@ Replay rules for a request **without** a known receipt (no `--capture-id`, or an
 - Timeouts: the extractor runs in its own process group (`bin/extract-run.py`, `start_new_session`); on timeout (`extract_timeout`, default 900 s) the group is terminated, then killed, and reaped before the attempt is recorded as `timeout`. Nothing outside `extract-run.py` kills a capture (D14).
 - Derived indexes (D15): `knowledge-reindex.py` runs synchronously before the lock is released; it writes `index.md` atomically (tmp + rename).
 - Loss of machine-local state: the vault keeps every published `source.md`/`extract.md` and, with `archive_dir` set, every raw; receipts are rebuilt by the replay rules "without a known receipt"; raw kept only in `<vault state>/raw/` and attempt directories are lost with that state — set `archive_dir` when raw evidence must survive the machine.
+- **One writer account and one state root per vault** (§12 A8): the ledger, the lock and the state raw store are keyed by the physical vault path under `${XDG_STATE_HOME:-$HOME/.local/state}`; two state roots (two accounts, two `XDG_STATE_HOME`s) would have two ledgers and two locks for one vault, which phase 1 does not support — the vault's writer is one account on one host.
 
 ### 3.6 Verification, `RESULT:` and exit codes
 
@@ -213,7 +214,7 @@ RESULT:retryable=true | false | empty
 RESULT:replayed=true                       # only on a replay/resume
 ```
 
-Stdout carries only gateway-generated lines; the model's output never reaches stdout. `status=captured` = `source.md` in place, extract not (`extract=missing|invalid`); `status=failed` = nothing published (`extract=none`); `status=integrity-error` = a published artifact is missing or was edited (`revision`/`path` set, `retryable=false`).
+Stdout carries only gateway-generated lines; the model's output never reaches stdout. `status=captured` = `source.md` in place, extract not (`extract=missing|invalid`); `status=failed` = no `source.md` published (`extract=none`; the raw may be retained, §12 A3); `status=integrity-error` = the published `source.md` is missing or was edited (`revision`/`path` set, `retryable=false`; `source_sha256` = the recomputed body hash when it was read and mismatched, empty when it is missing — §12 A3/A6). After an extraction one more line, `RESULT:reindex=ok | failed`, reports the reindex hook's outcome (§12 A8); a duplicate or a replay from the files prints none.
 
 | Exit | Meaning (artifact state decides) |
 |---|---|
@@ -230,7 +231,7 @@ Batch mode (`--manifest`) keeps its per-item loop and summary and reports per-it
 
 ### 4.1 What the extractor receives
 
-The extraction inputs are exactly: `capture.md` (capture-text), `template.md`, `reader-context.md` (a copy of `READER_CONTEXT_PATH`) and `prompt.md` (the assembled prompt — a receipt); the other files of the attempt dir are retained artifacts the model never reads (it has no tools). The extractor's working directory is the attempt dir; the prompt is passed on **stdin**; the content is inlined in the prompt. **Claimed guarantee (what the probes establish, §4.6–4.7):** the model's tool surface is empty except `StructuredOutput`; project-local and user-level settings, instructions and MCP configuration placed where the probes place them are not loaded; no session state carries over between runs. **Not claimed:** that the model cannot be influenced by the content (§4.9), that every ambient channel of Claude Code is covered (only the probed ones), or anything about versions without a probe record.
+The extraction inputs are exactly: `capture.md` (capture-text), `template.md`, `reader-context.md` (a copy of `READER_CONTEXT_PATH`) and `prompt.md` (the assembled prompt — a receipt); the other files of the attempt dir are retained artifacts the model never reads (it has no tools). The extractor's working directory is the attempt dir; the prompt is passed on **stdin**; the content is inlined in the prompt. **Claimed guarantee (what the probes establish, §4.6–4.7, narrowed by §12 A9):** the model's tool surface is empty except `StructuredOutput`; project-local settings, instructions and MCP configuration placed where the probes place them are not loaded; no session state carries over between runs. **Documented, not probed** (§12 A9): user-level settings and instructions are not loaded under `--restricted` per Claude Code's documented semantics; the probe cannot plant them under the operator's real `HOME`. **Not claimed:** that the model cannot be influenced by the content (§4.9), that every ambient channel of Claude Code is covered (only the probed ones), or anything about versions without a probe record.
 
 ### 4.2 Invocation (`bin/extract-run.py`)
 
@@ -431,7 +432,7 @@ Per pass:
 9. **Claim** = one atomic write of the result record with `state: started`, `attempts + 1`, `envelope_sha256`, `dispatch_sha256`, `started_at`. Every gateway invocation — first attempt, retry, or recovery — goes through this one step; there is no other path that spends an attempt.
 10. Dispatch: a `started` result **with** a gateway receipt for `<envelope_id>` (the ledger has `captures/<envelope_id>.json`) → `mnemon add --capture-id <envelope_id>` (replay from the receipt); otherwise → the saved `dispatch.json` argv with stdin from the snapshot (the gateway treats the unknown id as a fresh operation and binds it). The consumer waits; it has no timeout of its own (D14).
 11. Map the outcome (§5.4), store `last_exit`, `last_result` (the `RESULT:` map), `last_error` (stderr tail), and write the result atomically.
-12. Backoff for a retryable failure: `next_attempt_at = now + min(15 min × 2^(attempts-1), 24 h)`; when that failure brought `attempts` to `attempts_allowed` (`--max-attempts`, default 5, times `1 + retries`) the state is `exhausted` instead. Exit 3 and exit 75 → `deferred` with `deadline_at = now + 15 min` and the attempt **refunded** (`attempts - 1`).
+12. Backoff for a retryable failure: `next_attempt_at = now + min(15 min × 2^(attempts-1), 24 h)`; when `attempts >= attempts_allowed` (`--max-attempts`, default 5, times `1 + retries`) after that failure the state is `exhausted` instead — `attempts_allowed` is an **allowance**, not a strict invocation cap: a crash-recovery claim may dispatch beyond it by one (§12 A5/A8). Exit 3 and exit 75 → `deferred` with `deadline_at = now + 15 min` and the attempt **refunded** (`attempts - 1`).
 13. `--retry <envelope_id>`: allowed for `exhausted` and for permanent `failed` whose class is not `contract`/`invalid-request`; never for `quarantined`, `needs_input`, `unsupported`, `captured`. It sets `retries + 1` (raising `attempts_allowed`), state `failed` with `retryable: true` and `next_attempt_at: now`, `retry_requested_at`; lifetime `attempts` is kept. Ack = the result record; **v1 acknowledgements are local**; envelopes are never moved or deleted by the consumer.
 14. Summary line (`ingest: processed N · captured N · failed N · needs_input N · waiting N · deferred N · done-before N · other-instance N · unsupported N · quarantined N`), `--json` for machines. Exit 0 unless the lock or usage refused.
 
@@ -556,7 +557,7 @@ What stubs cannot establish: Claude confinement and ambient loading (§4.7 probe
 
 ## 10. Non-goals (deferred)
 
-Canonicalization and dedup by canonical URL, the capture layer (resolve · fetch · convert · sanitize · sitemap · completeness), external fetchers, YouTube language choice, reindex regeneration, `supersedes` as a first-class status in the index, tiers and Collections, producers (Telegram export, iCloud shortcut, Safari tabs, Instagram), monitor, `ref:mcp` acquisition, a `Read` extraction mode or chunking for oversized content, node deployment of consumers, producer-visible acknowledgements, per-context re-extraction, a record-only provenance URL for file payloads, `mnemon status` semantics (#9).
+Canonicalization and dedup by canonical URL, the capture layer (resolve · fetch · convert · sanitize · sitemap · completeness), external fetchers, YouTube language choice, reindex regeneration, `supersedes` as a first-class status in the index, tiers and Collections, producers (Telegram export, iCloud shortcut, Safari tabs, Instagram), monitor, `ref:mcp` acquisition, a `Read` extraction mode or chunking for oversized content, node deployment of consumers, producer-visible acknowledgements, per-context re-extraction, a record-only provenance URL for file payloads, `mnemon status` semantics (#9), **acquisition and transcription timeouts** — phase 1 has none (§12 A8): a hung download or whisper run holds the vault lock until it ends or the operator kills it, and the next invocation recovers from the receipt.
 
 ## 11. Status
 
