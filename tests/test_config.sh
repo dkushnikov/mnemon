@@ -87,6 +87,21 @@ assert_eq "$MNEMON_STATE_DIR" "$HOME/state6" "state_dir key (tilde resolved)"
 assert_eq "$CHARTER_PATH" "$HOME/charter6.md" "charter_path key (comment stripped)"
 assert_eq "$WRITER_HOST" "some-writer" "writer_host key (quotes stripped)"
 
+# --- Test 6b: quoted values keep '#'; unquoted values lose a trailing ` # comment` (A2) ---
+cat > "$TEST_TMPDIR/hash.yaml" << 'EOF'
+vault_path: "/tmp/vault#mc"
+charter_path: '/tmp/charter#1.md'   # comment after the closing quote
+writer_host: host-a   # trailing comment
+default_model: sonnet#x
+default_language:   # only a comment
+EOF
+load_config "$TEST_TMPDIR/hash.yaml"
+assert_eq "$VAULT_PATH" "/tmp/vault#mc" "double-quoted value keeps #"
+assert_eq "$CHARTER_PATH" "/tmp/charter#1.md" "single-quoted value keeps #; text after the quote ignored"
+assert_eq "$WRITER_HOST" "host-a" "unquoted value loses the trailing comment"
+assert_eq "$DEFAULT_MODEL" "sonnet#x" "a # without preceding whitespace is part of an unquoted value"
+assert_eq "$DEFAULT_LANGUAGE" "en" "a value that is only a comment counts as unset (default applies)"
+
 # --- Test 7: Unrendered {{instance}} placeholder counts as unset ---
 printf 'instance: {{instance}}\nvault_path: %s/vault7\n' "$TEST_TMPDIR" > "$TEST_TMPDIR/tpl.yaml"
 load_config "$TEST_TMPDIR/tpl.yaml"

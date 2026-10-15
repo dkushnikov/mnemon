@@ -39,22 +39,25 @@ mnemon_state_home() {
   printf '%s' "${XDG_STATE_HOME:-$HOME/.local/state}"
 }
 
-# Parse a single flat YAML key. Handles: key: value (with optional quotes, tilde)
+# Parse a single flat YAML key: `key: value`. A value in double or single
+# quotes is taken verbatim up to the closing quote (a `#` inside stays, text
+# after the quote is ignored); an unquoted value loses a trailing ` # comment`
+# and surrounding whitespace. A leading tilde is resolved against $HOME.
 _parse_yaml_value() {
   local key="$1" file="$2"
   local val
   # Use awk with exact string match (not regex) to avoid BRE metacharacter issues
   val=$(awk -v k="$key" 'BEGIN { prefix = k ": " } substr($0, 1, length(prefix)) == prefix { print substr($0, length(prefix) + 1); exit }' "$file" 2>/dev/null)
-  # Strip inline comments (but not inside quotes)
-  val=$(echo "$val" | sed 's/[[:space:]]*#.*$//')
-  # Strip trailing whitespace
-  val=$(echo "$val" | sed 's/[[:space:]]*$//')
-  # Strip surrounding quotes
-  val="${val#\"}" ; val="${val%\"}"
-  val="${val#\'}" ; val="${val%\'}"
+  val=$(printf '%s' "$val" | sed 's/^[[:space:]]*//')
+  case "$val" in
+    \"*) val="${val#\"}"; val="${val%%\"*}" ;;
+    \'*) val="${val#\'}"; val="${val%%\'*}" ;;
+    \#*) val="" ;;
+    *)   val=$(printf '%s' "$val" | sed 's/[[:space:]]#.*$//; s/[[:space:]]*$//') ;;
+  esac
   # Resolve tilde
   val="${val/#\~/$HOME}"
-  echo "$val"
+  printf '%s\n' "$val"
 }
 
 # First non-empty, non-comment line of a `default` file (the default instance).
