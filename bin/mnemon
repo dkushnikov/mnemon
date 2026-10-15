@@ -1235,15 +1235,11 @@ esac
 case "$cmd" in
   add)      _reject_post_command_selectors "$@"; _resolve_or_die
             # The capture runs under the vault lock (D10): bin/vault-lock.py takes
-            # fcntl.flock on <vault state>/lock and execs the gateway with the
+            # fcntl.flock on <vault state>/lock — or proves that an inherited
+            # descriptor already holds it (§12 A1) — and execs the gateway with the
             # descriptor inherited. --dry-run writes nothing and takes no lock.
-            if ! _has_flag --dry-run "$@"; then
-              if [[ -f "$BIN_DIR/vault-lock.py" ]]; then
-                exec python3 "$BIN_DIR/vault-lock.py" --vault "$VAULT_PATH" -- "$BIN_DIR/knowledge-gateway.sh" source-add "$@"
-              fi
-              printf 'mnemon add: bin/vault-lock.py not present in this engine — running the gateway without the vault lock\n' >&2
-            fi
-            exec "$BIN_DIR/knowledge-gateway.sh" source-add "$@" ;;
+            if _has_flag --dry-run "$@"; then exec "$BIN_DIR/knowledge-gateway.sh" source-add "$@"; fi
+            exec python3 "$BIN_DIR/vault-lock.py" --vault "$VAULT_PATH" -- "$BIN_DIR/knowledge-gateway.sh" source-add "$@" ;;
   ingest)   _reject_post_command_selectors "$@"
             # usage (no inbox dir, --help) needs no instance; the pass does
             case "${1:-}" in ""|-h|--help) exec python3 "$BIN_DIR/mnemon-ingest.py" "$@" ;; esac

@@ -653,12 +653,10 @@ cp "$MNEMON_ROOT/bin/mnemon" "$MNEMON_ROOT/bin/mnemon-config.sh" "$ENG/bin/"
 printf '#!/bin/sh\necho "gateway-stub: $*"\nexit 0\n' > "$ENG/bin/knowledge-gateway.sh"
 chmod +x "$ENG/bin/knowledge-gateway.sh"
 run "$ENG/bin/mnemon" add --url https://example.com/a
-assert_eq "$rc" "0" "add without bin/vault-lock.py falls back to the direct exec"
-assert_contains "$out" "mnemon add: bin/vault-lock.py not present in this engine — running the gateway without the vault lock" "...with a stderr note"
-assert_contains "$out" "gateway-stub: source-add --url https://example.com/a" "...and the gateway runs with the arguments"
+assert_eq "$rc" "2" "add without bin/vault-lock.py is an error, never an unlocked capture"
+assert_not_contains "$out" "gateway-stub:" "...the gateway does not run"
 run "$ENG/bin/mnemon" add --url https://example.com/a --dry-run
-assert_not_contains "$out" "not present" "add --dry-run: no wrapper, no note (a dry run takes no lock)"
-assert_contains "$out" "gateway-stub: source-add --url https://example.com/a --dry-run" "...straight to the gateway"
+assert_contains "$out" "gateway-stub: source-add --url https://example.com/a --dry-run" "add --dry-run: no wrapper (a dry run takes no lock), straight to the gateway"
 cat > "$ENG/bin/vault-lock.py" <<'PY'
 import os, sys
 args = sys.argv[1:]
@@ -672,7 +670,6 @@ run env VL_LOG="$VL_LOG" "$ENG/bin/mnemon" add --url https://example.com/b --tit
 assert_eq "$rc" "0" "add with bin/vault-lock.py present exits 0"
 assert_eq "$(cat "$VL_LOG")" "--vault $VAULT_A" "add runs python3 bin/vault-lock.py --vault <vault> -- <gateway> source-add …"
 assert_contains "$out" "gateway-stub: source-add --url https://example.com/b --title T" "...which execs the gateway with the same arguments"
-assert_not_contains "$out" "not present" "...and prints no fallback note"
 run env VL_LOG="$VL_LOG" "$ENG/bin/mnemon" --instance beta add --url https://example.com/b2
 assert_eq "$(tail -1 "$VL_LOG")" "--vault $VAULT_B" "add locks the selected instance's vault"
 run env VL_LOG="$VL_LOG" "$ENG/bin/mnemon" add --url https://example.com/c --dry-run
