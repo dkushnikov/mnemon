@@ -4,8 +4,10 @@
 # consumer (bin/mnemon-ingest.py), bin/vault-lock.py, bin/knowledge-gateway.sh with
 # bin/lib-capture.sh, bin/extract-run.py, bin/extract-publish.py and bin/knowledge-reindex.py.
 # Only the edges are stubbed: `claude` (answers as 2.1.296, with a probe record for that version),
-# and every tool that would reach the network or a converter (curl, render-url.sh, kb-depth-fold.py,
-# pdftotext, pdfinfo, media-extract.py). Nothing between the engine's own parts is mocked.
+# and every tool that would reach the network or a converter (capture-fetch.py — the fixture stub of
+# tests/fixtures/capture/stub-capture-fetch.py, answering real canonical lookups and a `connection`
+# failure for every fetch (STUB_FETCH=fail) — render-url.sh, kb-depth-fold.py, pdftotext, pdfinfo,
+# media-extract.py). Nothing between the engine's own parts is mocked; nothing reaches the network.
 source "$(dirname "$0")/test-helper.sh"
 MNEMON_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 MNEMON="$MNEMON_ROOT/bin/mnemon"
@@ -20,6 +22,9 @@ TEST_TMPDIR="$(cd "$(mktemp -d -t mnemon-chain-XXXX)" && pwd -P)"
 export XDG_CONFIG_HOME="$TEST_TMPDIR/xdg" XDG_STATE_HOME="$TEST_TMPDIR/state"
 unset MNEMON_CONFIG MNEMON_INSTANCE MNEMON_CONFIG_DIR MNEMON_HOME MNEMON_VAULT_LOCK_FD MNEMON_VAULT_LOCK_INODE
 unset MNEMON_VAULT_STATE_DIR MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT MNEMON_INGEST_ADD_CMD STUB_FAIL_ONCE
+unset MNEMON_CAPTURE_FETCH_CMD MNEMON_CAPTURE_SITE_CMD MNEMON_CAPTURE_TEXT_CMD MNEMON_DEPTH_FOLD_CMD MEDIA_EXTRACT_CMD RENDER_URL_CMD
+unset STUB_FETCH STUB_CURL STUB_FETCH_HOOK STUB_CURL_HOOK STUB_FETCH_EXT STUB_FETCH_PUBLISHED STUB_FETCH_HTML_META
+unset FIRECRAWL_API_KEY JINA_API_KEY HTTP_PROXY HTTPS_PROXY http_proxy https_proxy MNEMON_POLICY_ALLOW_LOOPBACK MNEMON_FETCH_URL_REWRITE MNEMON_EXTERNAL_FETCH_CMD
 VAULT="$TEST_TMPDIR/vault"
 STUBS="$TEST_TMPDIR/stubs"
 STUB_CALLS="$TEST_TMPDIR/stub-calls"
@@ -85,11 +90,12 @@ print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "to
                   "duration_ms": 100, "num_turns": 1, "permission_denials": [], "structured_output": so}))
 PY
 STUB
-cat > "$STUBS/curl" <<'STUB'
-#!/bin/sh
-echo $(( $(cat "$STUB_CALLS/curl-count" 2>/dev/null || echo 0) + 1 )) > "$STUB_CALLS/curl-count"
-exit 1
-STUB
+# the capture layer's acquisition seam (capture layer §3.3, §12 A12): the fixture stub answers every
+# `--canonical-only` lookup like the real CLI and fails every fetch with `connection` (STUB_FETCH=fail),
+# which the gateway folds into the phase-1 class `fetch`, retryable — so the contract outcomes of
+# tests/fixtures/contracts/gateway-outcomes.json hold without a byte of network; it counts the fetches
+# in $STUB_CALLS/fetch-count
+cp "$FIX/capture/stub-capture-fetch.py" "$STUBS/capture-fetch.py"
 printf '#!/bin/sh\nexit 11\n' > "$STUBS/render-url.sh"
 printf '#!/bin/sh\nprintf %%s "{\\"applied\\": false, \\"reason\\": \\"stub\\"}"\n' > "$STUBS/kb-depth-fold.py"
 cat > "$STUBS/pdftotext" <<'STUB'
@@ -109,6 +115,7 @@ STUB
 chmod +x "$STUBS"/*
 export PATH="$STUBS:$PATH" STUB_CALLS STUB_FIXTURE="$FIX/capture/extract-good.json"
 export RENDER_URL_CMD="$STUBS/render-url.sh" MEDIA_EXTRACT_CMD="$STUBS/media-extract.py" MNEMON_DEPTH_FOLD_CMD="$STUBS/kb-depth-fold.py"
+export MNEMON_CAPTURE_FETCH_CMD="$STUBS/capture-fetch.py" STUB_DIR="$STUB_CALLS" STUB_FETCH=fail
 # the probe record for the stub's version (D13), keyed by the exact `claude --version` line
 printf '{"2.1.296 (Claude Code)": {"pass": true, "date": "2026-10-15", "probes": {"no-tools": true}}}\n' > "$XDG_STATE_HOME/mnemon/fence-probes.json"
 
@@ -155,7 +162,7 @@ PY
 }
 nfolders() { (shopt -s nullglob; for d in "$VAULT"/Sources/*/; do basename "$d"; done) | wc -l | tr -d ' '; }
 claude_calls() { cat "$STUB_CALLS/count" 2>/dev/null || echo 0; }
-curl_calls() { cat "$STUB_CALLS/curl-count" 2>/dev/null || echo 0; }
+curl_calls() { cat "$STUB_CALLS/fetch-count" 2>/dev/null || echo 0; }   # the phase-1 name: acquisitions through the capture-fetch.py stub
 set_field() {   # <envelope stem> <key> <json value> — the tests' clock on a result record
   python3 - "$SD/results/$1.json" "$2" "$3" <<'PY'
 import json, sys
@@ -230,7 +237,7 @@ assert_eq "$(res test-producer:text-plain 'd["state"] + " dup=" + str(d["duplica
 assert_eq "$(res test-producer:text-plain 'd["source_sha256"]')" "$TEXT_SHA" "...source_sha256 recomputed from the existing folder (A6)"
 assert_eq "$(rcp test-producer:text-plain 'd["state"] + " " + str(d["resolved_to_revision"]) + " " + str(d["resolved_to_capture_id"])')" "extracted $R1 e1" "...an alias receipt resolved to e1's revision"
 assert_eq "$(res test-producer:text-with-url 'd["state"] + " dup=" + str(d["duplicate"]) + " " + str(d["revision"])')" "captured dup=True $R1" "text-with-url → captured, duplicate of the same text resource"
-assert_eq "$(res test-producer:url-auto 'd["state"] + "/" + d["error_class"] + " retryable=" + str(d["retryable"]) + " exit=" + str(d["last_exit"]) + " attempts=" + str(d["attempts"]) + " bound=" + str(d["receipt_bound"])')" "failed/fetch retryable=True exit=1 attempts=1 bound=False" "url-auto → failed/fetch (stub curl and renderer fail); exit 1 never binds the receipt (A2)"
+assert_eq "$(res test-producer:url-auto 'd["state"] + "/" + d["error_class"] + " retryable=" + str(d["retryable"]) + " exit=" + str(d["last_exit"]) + " attempts=" + str(d["attempts"]) + " bound=" + str(d["receipt_bound"])')" "failed/fetch retryable=True exit=1 attempts=1 bound=False" "url-auto → failed/fetch (the capture-fetch.py stub answers connection, folded into the phase-1 class fetch); exit 1 never binds the receipt (A2)"
 assert_eq "$(rcp test-producer:url-auto 'd["state"] + "/" + d["error_class"]')" "failed/fetch" "...the gateway's receipt agrees"
 assert_eq "$(res test-producer:url-explicit 'd["state"] + "/" + d["error_class"]')" "failed/fetch" "url-explicit → failed/fetch"
 assert_eq "$(res test-producer:context-undeclared 'd["state"] + "/" + d["error_class"] + " retryable=" + str(d["retryable"]) + " exit=" + str(d["last_exit"])')" "failed/contract retryable=False exit=2" "context-undeclared → failed/contract (the gateway refused context 'mc')"
@@ -341,7 +348,8 @@ curl0="$(curl_calls)"
 run "$MNEMON" --instance t ingest "$INBOX" --only test-producer:url-auto
 assert_eq "$(res test-producer:url-auto 'd["state"] + "/" + d["error_class"] + " attempts=" + str(d["attempts"]) + " " + d["dispatch_mode"] + " bound=" + str(d["receipt_bound"])')" "failed/fetch attempts=2 request bound=False" "url-auto's retry sends the full saved request (exit 1 never bound it); still failed/fetch"
 assert_eq "$(rcp test-producer:url-auto 'str(d["attempts"]) + " " + str(d["replayed"])')" "2 True" "...the gateway accepted the request against its receipt and re-ran the acquisition (attempt 2)"
-assert_eq "$(( $(curl_calls) - curl0 ))" "1" "...fetching once more (nothing was published, so a refetch is right)"
+assert_eq "$(( $(curl_calls) - curl0 ))" "1" "...fetching once more through capture-fetch.py (nothing was published, so a refetch is right)"
+assert_eq "$(rcp test-producer:url-auto 'd["capture_report"]["fetch"]["schema"] + " " + d["capture_report"]["fetch"]["error_class"] + " " + d["request"]["schema"]')" "mnemon-fetch/1 connection mnemon-request/2" "...the fetch report (mnemon-fetch/1, error_class connection) is in the receipt whatever the outcome; the request is mnemon-request/2"
 
 # ==================================================================================================
 echo "--- A1: reindex runs under the vault lock; another vault's descriptor is no proof ---"
