@@ -187,8 +187,12 @@ Instance keys (all optional; precedence: command-line flag > instance config > d
 | `extract_inline_max_bytes` | `400000` | phase 1: above it the text is extracted in parts |
 | `extract_max_usd` | unset | phase 1: the budget of one capture's extraction (parts, merge, retries, resumes) |
 | `extract_timeout` | `900` | phase 1: one extractor call |
+| `doctor_thin_words` | `300` | data doctor (`doctor --data`, `data/thin`): a current full-tier body with fewer words is thin |
+| `doctor_stub_words` | `40` | data doctor (`data/thin`, `data/stubs`): below it a body is a stub or landing page |
+| `doctor_arxiv_words` | `600` | data doctor (`data/arxiv-abstract`): a current arXiv body below it is suspected abstract-only |
+| `doctor_rating_hi_share` | `20` | data doctor (`data/rating-scale`): the percent of rated current revisions at ★≥7 above which the check warns |
 
-`mnemon.yaml.template` documents them; `mnemon config get <key>` and `mnemon config dump` show the resolved values.
+The ratification radius of the human loop (seeds, drafts, queues) is not a config key: it is declared in the charter's `## Radius` section ([`specs/2026-10-16-vault-store.md`](specs/2026-10-16-vault-store.md)). `mnemon.yaml.template` documents them; `mnemon config get <key>` and `mnemon config dump` show the resolved values.
 
 ## 13. What survives
 

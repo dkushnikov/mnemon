@@ -88,7 +88,11 @@ transcribe_timeout|TRANSCRIBE_TIMEOUT|num|3600
 site_max_pages|SITE_MAX_PAGES|int|40
 site_timeout|SITE_TIMEOUT|num|900
 thin_words|THIN_WORDS|int|60
-extract_max_parts|EXTRACT_MAX_PARTS|int|8'
+extract_max_parts|EXTRACT_MAX_PARTS|int|8
+doctor_thin_words|DOCTOR_THIN_WORDS|int|300
+doctor_stub_words|DOCTOR_STUB_WORDS|int|40
+doctor_arxiv_words|DOCTOR_ARXIV_WORDS|int|600
+doctor_rating_hi_share|DOCTOR_RATING_HI_SHARE|int|20'
 
 # The upper-case variable of a table key (empty when the key is not in the table).
 mnemon_config_var_of() {
@@ -503,4 +507,5 @@ load_config() {
   export EXTERNAL_FETCH EXTERNAL_FETCHERS FETCH_USER_AGENT FETCH_TIMEOUT FETCH_CONNECT_TIMEOUT FETCH_READ_TIMEOUT
   export FETCH_MAX_BYTES RENDER_TIMEOUT RENDER_MAX_BYTES ACQUIRE_TIMEOUT CONVERT_TIMEOUT TRANSCRIBE_TIMEOUT
   export SITE_MAX_PAGES SITE_TIMEOUT THIN_WORDS EXTRACT_MAX_PARTS
+  export DOCTOR_THIN_WORDS DOCTOR_STUB_WORDS DOCTOR_ARXIV_WORDS DOCTOR_RATING_HI_SHARE
 }

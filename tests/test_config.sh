@@ -182,6 +182,10 @@ site_max_pages: 41
 site_timeout: 901
 thin_words: 61
 extract_max_parts: 9
+doctor_thin_words: 301
+doctor_stub_words: 41
+doctor_arxiv_words: 601
+doctor_rating_hi_share: 21
 EOF2
 dump="$("$MNEMON_ROOT/bin/mnemon" --instance keys5set config dump)"
 shown=0; unshown=""

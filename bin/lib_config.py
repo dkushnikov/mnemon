@@ -62,6 +62,10 @@ EXPORTS = (
     "SITE_TIMEOUT",
     "THIN_WORDS",
     "EXTRACT_MAX_PARTS",
+    "DOCTOR_THIN_WORDS",
+    "DOCTOR_STUB_WORDS",
+    "DOCTOR_ARXIV_WORDS",
+    "DOCTOR_RATING_HI_SHARE",
 )
 
 # The scalar keys with defaults (capture contracts §7, capture layer §5): one row per
@@ -88,6 +92,11 @@ CONFIG_KEYS = (
     ("site_timeout", "SITE_TIMEOUT", "num", "900"),
     ("thin_words", "THIN_WORDS", "int", "60"),
     ("extract_max_parts", "EXTRACT_MAX_PARTS", "int", "8"),
+    # the data doctor's thresholds (vault store S3/S7, O4): the radius lives in the charter, not here
+    ("doctor_thin_words", "DOCTOR_THIN_WORDS", "int", "300"),
+    ("doctor_stub_words", "DOCTOR_STUB_WORDS", "int", "40"),
+    ("doctor_arxiv_words", "DOCTOR_ARXIV_WORDS", "int", "600"),
+    ("doctor_rating_hi_share", "DOCTOR_RATING_HI_SHARE", "int", "20"),
 )
 
 
