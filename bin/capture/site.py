@@ -251,6 +251,12 @@ def robots_path(url: str) -> str:
     return path + "?" + parts.query if parts.query else path
 
 
+def path_query(url: str) -> str:
+    """What `--include` / `--exclude` regexes are searched in: the URL's path plus `?query`, never the
+    scheme or the host — so an anchored `^/blog/` does what it says (G10)."""
+    return robots_path(url)
+
+
 def robots_origin(url: str) -> Tuple[str, str, int]:
     parts = urlsplit(url)
     scheme = parts.scheme.lower()
@@ -524,7 +530,8 @@ def _map_site(landing_url, policy, max_pages, includes, excludes, deadline, fetc
         note = "no repository linked from the landing"
     sources.append({"name": "github-readme", "yield": n, "note": note})
 
-    # decisions: roles, robots, content type, include/exclude regexes, the cap
+    # decisions: roles, robots, content type, include/exclude regexes (searched in the URL's path plus
+    # ?query — never the scheme or host — so an anchored `^/blog/` works; G10), the cap
     inc_re = [re.compile(r) for r in includes]
     exc_re = [re.compile(r) for r in excludes]
     for c in order:
@@ -544,9 +551,9 @@ def _map_site(landing_url, policy, max_pages, includes, excludes, deadline, fetc
         else:
             c.include, c.reason = False, "excluded: %s" % c.role
         if c.reason.startswith("excluded: ") and c.reason not in ("excluded: robots", "excluded: robots-unreachable", "excluded: content-type"):
-            if any(r.search(c.url) for r in inc_re):
+            if any(r.search(path_query(c.url)) for r in inc_re):
                 c.include, c.reason = True, "%s (--include)" % c.role
-        if c.include and any(r.search(c.url) for r in exc_re):
+        if c.include and any(r.search(path_query(c.url)) for r in exc_re):
             c.include, c.reason = False, "excluded: exclude-regex"
     # the included pages are fetched once, by role priority: title, final host, content type; a page the
     # fetch excludes (off-site, non-HTML) frees its slot; past the cap the rest is `excluded: cap` unfetched

@@ -1186,6 +1186,10 @@ STUB_FETCH=pdf run_gw --url "https://arxiv.org/abs/2402.00001" --capture-id arx-
 assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" content_format) $(capfm "$VAULT/Sources/$(result revision)/source.md" method)" 'pdf "pdftotext"' "a paper served as PDF takes the pdf row"
 assert_file_exists "$ARCHIVE/$(result revision).pdf" "...raw as <revision>.pdf"
 assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" arxiv_id)" '"2402.00001"' "...with the arXiv metadata from the fetch report"
+assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" published) $(fm "$VAULT/Sources/$(result revision)/source.md" source_type)" '"2026-01-02" paper' "...and published: from the fetch report's citation_date, like the HTML path (G10)"
+assert_eq "$(rget arx-pdf '.published_candidates | map(.source) | join(",")')" "citation_date" "...the eligible candidate recorded in the receipt"
+STUB_FETCH=pdf run_gw --url "https://example.com/plain.pdf" --origin pdf --capture-id pdf-url-plain
+assert_eq "$rc $(result status) $(grep -c '^published:' "$VAULT/Sources/$(result revision)/source.md")" "0 extracted 0" "a URL PDF without dated metadata gets no published: line"
 unset STUB_BODY_FROM_TEMPLATE
 
 # ---------------------------------------------------------------------------------------------

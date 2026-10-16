@@ -441,6 +441,19 @@ class Timeouts(FetchBase):
         self.assertEqual(self.stages(report), [("direct", "thin"), ("render", "timeout")])
         self.assertEqual((report["method"], report["acquisition"]["outcome"]), ("direct", "thin"))
 
+    def test_acquire_timeout_firing_during_the_render_stage_names_itself(self):
+        """G10: when the acquisition budget, not render_timeout, cuts the render stage, the error says so."""
+        self.server.add("/wall", "<html><body><p>Access Denied</p></body></html>", status=403)
+        stub, pidfile = self.sleeper("render-sleep4.sh")
+        rc, report, raw, se = self.fetch("/wall", ["--acquire-timeout", "2", "--render-timeout", "60"], render=stub)
+        self.assertEqual(rc, 124, se)
+        self.assertEqual((report["error_class"], report["stage"]), ("timeout", "render"))
+        self.assertEqual(report["error"], "acquire_timeout=2 during the render stage")
+        self.assertNotIn("render_timeout", report["error"])
+        self.assertIn("acquire_timeout=2", report["stages"][-1]["note"])
+        rc, report, raw, se = self.fetch("/wall", ["--acquire-timeout", "30", "--render-timeout", "1"], render=stub)
+        self.assertEqual((rc, report["error"]), (124, "render stage exceeded render_timeout=1"), "...and render_timeout names itself")
+
     def test_acquire_timeout_caps_the_direct_stage(self):
         self.server.add("/slow", RICH, delay=3.0)
         rc, report, raw, se = self.fetch("/slow", ["--acquire-timeout", "1"])

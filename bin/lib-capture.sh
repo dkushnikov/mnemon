@@ -1363,6 +1363,20 @@ cap_text_fields() {   # <text report> [fetch report]
   return 0
 }
 
+# `published:` for a raw that has no conversion report (the pdf row: an arXiv paper served as a PDF,
+# a URL PDF): the gateway's choice from the fetch report's dated metadata alone, by SOURCE_TYPE as
+# in cap_text_fields — an arXiv PDF carries the abstract page's citation_date exactly as the HTML
+# path does (D8; G10). Never for website / site captures.
+cap_published_from_fetch() {   # <fetch report>
+  local chosen
+  [[ -n "${1:-}" && -f "$1" && "${SOURCE_TYPE:-}" != "website" && -z "${SITE_MODE:-}" ]] || return 0
+  chosen="$(cap_py published-choice "$SOURCE_TYPE" "$1" -)"
+  ACQ_PUBLISHED="$(printf '%s\n' "$chosen" | sed -n '1p')"
+  cap_receipt_update "$CAPTURE_ID" '.published_candidates=$c' --argjson c "$(printf '%s\n' "$chosen" | sed -n '2p')"
+  [[ -n "$ACQ_PUBLISHED" ]] && ACQ_META_LINES="${ACQ_META_LINES}published: $(cap_q "$ACQ_PUBLISHED")"$'\n'
+  return 0
+}
+
 # The fetch report of this capture as a file (the receipt's copy on a reconversion, D2)
 cap_fetch_report_file() {   # → prints the path, or nothing
   local fr="$ATTEMPT_DIR/fetch.json"
@@ -1416,6 +1430,7 @@ cap_acquire_url() {   # the chain of §3.3 through capture-fetch.py; a PDF takes
     cap_raw_commit || return 1
     cap_convert_pdf || return 1
     cap_fetch_fields "$report"
+    cap_published_from_fetch "$report"
     return 0
   fi
   RAW_KIND="$kind"
@@ -1551,7 +1566,7 @@ cap_acquire_pdf() {   # --file, or --url through capture-fetch.py --expect pdf (
   fi
   cap_raw_commit || return 1
   cap_convert_pdf || return 1
-  [[ -z "$FILE_PATH" ]] && cap_fetch_fields "$ATTEMPT_DIR/fetch.json"
+  [[ -z "$FILE_PATH" ]] && { cap_fetch_fields "$ATTEMPT_DIR/fetch.json"; cap_published_from_fetch "$ATTEMPT_DIR/fetch.json"; }
   return 0
 }
 
@@ -1970,10 +1985,11 @@ cap_reconvert() {
             cap_receipt_get "$CAPTURE_ID" '.capture_report.text // empty' > "$tr" 2>/dev/null || true
             if [[ -s "$tr" ]]; then cap_fetch_fields "$fr"; cap_text_fields "$tr" "$fr"; CAPTURE_METHOD="depth-composite"; else rm -f "$tr"; fi ;;
           *) if [[ "$ext" == pdf || "$(cap_detect_mime "$RAW_PATH")" == "application/pdf" ]]; then
-               cap_convert_pdf || return 1; cap_fetch_fields "$(cap_fetch_report_file)"
+               cap_convert_pdf || return 1; fr="$(cap_fetch_report_file)"; cap_fetch_fields "$fr"; cap_published_from_fetch "$fr"
              else cap_convert_html || return 1; fi ;;
         esac ;;
-      pdf) cap_convert_pdf || return 1; [[ -z "$FILE_PATH" ]] && cap_fetch_fields "$(cap_fetch_report_file)" ;;
+      pdf) cap_convert_pdf || return 1
+           [[ -z "$FILE_PATH" ]] && { fr="$(cap_fetch_report_file)"; cap_fetch_fields "$fr"; cap_published_from_fetch "$fr"; } ;;
       file|book) cap_convert_file || return 1 ;;
       youtube)
         # captions: the retained raw is the transcript; whisper: the retained raw is the audio and

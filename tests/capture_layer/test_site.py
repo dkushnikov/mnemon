@@ -104,6 +104,23 @@ class Map(SiteBase):
         self.assertEqual(self.plan["caps"], {"max_pages": 13})
         self.assertEqual([p["n"] for p in self.plan["pages"]], list(range(1, len(self.plan["pages"]) + 1)))
 
+    def test_include_and_exclude_match_the_path_and_query(self):
+        """G10: --include / --exclude are searched in the page's path plus ?query — an anchored `^/faq$`
+        includes, an anchored `^/blog/` excludes, and a regex that would only match the host matches nothing."""
+        self.assertEqual(site.path_query("https://h.example/a/b?x=1&y=2#frag"), "/a/b?x=1&y=2")
+        self.assertEqual(site.path_query("https://h.example"), "/")
+        plan_path = os.path.join(self.work, "plan-anchored.json")
+        rc, so, se = run_cli([CS, "map", self.server.base + "/", "--out", plan_path, "--include", "^/faq$", "--exclude", "^/blog/",
+                              "--include", "127\\.0\\.0\\.1"], env=self.env, timeout=300)
+        self.assertEqual(rc, 0, se)
+        with open(plan_path, encoding="utf-8") as fh:
+            plan = json.load(fh)
+        by = {p["url"].replace(self.server.base, "") or "/": p for p in plan["pages"]}
+        self.assertEqual((by["/faq"]["include"], by["/faq"]["reason"]), (True, "howto (--include)"), "an anchored ^/faq$ matches the path")
+        self.assertEqual(by["/blog/post-1"]["reason"], "excluded: exclude-regex", "an anchored ^/blog/ excludes")
+        self.assertEqual(by["/privacy"]["reason"], "excluded: legal", "the host is never searched: a host regex includes nothing")
+        self.assertEqual(by["/de-de/x"]["reason"], "excluded: localized")
+
     def test_roles_anchored_and_exclusions(self):
         by = self.pages_by_path()
         self.assertEqual((by["/"]["role"], by["/"]["include"], by["/"]["title"]), ("landing", True, "Landing"))

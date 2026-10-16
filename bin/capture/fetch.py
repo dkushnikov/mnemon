@@ -457,10 +457,18 @@ class Chain:
             self.stage("render", "unavailable", None, None, 0, 0, "renderer not found: %s" % cmd)
             return _Render("unavailable", note="renderer not found", rc=RENDER_EXIT_NO_CHROME)
         virtual_ms = int(min(RENDER_VIRTUAL_MS, max(1000, self.opts.render_timeout * 1000 / 2)))
+        bound = self.deadline.bound(self.opts.render_timeout)
         res = proc.run([cmd, self.res.fetch_url, "--html", "--timeout", str(virtual_ms), "--max-bytes", str(self.opts.render_max_bytes)],
                        timeout=self.opts.render_timeout, deadline=self.deadline)
         ms = int((time.monotonic() - t0) * 1000)
         if res.timed_out:
+            # the budget that fired names itself (G10): the stage's own render_timeout, or the acquisition's
+            # remaining budget when that was the smaller one
+            if bound is not None and bound < self.opts.render_timeout:
+                budget = ("acquire_timeout=%g" % self.opts.acquire_timeout if self.opts.deadline is None
+                          else "the acquisition budget of %.0f s (acquire_timeout=%g)" % (bound, self.opts.acquire_timeout))
+                self.stage("render", "timeout", None, None, 0, ms, "renderer killed with its process group after %.0f s (%s)" % (bound, budget))
+                return _Render("timeout", elapsed_ms=ms, note="%s during the render stage" % budget)
             self.stage("render", "timeout", None, None, 0, ms, "renderer killed with its process group after %.0f s" % self.opts.render_timeout)
             return _Render("timeout", elapsed_ms=ms, note="render stage exceeded render_timeout=%g" % self.opts.render_timeout)
         if res.rc == EXIT_TIMEOUT:
