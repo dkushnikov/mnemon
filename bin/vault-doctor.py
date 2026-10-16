@@ -280,7 +280,8 @@ def check_index(scan: dict, cfg: dict) -> Check:
     c.counts = {"rows": len(regenerated), "differ": len(differ), "missing": len(missing), "extra": len(extra),
                 "hand_edits_rows": he["rows"] if he else 0}
     if scan["index_text"] is None:
-        c.raise_to("warn")
+        if regenerated:
+            c.raise_to("warn")
         c.detail = "index.md missing; %d rows to generate" % len(regenerated)
     else:
         c.detail = "%d rows differ, %d missing, %d extra" % (len(differ), len(missing), len(extra))
@@ -1013,7 +1014,7 @@ def list_lines(checks: List[Check], wanted: str) -> Optional[List[str]]:
             for i in c.items:
                 rating = i.get("rating")
                 words = i.get("words")
-                out.append("%s\t%s\t%s\t%s" % (i["id"], i.get("class") or i.get("reason") or "-",
+                out.append("%s\t%s\t%s\t%s" % (i["id"], i.get("reason") or i.get("class") or "-",
                                                rating if rating is not None else "-", words if words is not None else "-"))
             return out
     return None

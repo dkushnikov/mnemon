@@ -13,13 +13,14 @@ assert_contains "$(print_toolchain)" "toolchain: bash $BASH_VERSION" "print_tool
 #        tilde-Mnemon checkout path, people in Latin or Cyrillic). The patterns
 #        are assembled from pieces so this file never matches the gate itself.
 #        A linked worktree's `.git` is a file holding a local path — excluded as
-#        git metadata, not repo content.
+#        git metadata, not repo content; so are Python's byte-code caches
+#        (`__pycache__/`, gitignored), which embed the checkout's absolute path.
 echo "--- private references ---"
 P_HOME="Users/dkush""nikov"
 P_LEGACY="~/Mne""mon"
 P_NAME_LAT="\\bDi""ma\\b"
 P_NAME_CYR="Ди""м"
-hits=$(grep -rnE "$P_HOME|$P_LEGACY|$P_NAME_LAT|$P_NAME_CYR" "$MNEMON_ROOT" --exclude-dir=.git --exclude=.git --exclude=LICENSE 2>/dev/null || true)
+hits=$(grep -rnE "$P_HOME|$P_LEGACY|$P_NAME_LAT|$P_NAME_CYR" "$MNEMON_ROOT" --exclude-dir=.git --exclude-dir=__pycache__ --exclude=.git --exclude=LICENSE 2>/dev/null || true)
 assert_eq "$hits" "" "no private references outside LICENSE"
 [[ -n "$hits" ]] && printf '%s\n' "$hits"
 hits=$(grep -rn '"email"' "$MNEMON_ROOT/plugins/mnemon/plugin.json" "$MNEMON_ROOT/.claude-plugin/marketplace.json" || true)
