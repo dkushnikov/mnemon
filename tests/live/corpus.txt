@@ -1,17 +1,21 @@
 # tests/live/corpus.txt — the manual gate corpus (spec D16, §7.17). Never read by an automated suite.
 #
 # One item per line:  <url> | <kind: page|site|paper> | <min words> | <artifacts that must be absent, comma-separated>
-# The maintainer fills in the public URLs; placeholders stay until then. Expectations per §7.17:
-#   every capture converts without manual repair, completeness ∈ {complete, partial},
-#   missing_lines + glued_lines ≤ 3 per page, the absent list holds for the capture-text, the word floor holds.
+# Public pages only: the sites and papers the 2026-09-22 and 2026-10-15 recipes were written on (the arXiv ids
+# are public in the tracker issues). Expectations per §7.17: every capture converts without manual repair,
+# completeness ∈ {complete, partial}, missing_lines + glued_lines ≤ 3 per page, the absent list holds for the
+# capture-text, the word floor holds. tests/live/capture-gate.sh fetches with external_fetch off (the vendor
+# stage is a separate, labelled run) and records the defuddle, pandoc and Chrome versions and the engine
+# commit in its report header; tests/live/replay.sh re-converts a snapshot. Notes after `#` are for the
+# maintainer (a site whose landing needs an --include plan is mapped by hand before the gate runs).
 #
 # five sites
-<site-1: a GitHub Pages project page with 13 sections>              | page  | 1500 | data:,[TABLE],\iow_now,_next/image
-<site-2: a docs site with tabbed pages>                             | site  | 3000 | data:,[TABLE],\iow_now,_next/image
-<site-3: an SPA product site behind a bot checkpoint>               | site  | 800  | data:,[TABLE],\iow_now,_next/image
-<site-4: a marketing site with Next.js images and SVG diagrams>     | site  | 1200 | data:,[TABLE],\iow_now,_next/image
-<site-5: a Substack article with comments>                          | page  | 1500 | data:,[TABLE],\iow_now,_next/image
+https://dylanzsz.github.io/faulty-memory/ | site | 6000 | data:,[TABLE]    # github-pages project page, 13 sections; defuddle returned 1 of 13
+https://www.jetbrains.com/help/air/supported-agents.html | site | 300 | data:    # docs page with tabbed content (pandoc dropped tabs); plan: map https://www.jetbrains.com/air/ with --include '/help/air/'
+https://vidiq.com/ | site | 400 | _next/image    # spa product site behind a bot checkpoint (429 to curl, passes headless chrome); plan: map with defaults
+https://www.codos.ai/ | site | 800 | _next/image,<svg    # marketing site: per-word span headings ("Deploythecompanybrain"), Next.js images, SVG; plan: map with defaults
+https://whrrari.substack.com/p/graph-engineering-how-to-build-ai | page | 1500 | data:    # substack article with a reader-comment section to cut
 # three arXiv papers pinned by version
-<paper-1: https://arxiv.org/abs/<id>vN with 67 base64 figures>      | paper | 6000 | data:,[TABLE],\iow_now,_next/image
-<paper-2: https://arxiv.org/abs/<id>vN with 19 listing download buttons and merged-cell tables> | paper | 6000 | data:,[TABLE],\iow_now,⬇
-<paper-3: https://arxiv.org/abs/<id>vN with tcolorbox listings>     | paper | 6000 | data:,[TABLE],\iow_now,_next/image
+https://arxiv.org/abs/2605.12978v2 | paper | 20000 | data:,[TABLE],\iow_now    # 67 inline base64 figures; LaTeXML
+https://arxiv.org/abs/2605.27276 | paper | 15000 | data:,[TABLE],\iow_now    # listing download buttons
+https://arxiv.org/abs/2505.22954 | paper | 20000 | data:,[TABLE],\iow_now    # 19 listing download buttons, merged-cell tables, tcolorbox listings
