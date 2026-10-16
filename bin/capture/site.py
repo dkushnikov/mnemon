@@ -1,13 +1,15 @@
 """capture.site — map · fetch-bundle · verify · assemble (spec §3.6, D9, §12 A5, A10, A12).
 
 `map_site` discovers same-site pages (the landing's links — rendered when the landing is a JavaScript
-shell — the sitemaps named by robots.txt and /sitemap.xml, /llms.txt, a docs table of contents, the linked
-GitHub README) and writes a reviewable plan (`mnemon-site-plan/1`) with a role, an include decision and a
-reason per page; host eligibility is explicit (no public-suffix guessing), robots.txt is honoured per RFC 9309
-(product token `mnemon`, longest match over path?query, the rules of each origin a page belongs to —
-fetched on first use — unreachable = everything disallowed, 4xx = no rules), roles are anchored path rules
-(`en` and `en-*` are never `localized`), `--include` restricts the plan to the landing and the matching
-pages, `--exclude` then removes, and the cap keeps pages by role priority. `fetch_bundle` owns the
+shell — the sitemaps named by robots.txt and /sitemap.xml with their indexes followed two levels deep under
+one budget of 25 sitemaps and 20 000 URLs, the landing's section's sub-sitemaps first; /llms.txt; a docs
+table of contents; the linked GitHub README) and writes a reviewable plan (`mnemon-site-plan/1`) with a
+role, an include decision and a reason per page; host eligibility is explicit (no public-suffix guessing),
+robots.txt is honoured per RFC 9309 (product token `mnemon`, longest match over path?query, the rules of
+each origin a page belongs to — fetched on first use — unreachable = everything disallowed, 4xx = no rules),
+roles are anchored path rules (`en` and `en-*` are never `localized`), `--include` restricts the plan to the
+landing and the matching pages, `--exclude` then removes, and the cap keeps pages under the landing's
+section first, then by role priority, then in discovery order. `fetch_bundle` owns the
 page loop and its deadline: every included page through the chain of §3.3 (host and robots eligibility
 checked per hop, against the destination origin's robots), ≥ 1 s
 between requests to one host, `NN.html` + `NN.fetch.json` per page, `plan.json` (a byte copy) and
@@ -38,6 +40,11 @@ PRODUCT_TOKEN = "mnemon"
 DEFAULT_MAX_PAGES = 40
 PACE_S = 1.0
 MAP_PAGE_CAP = 1000000
+# sitemap indexes are followed two levels deep (an index → an index → a urlset), at most this many
+# sitemaps and URLs read per map (G22)
+SITEMAP_MAX_DEPTH = 2
+SITEMAP_MAX_SITEMAPS = 25
+SITEMAP_MAX_URLS = 20000
 ELIGIBLE_SUBDOMAINS = ("docs", "help", "developer", "developers", "blog", "api", "learn", "support")
 INCLUDED_ROLES = frozenset(("landing", "product", "docs", "llms_txt", "blog", "pricing", "careers", "job", "github_readme"))
 ROLE_PRIORITY = ("landing", "product", "docs", "llms_txt", "pricing", "blog", "careers", "job", "github_readme")
@@ -99,6 +106,32 @@ def is_localized_segment(segment: str) -> bool:
     /en/ or /en-us/ is the site's content, not a localization of it)."""
     s = segment.lower()
     return is_locale_segment(s) and not (s == "en" or s.startswith("en-"))
+
+
+def landing_section(landing_url: str) -> str:
+    """The landing's section: the landing URL's directory — `/help/air/` for a docs page, `/air/` for a
+    product landing (`/air` too), `/` for a site root (G22)."""
+    path = urlsplit(landing_url).path or "/"
+    last = path.rsplit("/", 1)[-1]
+    if "." in last:
+        return path[:path.rfind("/") + 1]
+    return path if path.endswith("/") else path + "/"
+
+
+def in_section(url: str, landing_url: str, section: str) -> bool:
+    """A page is under the landing's section when it is on the landing's host and its path starts with the
+    section (every page is, for a root landing)."""
+    if strip_www(urlsplit(url).hostname or "") != strip_www(urlsplit(landing_url).hostname or ""):
+        return False
+    return (urlsplit(url).path or "/").startswith(section)
+
+
+def shares_section(sitemap_url: str, section: str) -> bool:
+    """A sub-sitemap shares the landing's section when its path lies under the section or its directory is
+    an ancestor of it (`/help/sitemap.xml` for the section `/help/air/`)."""
+    path = urlsplit(sitemap_url).path or "/"
+    directory = path[:path.rfind("/") + 1]
+    return path.startswith(section) or section.startswith(directory)
 
 
 def role_for(url: str, title: Optional[str], landing_url: str, landing_final: Optional[str] = None) -> str:
@@ -331,7 +364,28 @@ def github_repo(url: str) -> Optional[Tuple[str, str]]:
     return m.group(1), m.group(2)
 
 
-def sitemap_urls(policy: policymod.Policy, sitemap_url: str, deadline: proc.Deadline, depth: int = 0) -> Tuple[List[str], Optional[str]]:
+class SitemapBudget:
+    """What one map may read from sitemaps: at most SITEMAP_MAX_SITEMAPS fetched and SITEMAP_MAX_URLS
+    collected, across every sitemap and index the map follows (G22)."""
+
+    def __init__(self, max_sitemaps: int = SITEMAP_MAX_SITEMAPS, max_urls: int = SITEMAP_MAX_URLS):
+        self.max_sitemaps = max_sitemaps
+        self.max_urls = max_urls
+        self.sitemaps = 0
+        self.urls = 0
+
+    def exhausted(self) -> bool:
+        return self.sitemaps >= self.max_sitemaps or self.urls >= self.max_urls
+
+
+def sitemap_urls(policy: policymod.Policy, sitemap_url: str, deadline: proc.Deadline, depth: int = 0,
+                 budget: Optional[SitemapBudget] = None, section: str = "/") -> Tuple[List[str], Optional[str]]:
+    """The page URLs of a sitemap: an index is followed two levels deep (an index → an index → a urlset),
+    its sub-sitemaps that share the landing's section fetched first, under one budget of sitemaps and URLs."""
+    budget = budget if budget is not None else SitemapBudget()
+    if budget.exhausted():
+        return [], "%s: the sitemap budget (%d sitemaps, %d urls) is spent" % (sitemap_url, budget.max_sitemaps, budget.max_urls)
+    budget.sitemaps += 1
     try:
         resp = policy.get(sitemap_url, deadline=deadline)
     except policymod.PolicyError as exc:
@@ -341,14 +395,27 @@ def sitemap_urls(policy: policymod.Policy, sitemap_url: str, deadline: proc.Dead
     text = resp.text()
     locs = [htmlmod.unescape(l) for l in _LOC.findall(text)]
     if "<sitemapindex" in text.lower():
-        if depth >= 1:
-            return [], "%s: a nested sitemap index is not followed" % sitemap_url
+        if depth >= SITEMAP_MAX_DEPTH:
+            return [], "%s: a sitemap index nested %d deep is not followed" % (sitemap_url, depth + 1)
         out: List[str] = []
-        for child in locs[:50]:
-            urls, _ = sitemap_urls(policy, child, deadline, depth + 1)
+        notes: List[str] = []
+        children = sorted(locs, key=lambda u: 0 if shares_section(u, section) else 1)      # stable: the index's order within a rank
+        for child in children:
+            if budget.exhausted():
+                notes.append("%s: the sitemap budget (%d sitemaps, %d urls) is spent" % (child, budget.max_sitemaps, budget.max_urls))
+                break
+            urls, note = sitemap_urls(policy, child, deadline, depth + 1, budget, section)
             out.extend(urls)
-        return out, None
-    return locs[:2000], None
+            if note:
+                notes.append(note)
+        return out, ("; ".join(notes) or None)
+    room = max(0, budget.max_urls - budget.urls)
+    taken = locs[:room]
+    budget.urls += len(taken)
+    note = None
+    if len(locs) > room:
+        note = "%s: %d of %d urls read (the sitemap budget of %d urls is spent)" % (sitemap_url, len(taken), len(locs), budget.max_urls)
+    return taken, note
 
 
 def helptoc_urls(doc: object, base_url: str) -> List[str]:
@@ -410,6 +477,7 @@ def _map_site(landing_url, policy, max_pages, includes, excludes, deadline, fetc
     landing_url = resolve.canonicalize(landing_url).url
     landing_host = urlsplit(landing_url).hostname or ""
     hosts = [landing_host.lower()] + [h.lower() for h in extra_hosts if h.lower() != landing_host.lower()]
+    section = landing_section(landing_url)
     sources: List[dict] = []
     # the landing through the chain (rendered when it is a JavaScript shell)
     raw_path = os.path.join(tmp_dir, ".mnemon-map-landing-%d.html" % os.getpid())
@@ -459,8 +527,9 @@ def _map_site(landing_url, policy, max_pages, includes, excludes, deadline, fetc
     origin = "%s://%s" % (parts.scheme, parts.netloc)
     sitemap_list = [origin + "/sitemap.xml"] + [s for s in robots.sitemaps if s not in (origin + "/sitemap.xml",)]
     n, notes = 0, []
+    budget = SitemapBudget()
     for sm in sitemap_list[:10]:
-        urls, note = sitemap_urls(policy, sm, deadline)
+        urls, note = sitemap_urls(policy, sm, deadline, budget=budget, section=section)
         if note:
             notes.append(note)
         n += sum(1 for u in urls if add(u, "sitemap"))
@@ -563,11 +632,14 @@ def _map_site(landing_url, policy, max_pages, includes, excludes, deadline, fetc
                 c.include, c.reason = False, "excluded: include-regex"
         if c.include and any(r.search(path_query(c.url)) for r in exc_re):
             c.include, c.reason = False, "excluded: exclude-regex"
-    # the included pages are fetched once, by role priority: title, final host, content type; a page the
-    # fetch excludes (off-site, non-HTML) frees its slot; past the cap the rest is `excluded: cap` unfetched
+    # the included pages are fetched once, in cap order — (1) the pages under the landing's section
+    # (docs-toc pages count as in it), (2) role priority, (3) discovery order (G22): title, final host,
+    # content type; a page the fetch excludes (off-site, non-HTML) frees its slot; past the cap the rest
+    # is `excluded: cap` unfetched
     included = [c for c in order if c.include]
     rank = {r: i for i, r in enumerate(ROLE_PRIORITY)}
-    included.sort(key=lambda c: (rank.get(c.role, 99), order.index(c)))
+    included.sort(key=lambda c: (0 if c.discovered_by == "docs-toc" or in_section(c.url, landing_url, section) else 1,
+                                 rank.get(c.role, 99), order.index(c)))
     slots = max(0, max_pages - 1)
     kept = 0
     for c in included:

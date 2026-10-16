@@ -263,6 +263,19 @@ class RobotsRules(unittest.TestCase):
         self.assertEqual(site.role_for("https://example.com/de/x", None, L, "https://example.com/de/"), "product",
                          "the landing's locale is read from its final URL too")
         self.assertEqual(site.role_for("https://example.com/fr/x", None, L, "https://example.com/de/"), "localized")
+        # G22: the landing's section and what shares it
+        self.assertEqual(site.landing_section("https://example.com/help/air/supported-agents.html"), "/help/air/")
+        self.assertEqual(site.landing_section("https://example.com/air/"), "/air/")
+        self.assertEqual(site.landing_section("https://example.com/air"), "/air/")
+        self.assertEqual(site.landing_section("https://example.com"), "/")
+        self.assertTrue(site.in_section("https://www.example.com/help/air/a.html", "https://example.com/help/air/landing.html", "/help/air/"))
+        self.assertFalse(site.in_section("https://docs.example.com/help/air/a.html", "https://example.com/help/air/landing.html", "/help/air/"))
+        self.assertTrue(site.in_section("https://example.com/anything", "https://example.com/", "/"))
+        self.assertTrue(site.shares_section("https://example.com/help/sitemap.xml", "/help/air/"))
+        self.assertTrue(site.shares_section("https://example.com/help/air/sitemap.xml", "/help/air/"))
+        self.assertTrue(site.shares_section("https://example.com/sitemap_index.xml", "/help/air/"))
+        self.assertFalse(site.shares_section("https://example.com/help/idea/sitemap.xml", "/help/air/"))
+        self.assertFalse(site.shares_section("https://example.com/products/sitemap.xml", "/help/air/"))
 
     def test_robots_rules_match_path_and_query(self):
         self.assertEqual(site.robots_path("https://example.com/search?q=x"), "/search?q=x")
@@ -652,6 +665,104 @@ class BundleLoop(unittest.TestCase):
             pids = [int(p) for p in fh.read().split()]
         for pid in pids:
             self.assertTrue(wait_gone(pid, 5), "pid %d survived the site timeout" % pid)
+
+
+class SectionAndSitemaps(unittest.TestCase):
+    """G22 on a docs landing: sitemap indexes two levels deep under one budget, the landing's section's
+    sub-sitemaps first; the cap keeps the landing's section first."""
+
+    def setUp(self):
+        self.server = LocalServer()
+        b = self.server.base
+        self.work = tmpdir("mnemon-section-")
+        self.env = clean_env()
+        self.env["RENDER_URL_CMD"] = write_stub(self.work, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
+        links = " ".join('<a href="%s">%s</a>' % (h, h) for h in ["/help/air/intro.html", "/products/p1/", "/store/", "/pricing", "/blog/post-1"])
+        self.server.add("/help/air/landing.html", page("Air docs", "<nav>%s</nav>" % links))
+        self.server.add("/robots.txt", "User-agent: *\nSitemap: %s/sitemap_index.xml\n" % b, content_type="text/plain")
+        self.server.add("/sitemap.xml", "<html><body>no sitemap here</body></html>", status=404)
+        self.server.add("/sitemap_index.xml", "<sitemapindex><sitemap><loc>%s/products/sitemap.xml</loc></sitemap>"
+                        "<sitemap><loc>%s/help/sitemap.xml</loc></sitemap></sitemapindex>" % (b, b), content_type="application/xml")
+        self.server.add("/help/sitemap.xml", "<sitemapindex><sitemap><loc>%s/help/idea/sitemap.xml</loc></sitemap>"
+                        "<sitemap><loc>%s/help/air/sitemap.xml</loc></sitemap></sitemapindex>" % (b, b), content_type="application/xml")
+        self.server.add("/help/air/sitemap.xml", "<urlset>%s</urlset>" % "".join("<url><loc>%s/help/air/%s.html</loc></url>" % (b, n) for n in "abc"),
+                        content_type="application/xml")
+        self.server.add("/help/idea/sitemap.xml", "<urlset><url><loc>%s/help/idea/x.html</loc></url><url><loc>%s/help/idea/y.html</loc></url></urlset>" % (b, b),
+                        content_type="application/xml")
+        self.server.add("/products/sitemap.xml", "<urlset><url><loc>%s/products/p1/</loc></url><url><loc>%s/products/p2/</loc></url></urlset>" % (b, b),
+                        content_type="application/xml")
+        for p, t in [("/help/air/intro.html", "Intro"), ("/help/air/a.html", "A"), ("/help/air/b.html", "B"), ("/help/air/c.html", "C"),
+                     ("/help/idea/x.html", "X"), ("/help/idea/y.html", "Y"), ("/products/p1/", "P1"), ("/products/p2/", "P2"),
+                     ("/store/", "Store"), ("/pricing", "Pricing"), ("/blog/post-1", "Post")]:
+            self.server.add(p, page(t))
+
+    def tearDown(self):
+        self.server.close()
+        shutil.rmtree(self.work, ignore_errors=True)
+
+    def map(self, *extra):
+        out = os.path.join(self.work, "plan-%d.json" % len(os.listdir(self.work)))
+        rc, so, se = run_cli([CS, "map", self.server.base + "/help/air/landing.html", "--out", out] + list(extra), env=self.env, timeout=300)
+        self.assertEqual(rc, 0, se)
+        with open(out, encoding="utf-8") as fh:
+            plan = json.load(fh)
+        return plan, {p["url"].replace(self.server.base, "") or "/": p for p in plan["pages"]}
+
+    def test_sitemap_indexes_two_levels_deep_section_first(self):
+        plan, by = self.map()
+        paths = [r[1] for r in self.server.requests()]
+        for sm in ("/sitemap_index.xml", "/help/sitemap.xml", "/help/air/sitemap.xml", "/help/idea/sitemap.xml", "/products/sitemap.xml"):
+            self.assertIn(sm, paths, "the index is followed two levels deep: %s" % sm)
+        self.assertLess(paths.index("/help/sitemap.xml"), paths.index("/products/sitemap.xml"), "the landing's section's sub-sitemap is fetched first")
+        self.assertLess(paths.index("/help/air/sitemap.xml"), paths.index("/help/idea/sitemap.xml"))
+        sources = {s["name"]: s for s in plan["discovery"]["sources"]}
+        self.assertEqual(sources["sitemap"]["yield"], 6, "a, b, c, x, y, p2 (p1 was a landing link, counted once)")
+        self.assertEqual((by["/help/air/a.html"]["role"], by["/help/air/a.html"]["include"]), ("docs", True))
+        self.assertEqual((by["/help/idea/y.html"]["role"], by["/help/idea/y.html"]["include"]), ("docs", True))
+
+    def test_cap_keeps_the_landing_section_first(self):
+        plan, by = self.map("--max-pages", "4")
+        included = [p["url"].replace(self.server.base, "") for p in plan["pages"] if p["include"]]
+        self.assertEqual(included[0], "/help/air/landing.html")
+        self.assertEqual(len(included), 4)
+        self.assertTrue(all(u.startswith("/help/air/") for u in included), included)
+        self.assertEqual(by["/help/idea/x.html"]["reason"], "excluded: cap", "a docs page outside the section is capped before any section page")
+        self.assertEqual(by["/pricing"]["reason"], "excluded: cap")
+        self.assertEqual(by["/products/p1/"]["reason"], "excluded: cap", "...and so is a product page outside it, whatever its role priority")
+
+    def test_sitemap_budget(self):
+        """At most 25 sitemaps and 20 000 URLs are read per map: an index of 40 sub-sitemaps stops at the
+        25th fetch; an index of 1 000-URL sub-sitemaps stops at 20 000 URLs."""
+        b = self.server.base
+        self.server.add("/small_index.xml", "<sitemapindex>%s</sitemapindex>" % "".join("<sitemap><loc>%s/s/%d.xml</loc></sitemap>" % (b, i) for i in range(40)),
+                        content_type="application/xml")
+        self.server.add("/wide_index.xml", "<sitemapindex>%s</sitemapindex>" % "".join("<sitemap><loc>%s/w/%d.xml</loc></sitemap>" % (b, i) for i in range(40)),
+                        content_type="application/xml")
+        for i in range(40):
+            self.server.add("/s/%d.xml" % i, "<urlset>%s</urlset>" % "".join("<url><loc>%s/u/%d/%d</loc></url>" % (b, i, j) for j in range(100)),
+                            content_type="application/xml")
+            self.server.add("/w/%d.xml" % i, "<urlset>%s</urlset>" % "".join("<url><loc>%s/v/%d/%d</loc></url>" % (b, i, j) for j in range(1000)),
+                            content_type="application/xml")
+        env = clean_env()
+        old = dict(os.environ)
+        os.environ.update(env)
+        try:
+            policy = policymod.Policy(connect_timeout=5, read_timeout=5)
+            self.server.reset()
+            budget = site.SitemapBudget()
+            urls, note = site.sitemap_urls(policy, b + "/small_index.xml", proc.Deadline(60), budget=budget, section="/")
+            self.assertEqual((budget.sitemaps, len(urls)), (site.SITEMAP_MAX_SITEMAPS, 24 * 100), "the index and 24 sub-sitemaps")
+            self.assertEqual(len(self.server.requests()), site.SITEMAP_MAX_SITEMAPS)
+            self.assertIn("budget", note or "")
+            self.server.reset()
+            budget = site.SitemapBudget()
+            urls, note = site.sitemap_urls(policy, b + "/wide_index.xml", proc.Deadline(60), budget=budget, section="/")
+            self.assertEqual(len(urls), site.SITEMAP_MAX_URLS, "20 000 URLs read, then nothing more")
+            self.assertEqual(budget.sitemaps, 21, "the index and the 20 sub-sitemaps that filled the URL budget")
+            self.assertIn("budget", note or "")
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
 
 
 if __name__ == "__main__":
