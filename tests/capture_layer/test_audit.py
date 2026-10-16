@@ -23,6 +23,9 @@ class Audit(unittest.TestCase):
         os.makedirs(os.path.join(self.vault, "Sources", "2026-10-06_ffffffff"))
         with open(os.path.join(self.vault, "Sources", "2026-10-06_ffffffff", "source.md"), "w") as fh:
             fh.write("---\ntype: source\nurl: https://example.com/unterminated\n")
+        os.makedirs(os.path.join(self.vault, "Sources", "2026-10-07_dddddddd"))
+        with open(os.path.join(self.vault, "Sources", "2026-10-07_dddddddd", "source.md"), "w") as fh:
+            fh.write("---\ntype: source\nurl: https://example.com/other?utm_source=dots\ncaptured: 2026-10-07\n...\nbody\n")
 
     def tearDown(self):
         shutil.rmtree(self.vault, ignore_errors=True)
@@ -60,9 +63,10 @@ class Audit(unittest.TestCase):
         self.assertEqual([r["extract"] for r in post], ["ok", "missing"])
         self.assertEqual(post[1]["supersedes"], "2026-10-01_aaaaaaaa")
         other = groups["https://example.com/other"]["revisions"]
-        self.assertEqual([r["revision"] for r in other], ["2026-10-03_cccccccc", "2026-10-04_dddddddd"],
-                         "canonical_url: joins the group of url:")
+        self.assertEqual([r["revision"] for r in other], ["2026-10-03_cccccccc", "2026-10-04_dddddddd", "2026-10-07_dddddddd"],
+                         "canonical_url: joins the group of url:; a header closed with `...` is read like one closed with ---")
         self.assertIn("malformed-frontmatter 2026-10-06_ffffffff", se)
+        self.assertNotIn("2026-10-07_dddddddd", se)
 
     def test_vault_option_is_the_dispatcher_form(self):
         """`mnemon audit --canonical` runs `canonical-audit.py --vault <vault> …` (§3.10, bin/mnemon)."""

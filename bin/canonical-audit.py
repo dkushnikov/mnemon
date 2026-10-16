@@ -7,9 +7,9 @@ canonicalization v1.
 
 Groups `Sources/*/source.md` by the v1 canonical form of `url:` (and of `canonical_url:` when present),
 prints the groups of two or more folders with their revisions, `supersedes:` links and extract status,
-exits 0 and never writes anything — nothing is merged. Each header is read through its closing `---`
-(cap 256 KB); a folder without a readable header is reported on stderr as `malformed-frontmatter` and
-skipped. Stdlib only, python 3.9.
+exits 0 and never writes anything — nothing is merged. Each header is read through its closing `---` or
+`...` (cap 256 KB, the rule the lookup and the reindexer share); a folder without a readable header is
+reported on stderr as `malformed-frontmatter` and skipped. Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
@@ -36,11 +36,20 @@ def read_header(path: str) -> Optional[Dict[str, str]]:
         return None
     if not data.startswith(b"---\n"):
         return None
-    end = data.find(b"\n---\n", 3)
-    if end < 0 or end > HEADER_CAP:
+    # the one header rule of the lookup and the reindexer (§12 A2): line by line through the closing
+    # `---` or `...` within the cap
+    lines = data[:HEADER_CAP].decode("utf-8", "replace").split("\n")
+    body: List[str] = []
+    closed = False
+    for line in lines[1:]:
+        if line == "---" or line == "...":
+            closed = True
+            break
+        body.append(line)
+    if not closed:
         return None
     out: Dict[str, str] = {}
-    for line in data[4:end].decode("utf-8", "replace").split("\n"):
+    for line in body:
         m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$", line)
         if not m or m.group(1) not in _KEYS:
             continue
