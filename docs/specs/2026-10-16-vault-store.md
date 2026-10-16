@@ -1,6 +1,6 @@
 # Vault store — entities, ownership, states, invariants (2026-10-16)
 
-Status: **proposed** (v1.2, after two external document reviews) · Scope: how a Mnemon vault is modelled as a data store, and the observational data doctor (`mnemon doctor --data`, `mnemon status --brief`) that executes the model's invariants. Builds on [`2026-10-15-capture-contracts.md`](2026-10-15-capture-contracts.md) (persistence and isolation, v4.1) and [`2026-10-15-capture-layer.md`](2026-10-15-capture-layer.md) (capture layer, v2.1). Guide version: **2** (the `mnemon_guide` stamp carried by `vault-template/`).
+Status: **proposed** (v1.3 — two external document reviews, then the first live run and two code reviews folded in) · Scope: how a Mnemon vault is modelled as a data store, and the observational data doctor (`mnemon doctor --data`, `mnemon status --brief`) that executes the model's invariants. Builds on [`2026-10-15-capture-contracts.md`](2026-10-15-capture-contracts.md) (persistence and isolation, v4.1) and [`2026-10-15-capture-layer.md`](2026-10-15-capture-layer.md) (capture layer, v2.1). Guide version: **2** (the `mnemon_guide` stamp carried by `vault-template/`).
 
 ## 1. Problem
 
@@ -189,4 +189,4 @@ Collections, `tier: bookmark`, `mnemon triage`, `dismissed` and its scope (revis
 
 ## 11. Status
 
-v1.2, 2026-10-16 — after two external document reviews (rework → accept with amendments; every blocking issue, contradiction and gap folded in: the three folder classes, the four axes with a link resolver, severity by cause with explicit coverage and a separate diagnostics channel, the frozen JSON and the combined envelope, one radius form per key with parse diagnostics, declared queues, `writer_host` as the only writer evidence, an end-to-end brief deadline). Implementation on `feat/p2.5-data-doctor`.
+v1.3, 2026-10-17 — after two external document reviews (rework → accept with amendments), the first live run (legacy-only duplicate groups warn) and two code reviews (the alias rule of I10, the lock and cache wording of §6.4); every blocking issue, contradiction and gap folded in: the three folder classes, the four axes with a link resolver, severity by cause with explicit coverage and a separate diagnostics channel, the frozen JSON and the combined envelope, one radius form per key with parse diagnostics, declared queues, `writer_host` as the only writer evidence, an end-to-end brief deadline). Implementation on `feat/p2.5-data-doctor`.
