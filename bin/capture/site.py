@@ -7,9 +7,10 @@ table of contents; the linked GitHub README) and writes a reviewable plan (`mnem
 role, an include decision and a reason per page; host eligibility is explicit (no public-suffix guessing),
 robots.txt is honoured per RFC 9309 (product token `mnemon`, longest match over path?query, the rules of
 each origin a page belongs to — fetched on first use — unreachable = everything disallowed, 4xx = no rules),
-roles are anchored path rules (`en` and `en-*` are never `localized`), `--include` restricts the plan to the
-landing and the matching pages, `--exclude` then removes, and the cap keeps pages under the landing's
-section first, then by role priority, then in discovery order. `fetch_bundle` owns the
+roles are anchored path rules (`en` and `en-*` are never `localized`; `product` is scoped to the landing's
+first path segment unless the landing is the site root), `--include` restricts the plan to the landing and
+the matching pages, `--exclude` then removes, and the cap keeps pages under the landing's section first,
+then by role priority, then in discovery order. `fetch_bundle` owns the
 page loop and its deadline: every included page through the chain of §3.3 (host and robots eligibility
 checked per hop, against the destination origin's robots), ≥ 1 s
 between requests to one host, `NN.html` + `NN.fetch.json` per page, `plan.json` (a byte copy) and
@@ -134,9 +135,29 @@ def shares_section(sitemap_url: str, section: str) -> bool:
     return path.startswith(section) or section.startswith(directory)
 
 
+def _landing_locales(landing_url: str, landing_final: Optional[str]) -> set:
+    locales = set()
+    for lu in (landing_url, landing_final):
+        lsegs = [s.lower() for s in _segments(urlsplit(lu).path or "/")] if lu else []
+        if lsegs and is_locale_segment(lsegs[0]):
+            locales.add(lsegs[0])
+    return locales
+
+
+def _role_segments(path: str, landing_locales: set) -> List[str]:
+    """The path segments a role is read from: an exempt locale prefix (/en/, /en-us/, the landing's own
+    locale) is not a segment."""
+    segs = [s.lower() for s in _segments(path)]
+    if segs and is_locale_segment(segs[0]) and (not is_localized_segment(segs[0]) or segs[0] in landing_locales):
+        segs = segs[1:]
+    return segs
+
+
 def role_for(url: str, title: Optional[str], landing_url: str, landing_final: Optional[str] = None) -> str:
     """The role by anchored path and title rules, in the order of §3.6. The landing's own locale prefix (of
-    the given URL or of its final URL after redirects) is never `localized`."""
+    the given URL or of its final URL after redirects) is never `localized`. `product` is scoped to the
+    landing's first path segment when the landing is not the site root: a same-site page outside it is
+    `other` unless its role is docs, blog, pricing, careers or job (G23)."""
     parts = urlsplit(url)
     host = strip_www(parts.hostname or "")
     lhost = strip_www(urlsplit(landing_url).hostname or "")
@@ -148,19 +169,14 @@ def role_for(url: str, title: Optional[str], landing_url: str, landing_final: Op
         return "careers"
     if any(s in LEGAL_SEGMENTS for s in segs):
         return "legal"
-    landing_locales = set()
-    for lu in (landing_url, landing_final):
-        lsegs = [s.lower() for s in _segments(urlsplit(lu).path or "/")] if lu else []
-        if lsegs and is_locale_segment(lsegs[0]):
-            landing_locales.add(lsegs[0])
+    landing_locales = _landing_locales(landing_url, landing_final)
     for i, s in enumerate(segs):
         if is_localized_segment(s) and not (i == 0 and s in landing_locales):
             return "localized"
     sub = host.split(".")[0] if host != lhost else ""
     if sub and sub != lhost.split(".")[0] and is_localized_segment(sub) and host.endswith(lhost):
         return "localized"
-    if segs and is_locale_segment(segs[0]) and (not is_localized_segment(segs[0]) or segs[0] in landing_locales):
-        segs = segs[1:]        # an exempt prefix (/en/, /en-us/, the landing's own locale) is not a path segment of the role
+    segs = _role_segments(path, landing_locales)
     t = (title or "").strip().lower()
     if any(s in HOWTO_SEGMENTS for s in segs) or any(t.startswith(p) for p in HOWTO_TITLES):
         return "howto"
@@ -171,6 +187,9 @@ def role_for(url: str, title: Optional[str], landing_url: str, landing_final: Op
     if segs and segs[0] == "pricing":
         return "pricing"
     if 1 <= len(segs) <= 2:
+        lsegs = _role_segments(urlsplit(landing_url).path or "/", landing_locales)
+        if lsegs and (host != lhost or segs[0] != lsegs[0]):
+            return "other"
         return "product"
     return "other"
 

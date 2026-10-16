@@ -263,6 +263,19 @@ class RobotsRules(unittest.TestCase):
         self.assertEqual(site.role_for("https://example.com/de/x", None, L, "https://example.com/de/"), "product",
                          "the landing's locale is read from its final URL too")
         self.assertEqual(site.role_for("https://example.com/fr/x", None, L, "https://example.com/de/"), "localized")
+        # G23: product is scoped to the landing's first path segment when the landing is not the site root
+        A = "https://example.com/air/"
+        self.assertEqual(site.role_for("https://example.com/air/gateway/", None, A), "product")
+        self.assertEqual(site.role_for("https://example.com/air", None, A), "product")
+        self.assertEqual(site.role_for("https://example.com/store/", None, A), "other")
+        self.assertEqual(site.role_for("https://www.example.com/store/x", None, A), "other")
+        for url, role in (("https://example.com/help/air/x.html", "docs"), ("https://example.com/blog/post", "blog"),
+                          ("https://example.com/pricing", "pricing"), ("https://example.com/careers", "careers"),
+                          ("https://example.com/jobs/7", "job"), ("https://docs.example.com/guide", "docs")):
+            self.assertEqual(site.role_for(url, None, A), role, "%s stays %s outside the landing's segment" % (url, role))
+        self.assertEqual(site.role_for("https://example.com/store/", None, L), "product", "a root landing keeps today's rule")
+        self.assertEqual(site.role_for("https://example.com/en/air/x", None, "https://example.com/en/air/"), "product", "an exempt locale prefix is not the segment")
+        self.assertEqual(site.role_for("https://example.com/products/compare/", None, "https://example.com/help/air/supported-agents.html"), "other")
         # G22: the landing's section and what shares it
         self.assertEqual(site.landing_section("https://example.com/help/air/supported-agents.html"), "/help/air/")
         self.assertEqual(site.landing_section("https://example.com/air/"), "/air/")
@@ -719,6 +732,25 @@ class SectionAndSitemaps(unittest.TestCase):
         self.assertEqual(sources["sitemap"]["yield"], 6, "a, b, c, x, y, p2 (p1 was a landing link, counted once)")
         self.assertEqual((by["/help/air/a.html"]["role"], by["/help/air/a.html"]["include"]), ("docs", True))
         self.assertEqual((by["/help/idea/y.html"]["role"], by["/help/idea/y.html"]["include"]), ("docs", True))
+        # G23: the landing's first segment is `help`; a product page outside it is `other`, docs / blog / pricing stay
+        self.assertEqual((by["/products/p1/"]["role"], by["/products/p1/"]["reason"]), ("other", "excluded: other"))
+        self.assertEqual((by["/store/"]["role"], by["/store/"]["include"]), ("other", False))
+        self.assertEqual((by["/pricing"]["role"], by["/pricing"]["include"]), ("pricing", True))
+        self.assertEqual((by["/blog/post-1"]["role"], by["/blog/post-1"]["include"]), ("blog", True))
+
+    def test_include_restricts_on_a_docs_landing(self):
+        """G21 on the docs landing: the plan keeps the landing and the matching pages only, --exclude then
+        removes; a page excluded by its role (G23: /store/ is `other` here) keeps its reason unless an
+        include re-admits it."""
+        plan, by = self.map("--include", "^/help/air/[ab]", "--include", "^/pricing$", "--exclude", "/b\\.html$")
+        included = sorted(p["url"].replace(self.server.base, "") for p in plan["pages"] if p["include"])
+        self.assertEqual(included, ["/help/air/a.html", "/help/air/landing.html", "/pricing"], "the landing and the matching pages only; --exclude then removes")
+        self.assertEqual(by["/help/air/c.html"]["reason"], "excluded: include-regex")
+        self.assertEqual(by["/help/air/b.html"]["reason"], "excluded: exclude-regex")
+        self.assertEqual(by["/store/"]["reason"], "excluded: other", "a page excluded by its role keeps its reason")
+        plan, by = self.map("--include", "^/store/")
+        self.assertEqual((by["/store/"]["include"], by["/store/"]["reason"]), (True, "other (--include)"), "...and is re-admitted when it matches")
+        self.assertEqual(by["/help/air/a.html"]["reason"], "excluded: include-regex")
 
     def test_cap_keeps_the_landing_section_first(self):
         plan, by = self.map("--max-pages", "4")
@@ -728,7 +760,7 @@ class SectionAndSitemaps(unittest.TestCase):
         self.assertTrue(all(u.startswith("/help/air/") for u in included), included)
         self.assertEqual(by["/help/idea/x.html"]["reason"], "excluded: cap", "a docs page outside the section is capped before any section page")
         self.assertEqual(by["/pricing"]["reason"], "excluded: cap")
-        self.assertEqual(by["/products/p1/"]["reason"], "excluded: cap", "...and so is a product page outside it, whatever its role priority")
+        self.assertEqual(by["/products/p1/"]["reason"], "excluded: other", "a product page outside the landing's segment is other (G23)")
 
     def test_sitemap_budget(self):
         """At most 25 sitemaps and 20 000 URLs are read per map: an index of 40 sub-sitemaps stops at the
