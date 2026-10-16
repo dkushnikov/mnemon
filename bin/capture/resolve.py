@@ -23,7 +23,8 @@ TRACKING_KEYS = (
     "igsh", "mc_cid", "mc_eid", "_hsenc", "_hsmi", "hsCtaTracking", "mkt_tok", "_ga", "_gl", "ref_src", "ref_url",
     "hide_intro_popup",
 )
-YOUTUBE_NAV_KEYS = ("list", "index", "t", "si", "feature", "pp")
+# The YouTube rule keeps `v` alone: every other parameter — the navigation context `list`, `index`, `t`,
+# `si`, `feature`, `pp` among them — is dropped, because the video is the resource (§3.1 step 6).
 
 _UNRESERVED = frozenset(string.ascii_letters + string.digits + "-._~")
 _PCT = re.compile(r"%([0-9A-Fa-f]{2})")
@@ -142,6 +143,7 @@ def canonicalize(url: str, version: int = VERSION) -> Canonical:
     if host in _YT_HOSTS or host == "youtu.be":
         video = _youtube_id(host, path, kept)
         if video:
+            # every parameter but `v` goes (list, index, t, si, feature, pp, …): the video is the resource
             dropped_yt = [p.split("=", 1)[0] for p in kept if unquote(p.split("=", 1)[0]) != "v"]
             return Canonical("https://www.youtube.com/watch?v=" + video, 1, "youtube", dropped + dropped_yt,
                              dropped_fragment)

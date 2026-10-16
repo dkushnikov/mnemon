@@ -58,6 +58,14 @@ class Rules(unittest.TestCase):
         self.assertEqual(R.canonicalize("https://arxiv.org/abs/2401.12345v1").host_rule, "arxiv")
         self.assertEqual(R.canonicalize("https://youtu.be/abc").host_rule, "youtube")
 
+    def test_youtube_keeps_v_alone(self):
+        """The video is the resource: the navigation context (list, index, t, si, feature, pp) and every other
+        parameter are dropped — there is no separate list of navigation keys to keep in step."""
+        c = R.canonicalize("https://www.youtube.com/watch?v=abc123&list=PLx&index=3&t=10s&si=zzz&feature=share&pp=ygU&foo=bar")
+        self.assertEqual(c.url, "https://www.youtube.com/watch?v=abc123")
+        self.assertEqual(c.dropped_params, ["list", "index", "t", "si", "feature", "pp", "foo"])
+        self.assertFalse(hasattr(R, "YOUTUBE_NAV_KEYS"))
+
     def test_arxiv_resolution(self):
         res = R.resolve("https://arxiv.org/pdf/2401.12345v2")
         self.assertEqual(res.kind, "arxiv")
