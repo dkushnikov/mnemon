@@ -404,6 +404,7 @@ class HooksOff(unittest.TestCase):
             env["MNEMON_POLICY_ALLOW_LOOPBACK"] = "1"
             env["MNEMON_FETCH_URL_REWRITE"] = "https://a=https://b"
             env["MNEMON_EXTERNAL_FETCH_CMD"] = "/bin/false"
+            env["MNEMON_TEST_CONVERT_HANG"] = "1"      # the conversion hook of G25 is named like the three of §3.2
             code = ("import sys; sys.path.insert(0, %r)\n"
                     "from capture import policy as P\n"
                     "try:\n    P.Policy().get(%r)\nexcept P.PolicyError as e:\n    print(e.kind)\n") % (BIN, server.url("/x"))
