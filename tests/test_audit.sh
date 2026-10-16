@@ -7,6 +7,7 @@ MNEMON_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 AUDIT="$MNEMON_ROOT/bin/archive-audit.py"
 
 echo "=== Archive Audit Tests (A1 step 5) ==="
+print_toolchain; assert_toolchain_legacy
 
 TEST_TMPDIR=$(mktemp -d)
 VAULT="$TEST_TMPDIR/vault"

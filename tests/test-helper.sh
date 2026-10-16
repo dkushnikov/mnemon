@@ -57,6 +57,21 @@ assert_executable() {
   [[ -x "$path" ]] && pass "$msg" || fail "$msg" "not executable: $path"
 }
 
+# The toolchain proof of capture layer §7.16 / §12 A12: every suite prints the bash and python it runs
+# under, and under the legacy PATH run (PATH=/usr/bin:/bin:…) asserts — never assumes — that the
+# running bash is 3.2.x and the python3 it will call is 3.9.x.
+print_toolchain() {
+  echo "toolchain: $(bash --version | head -1) · $(python3 --version 2>&1)"
+}
+
+assert_toolchain_legacy() {
+  case "$PATH" in
+    /usr/bin:/bin|/usr/bin:/bin:*)
+      [[ "$BASH_VERSION" == 3.2.* ]] && pass "legacy toolchain: bash 3.2.x" || fail "legacy toolchain: bash 3.2.x" "running bash $BASH_VERSION"
+      [[ "$(python3 --version 2>&1)" == "Python 3.9."* ]] && pass "legacy toolchain: python 3.9.x" || fail "legacy toolchain: python 3.9.x" "$(python3 --version 2>&1)" ;;
+  esac
+}
+
 # wait_file <path> [seconds=10]: poll until the file exists — the readiness signal of a
 # background lock holder that creates it after its flock succeeded. Never a fixed sleep window
 # (a loaded machine makes those lie), never a probe that could take the lock from the holder for

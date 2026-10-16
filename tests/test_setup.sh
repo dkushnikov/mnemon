@@ -4,6 +4,7 @@ source "$(dirname "$0")/test-helper.sh"
 MNEMON_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "=== Setup Tests ==="
+print_toolchain; assert_toolchain_legacy
 
 TEST_TMPDIR=$(mktemp -d -t mnemon-test-XXXX)
 VAULT="$TEST_TMPDIR/test-vault"

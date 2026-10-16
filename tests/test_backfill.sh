@@ -8,6 +8,7 @@ MNEMON_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BF="$MNEMON_ROOT/bin/backfill-archives.sh"
 
 echo "=== Backfill Tests (A1 step 2) ==="
+print_toolchain; assert_toolchain_legacy
 
 TEST_TMPDIR=$(mktemp -d)
 VAULT="$TEST_TMPDIR/vault"

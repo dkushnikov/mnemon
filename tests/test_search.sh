@@ -7,6 +7,7 @@ MNEMON_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 MNEMON="$MNEMON_ROOT/bin/mnemon"
 
 echo "=== Search Tests ==="
+print_toolchain; assert_toolchain_legacy
 
 TEST_TMPDIR="$(cd "$(mktemp -d -t mnemon-search-XXXX)" && pwd -P)"
 export XDG_CONFIG_HOME="$TEST_TMPDIR/xdg"

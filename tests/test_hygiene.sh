@@ -6,6 +6,7 @@ source "$(dirname "$0")/test-helper.sh"
 MNEMON_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 
 echo "=== Hygiene Tests ==="
+print_toolchain; assert_toolchain_legacy
 
 # --- 1. no private references (home paths with a user name, the legacy
 #        tilde-Mnemon checkout path, people in Latin or Cyrillic). The patterns

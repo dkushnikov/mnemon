@@ -15,6 +15,7 @@ LOCK_PY="$MNEMON_ROOT/bin/vault-lock.py"
 FIX="$MNEMON_ROOT/tests/fixtures"
 
 echo "=== Real Dispatch Chain Tests ==="
+print_toolchain; assert_toolchain_legacy
 
 # --- isolation: temp XDG config/state, instance `t` (the fixtures' instance), no inherited selectors,
 #     hooks or lock descriptors --------------------------------------------------------------------

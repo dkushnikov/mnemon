@@ -17,6 +17,7 @@ STUB="$MNEMON_ROOT/tests/fixtures/inbox/stub-add.py"
 MATERIALIZE="$MNEMON_ROOT/tests/fixtures/inbox/materialize.py"
 
 echo "=== Ingest Tests ==="
+print_toolchain; assert_toolchain_legacy
 
 # Isolation: temp XDG config/state, instance `t` (the fixtures' instance), no inherited
 # selectors, hooks or lock descriptors.
