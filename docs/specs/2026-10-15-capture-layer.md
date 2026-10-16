@@ -103,7 +103,8 @@ The report `mnemon-fetch/1`: `{schema, url, fetch_url, canonical_url, canonical_
 
 | # | Condition | outcome / kind | chain | retryable |
 |---|---|---|---|---|
-| 1 | `status == 429` | `rate-limit` | stop, fail | yes |
+| 1 | `status == 429` and a bot-wall marker | `bot-wall` | escalate (the renderer once, then external when allowed) | no |
+| 1 | `status == 429` otherwise | `rate-limit` | stop, fail | yes |
 | 2 | `status == 503` and (`Retry-After` or a bot-wall marker) | `rate-limit` / `bot-wall` by the marker | fail / escalate | yes / — |
 | 3 | `status == 503` otherwise, or `status in 500..599` | `unavailable` / `server-error` | stop, fail | yes |
 | 4 | `status == 401` | `login` | stop, fail | no |

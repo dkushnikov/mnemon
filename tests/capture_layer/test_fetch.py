@@ -178,6 +178,33 @@ class Chain(FetchBase):
         self.assertEqual(self.stages(report), [("direct", "rate-limit")])
         self.assertFalse(os.path.exists(log))
 
+    def test_429_with_a_bot_wall_marker_escalates_to_the_renderer(self):
+        """G14: the Vercel Security Checkpoint answers 429 with its marker in the body — a bot wall, not a
+        rate limit: rendered once (the raw is the rendered page), external only when allowed; without a
+        marker the 429 stays a terminal, retryable rate limit (the test above)."""
+        wall = ("<html><head><title>Vercel Security Checkpoint</title></head><body><p>Verifying your browser before you"
+                " proceed to the site.</p></body></html>")
+        self.server.add("/checkpoint", wall, status=429)
+        rc, report, raw, se = self.fetch("/checkpoint", render=self.render_ok)
+        self.assertEqual(rc, 0, se)
+        self.assertEqual(self.stages(report), [("direct", "bot-wall"), ("render", "ok")])
+        self.assertEqual(report["stages"][0]["status"], 429)
+        self.assertIn("vercel security checkpoint", report["stages"][0]["note"])
+        self.assertEqual((report["method"], report["raw_kind"], report["http_status"]), ("render", "rendered", None))
+        self.assertIn(b"Rendered page", raw)
+        # the renderer failing too: the wall is terminal and permanent (blocked), never a rate limit retried
+        # by the ingest's backoff
+        log = os.path.join(self.dir, "ext.log")
+        env = {"MNEMON_EXTERNAL_FETCH_CMD": self.external, "EXT_LOG": log, "FIRECRAWL_API_KEY": "k"}
+        rc, report, raw, se = self.fetch("/checkpoint", ["--external", '{"mode": "auto", "fetchers": ["firecrawl"]}'],
+                                         render=self.render_fail, env_extra=env)
+        self.assertEqual(rc, 0, se)
+        self.assertEqual(self.stages(report), [("direct", "bot-wall"), ("render", "failed"), ("external:firecrawl", "ok")])
+        self.assertEqual(report["egress"], "external")
+        rc, report, raw, se = self.fetch("/checkpoint", render=self.render_fail)
+        self.assertEqual(rc, 1)
+        self.assertEqual((report["error_class"], report["retryable"], report["acquisition"]["kind"]), ("blocked", False, "bot-wall"))
+
     def test_paywall_teaser_published_as_blocked(self):
         self.server.add("/pay", "<html><body><p>%s</p><div class=\"paywall\">Subscribe to continue reading</div></body></html>" % WORDS)
         rc, report, raw, se = self.fetch("/pay", render=self.render_ok)

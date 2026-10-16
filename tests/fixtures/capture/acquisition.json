@@ -1,5 +1,6 @@
 [
  {"row": 1, "status": 429, "headers": {}, "body": "<html><body><p>slow down</p></body></html>", "thin_words": 60, "outcome": "rate-limit", "chain": "fail", "retryable": true},
+ {"row": 1, "status": 429, "headers": {}, "body": "<html><head><title>Vercel Security Checkpoint</title></head><body><p>Verifying your browser before you proceed.</p></body></html>", "thin_words": 60, "outcome": "bot-wall", "chain": "escalate", "retryable": false, "note": "G14: a 429 with a bot-wall marker is a bot wall (escalate once), not a rate limit"},
  {"row": 2, "status": 503, "headers": {"Retry-After": "30"}, "body": "<html><body><p>just a moment</p></body></html>", "thin_words": 60, "outcome": "rate-limit", "chain": "fail", "retryable": true, "note": "A7 ii: 503 with Retry-After is rate-limit whatever the markers"},
  {"row": 2, "status": 503, "headers": {}, "body": "<html><body><p>Just a moment...</p></body></html>", "thin_words": 60, "outcome": "bot-wall", "chain": "escalate", "retryable": false, "note": "503 with a bot-wall marker and no Retry-After"},
  {"row": 3, "status": 503, "headers": {}, "body": "<html><body><p>maintenance</p></body></html>", "thin_words": 60, "outcome": "unavailable", "chain": "fail", "retryable": true},

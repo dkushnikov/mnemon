@@ -468,6 +468,10 @@ def acquisition(status: Optional[int], headers: Optional[Dict[str, str]], body: 
         return Acq(kind, kind, evidence, W, title)
 
     if status == 429:
+        # a 429 that carries a bot-wall marker is a challenge page answering with that status (the Vercel
+        # Security Checkpoint does; headless Chrome passes it), not a rate limit: escalate once (G14)
+        if bot:
+            return row("bot-wall", "%s (status 429)" % bot)
         return row("rate-limit", "status 429")
     if status == 503:
         if retry_after is not None:
