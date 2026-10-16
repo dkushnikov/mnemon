@@ -166,6 +166,36 @@ out="$(cat "$TEST_TMPDIR/run.out")"
 assert_eq "$rc $(result error_class)" "4 unsupported-size" "merge inputs above the inline limit → unsupported-size"
 assert_contains "$err$(cat "$TEST_TMPDIR/run.err")" "rendered part extracts" "...after the parts ran, at the merge"
 [[ "$(part_calls)" -gt 0 ]] && pass "...the parts had run ($(part_calls) calls)" || fail "parts ran" "0"
+# the split tracks the opening fence's full marker: a four-backtick block holding a three-backtick example
+# and a heading-looking line is never cut inside (the window ends between that line and the next heading)
+fence_max="$(python3 - "$TEST_TMPDIR/fences.md" <<'PY'
+import sys
+out = sys.argv[1]
+para_a = "alpha beta gamma delta epsilon zeta eta theta iota kappa. " * 10 + "\n\n"
+para_b = "lambda mu nu xi omicron pi rho sigma tau upsilon. " * 10 + "\n\n"
+head = "## Section A\n\n" + para_a * 3
+inner = ("````markdown\n```python\nx = 1\n## not a heading: inside the outer fence\nstill inside the outer fence\n```\n````\n\n")
+tail = "## Section B\n\n" + para_b * 3
+data = head + inner + tail
+open(out, "w", encoding="utf-8").write(data)
+print(data.index("## not a heading") + 40)
+PY
+)"
+rm -rf "$TEST_TMPDIR/fence-parts"
+rc=0; python3 "$MNEMON_ROOT/bin/extract-publish.py" split --in "$TEST_TMPDIR/fences.md" --max-bytes "$fence_max" --max-parts 8 --out-dir "$TEST_TMPDIR/fence-parts" >"$TEST_TMPDIR/run.out" 2>&1 || rc=$?
+assert_eq "$rc" "0" "split of a text with a four-backtick block holding a three-backtick example exits 0"
+broken=0; inside=0
+for f in "$TEST_TMPDIR"/fence-parts/part-*.md; do
+  [[ $(( $(grep -c '^````' "$f") % 2 )) -eq 0 ]] || broken=$((broken + 1))
+  grep -q '^## not a heading' "$f" && head -1 "$f" | grep -q '^## not a heading' && inside=$((inside + 1))
+done
+assert_eq "$broken $inside" "0 0" "...no part opens or closes the outer fence alone, none starts at the heading-looking line inside it"
+python3 - "$TEST_TMPDIR/fence-parts" "$TEST_TMPDIR/fences.md" <<'PYC' && pass "...the parts concatenate byte-equal to the input" || fail "byte-preserving split (fences)" "differs"
+import json, os, sys
+d, src = sys.argv[1], sys.argv[2]
+parts = json.load(open(os.path.join(d, "parts.json")))
+assert b"".join(open(os.path.join(d, "part-%d.md" % p["n"]), "rb").read() for p in parts) == open(src, "rb").read()
+PYC
 
 # ---------------------------------------------------------------------------------------------
 echo "--- 4. the budget (A3): --max-budget-usd per call, budget-exhausted, unknown costs ---"

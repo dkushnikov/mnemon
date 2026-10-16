@@ -521,12 +521,16 @@ def cmd_validate_part(args) -> int:
 
 
 _HEADING = re.compile(rb"^#{1,3} ")
+_FENCE = re.compile(rb"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
 def split_text(data: bytes, max_bytes: int, max_parts: int):
     """Split at line boundaries outside fences — a heading cut when one fits, else a blank-line
-    cut — packing greedily; parts concatenate to the input. Returns the list of byte strings or
-    raises ValueError('unsupported-size: …')."""
+    cut — packing greedily; parts concatenate to the input. A fence is tracked by its full opening
+    marker (the character and the length, 3 or more) and closes only on a bare fence of the same
+    character at least as long, as the sanitizer does — so a ```` block holding a ``` example and a
+    heading-looking line is never cut inside. Returns the list of byte strings or raises
+    ValueError('unsupported-size: …')."""
     lines = data.splitlines(keepends=True)
     # cut points: byte offset → "heading" | "blank" (the cut goes before that offset's line)
     offsets = []
@@ -534,11 +538,11 @@ def split_text(data: bytes, max_bytes: int, max_parts: int):
     fence = None
     prev_blank = False
     for line in lines:
-        stripped = line.lstrip(b" ")
-        if fence is None and (stripped.startswith(b"```") or stripped.startswith(b"~~~")):
-            fence = stripped[:3]
+        m = _FENCE.match(line.rstrip(b"\r\n"))
+        if fence is None and m:
+            fence = m.group(1)
             kind = None
-        elif fence is not None and stripped.startswith(fence):
+        elif fence is not None and m and m.group(1)[:1] == fence[:1] and len(m.group(1)) >= len(fence) and not m.group(2).strip():
             fence = None
             kind = None
         elif fence is None and _HEADING.match(line):
