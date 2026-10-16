@@ -1,3 +1,7 @@
+---
+mnemon_guide: 2
+---
+
 # Mnemon Knowledge Vault
 
 Personal knowledge extraction vault. Sources are captured and extracted into structured knowledge artifacts.

@@ -1,3 +1,4 @@
+<!-- mnemon_guide: 2 -->
 # Mnemon Vault Protocol
 
 ## Folder Naming
