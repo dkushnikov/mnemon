@@ -1026,7 +1026,7 @@ assert_eq "$rc $(rget m-rep '.capture_report.text.schema')" "0 mnemon-capture-te
 # the capture: block of a plain page
 src1="$VAULT/Sources/$(rget m-rep '.revision')/source.md"
 assert_eq "$(capfm "$src1" fetch) $(capfm "$src1" converter) $(capfm "$src1" acquisition) $(capfm "$src1" completeness)" "direct defuddle ok unknown" "capture: fetch direct, converter defuddle, acquisition ok, completeness as the converter reports it"
-assert_eq "$(capfm "$src1" reference_lines) $(capfm "$src1" eligible_lines) $(capfm "$src1" missing_lines) $(capfm "$src1" glued_lines) $(capfm "$src1" headings_missing) $(capfm "$src1" repairs)" "0 0 0 0 0 \"none\"" "...the counts and repairs: none"
+assert_eq "$(capfm "$src1" reference_lines) $(capfm "$src1" eligible_lines) $(capfm "$src1" missing_lines) $(capfm "$src1" glued_lines) $(capfm "$src1" headings_missing) $(capfm "$src1" repairs)" "2 0 0 0 0 \"none\"" "...the counts: the two reference lines of the stub raw (a 1-word heading and a 4-word line, neither eligible), nothing missing; repairs none"
 assert_eq "$(capfm "$src1" canonical_version) $(capfm "$src1" http_status)" "1 200" "...canonical_version 1, http_status 200"
 assert_eq "$(fm "$src1" final_url)" '"https://example.com/report-first"' "...final_url from the fetch report"
 assert_eq "$(grep -c '^  egress:' "$src1") $(grep -c '^  blocked_kind:' "$src1")" "0 0" "...egress and blocked_kind only when they apply"
