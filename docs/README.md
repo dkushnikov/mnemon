@@ -98,7 +98,7 @@ Each skill runs the installed engine's dispatcher. From the shell, the same and 
 | Command | Description |
 |---------|-------------|
 | `mnemon add --url <url> \| --file <path>` (text on stdin) | Capture and extract a source. Flags: `--origin --title --author --source-type --context --intent --render --no-render --no-external --site <plan.json\|auto> --depth --recapture --resume --dry-run` ([capture.md](capture.md)) |
-| `mnemon site map <url> [--max-pages N] [--include <regex>] [--exclude <regex>] [--out <plan.json>]` | Discover a site's pages and write a reviewable plan for `mnemon add --site` (nothing captured) |
+| `mnemon site map <url> [--max-pages N] [--include <regex>] [--exclude <regex>] [--out <plan.json>]` | Discover a site's pages and write a reviewable plan for `mnemon add --site` (nothing captured); a regex is searched in the page's path plus `?query`, never the host — `--include` keeps the landing and only the matching pages, `--exclude` then removes, the cap applies last |
 | `mnemon search --query <q> [--domain <d>] [--limit <n>] [--include-source] [--include-synthesis] [--human]` | Grep-style scan of the library; JSON on stdout (`provider: "grep"`, `configured_provider: <search_provider>`) |
 | `mnemon status` | Library dashboard |
 | `mnemon reindex [--no-hand-edit-report]` | Rebuild the vault's `index.md` from `Sources/` — every row regenerated, replaced rows preserved in `_inputs/index-hand-edits-<date>.md` (not the qmd index) |

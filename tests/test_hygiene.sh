@@ -7,6 +7,7 @@ MNEMON_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 
 echo "=== Hygiene Tests ==="
 print_toolchain; assert_toolchain_legacy
+assert_contains "$(print_toolchain)" "toolchain: bash $BASH_VERSION" "print_toolchain names the bash that runs the suite (\$BASH_VERSION), not the one PATH resolves (G30)"
 
 # --- 1. no private references (home paths with a user name, the legacy
 #        tilde-Mnemon checkout path, people in Latin or Cyrillic). The patterns

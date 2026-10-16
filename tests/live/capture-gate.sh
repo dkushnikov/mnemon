@@ -66,9 +66,11 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   # every per-item field starts empty: a failed row never shows the previous row's values (G20)
   method=""; converter=""; acquisition=""; completeness=""; missing=""; glued=""; repairs=""; words=""; report=""
   if [[ "$kind" == "site" ]]; then
+    # G30: the plan's origin is printed per site item — a reused same-day plan.json is visible, never silent
     if [[ -s "$dir/plan.json" ]]; then
-      echo "using the pre-placed plan $dir/plan.json (not mapping)"; notes="$notes pre-placed plan;"
+      echo "plan: pre-placed — using the pre-placed plan $dir/plan.json (not mapping)"; notes="$notes pre-placed plan;"
     else
+      echo "plan: mapped — mapping $url into $dir/plan.json"
       python3 "$ROOT/bin/capture-site.py" map "$url" --out "$dir/plan.json" ${POLICY:+--policy "$POLICY"} || { verdict="map-failed"; }
     fi
     if [[ "$verdict" == "ok" ]]; then

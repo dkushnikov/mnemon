@@ -61,7 +61,9 @@ assert_executable() {
 # under, and under the legacy PATH run (PATH=/usr/bin:/bin:…) asserts — never assumes — that the
 # running bash is 3.2.x and the python3 it will call is 3.9.x.
 print_toolchain() {
-  echo "toolchain: $(bash --version | head -1) · $(python3 --version 2>&1)"
+  # the bash that runs this suite ($BASH_VERSION), never the one PATH resolves — a forced bash 5.3 under the
+  # legacy PATH used to print "GNU bash, version 3.2.57" and only the assertion told the truth (G30)
+  echo "toolchain: bash $BASH_VERSION · $(python3 --version 2>&1) ($(command -v python3 2>/dev/null || echo python3))"
 }
 
 assert_toolchain_legacy() {
