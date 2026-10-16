@@ -63,7 +63,7 @@ class SiteBase(unittest.TestCase):
         cls.env["RENDER_URL_CMD"] = cls.render_fail
         cls.plan_path = os.path.join(cls.work, "plan.json")
         rc, so, se = run_cli([CS, "map", cls.server.base + "/", "--out", cls.plan_path, "--max-pages", "13",
-                              "--include", "privacy", "--exclude", "blog"], env=cls.env, timeout=300)
+                              "--exclude", "blog"], env=cls.env, timeout=300)
         assert rc == 0, se
         cls.small_plan_path = os.path.join(cls.work, "plan-small.json")
         rc, so, se = run_cli([CS, "map", cls.server.base + "/", "--out", cls.small_plan_path, "--max-pages", "4"], env=cls.env, timeout=300)
@@ -106,26 +106,45 @@ class Map(SiteBase):
 
     def test_include_and_exclude_match_the_path_and_query(self):
         """G10: --include / --exclude are searched in the page's path plus ?query — an anchored `^/faq$`
-        includes, an anchored `^/blog/` excludes, and a regex that would only match the host matches nothing."""
+        includes, an anchored `^/blog/` excludes, and a regex that would only match the host matches nothing.
+        G21: --include restricts — the plan keeps the landing and only the pages matching some include regex
+        (a matching page the role rules excluded is re-admitted), --exclude then removes, the cap applies last."""
         self.assertEqual(site.path_query("https://h.example/a/b?x=1&y=2#frag"), "/a/b?x=1&y=2")
         self.assertEqual(site.path_query("https://h.example"), "/")
-        plan_path = os.path.join(self.work, "plan-anchored.json")
-        rc, so, se = run_cli([CS, "map", self.server.base + "/", "--out", plan_path, "--include", "^/faq$", "--exclude", "^/blog/",
-                              "--include", "127\\.0\\.0\\.1"], env=self.env, timeout=300)
-        self.assertEqual(rc, 0, se)
-        with open(plan_path, encoding="utf-8") as fh:
-            plan = json.load(fh)
-        by = {p["url"].replace(self.server.base, "") or "/": p for p in plan["pages"]}
-        self.assertEqual((by["/faq"]["include"], by["/faq"]["reason"]), (True, "howto (--include)"), "an anchored ^/faq$ matches the path")
-        self.assertEqual(by["/blog/post-1"]["reason"], "excluded: exclude-regex", "an anchored ^/blog/ excludes")
-        self.assertEqual(by["/privacy"]["reason"], "excluded: legal", "the host is never searched: a host regex includes nothing")
+
+        def mapped(name, *extra):
+            plan_path = os.path.join(self.work, name)
+            rc, so, se = run_cli([CS, "map", self.server.base + "/", "--out", plan_path] + list(extra), env=self.env, timeout=300)
+            self.assertEqual(rc, 0, se)
+            with open(plan_path, encoding="utf-8") as fh:
+                plan = json.load(fh)
+            return plan, {p["url"].replace(self.server.base, "") or "/": p for p in plan["pages"]}
+
+        plan, by = mapped("plan-docs.json", "--include", "^/docs/")
+        self.assertEqual(sorted(p["url"].replace(self.server.base, "") or "/" for p in plan["pages"] if p["include"]),
+                         ["/", "/docs/guide", "/docs/intro"], "a plan with --include '^/docs/' holds the landing and /docs/* only")
+        self.assertEqual(by["/product"]["reason"], "excluded: include-regex", "a page matching no include regex is out")
+        self.assertEqual(by["/llms.txt"]["reason"], "excluded: include-regex")
+        plan, by = mapped("plan-anchored.json", "--include", "^/faq$", "--include", "^/docs/", "--exclude", "^/docs/guide$",
+                          "--include", "127\\.0\\.0\\.1")
+        self.assertEqual((by["/faq"]["include"], by["/faq"]["reason"]), (True, "howto (--include)"), "an anchored ^/faq$ matches the path and re-admits")
+        self.assertEqual((by["/docs/intro"]["include"], by["/docs/intro"]["reason"]), (True, "docs"), "a matching page included by its role keeps its reason")
+        self.assertEqual(by["/docs/guide"]["reason"], "excluded: exclude-regex", "--exclude removes after --include")
+        self.assertEqual(by["/privacy"]["reason"], "excluded: legal", "the host is never searched: a host regex includes nothing; a role exclusion keeps its reason")
         self.assertEqual(by["/de-de/x"]["reason"], "excluded: localized")
+        self.assertEqual(sorted(p["url"].replace(self.server.base, "") or "/" for p in plan["pages"] if p["include"]), ["/", "/docs/intro", "/faq"])
+        plan, by = mapped("plan-excl.json", "--exclude", "^/blog/")
+        self.assertEqual(by["/blog/post-1"]["reason"], "excluded: exclude-regex", "an anchored ^/blog/ excludes")
+        self.assertEqual((by["/product"]["include"], by["/privacy"]["reason"]), (True, "excluded: legal"), "without --include the role rules decide")
+        plan, by = mapped("plan-readmit.json", "--include", "privacy")
+        self.assertEqual((by["/privacy"]["role"], by["/privacy"]["include"], by["/privacy"]["reason"]), ("legal", True, "legal (--include)"))
+        self.assertEqual([p["url"].replace(self.server.base, "") or "/" for p in plan["pages"] if p["include"]], ["/", "/privacy"])
 
     def test_roles_anchored_and_exclusions(self):
         by = self.pages_by_path()
         self.assertEqual((by["/"]["role"], by["/"]["include"], by["/"]["title"]), ("landing", True, "Landing"))
         self.assertEqual((by["/jobs/42"]["role"], by["/jobs"]["role"], by["/careers"]["role"]), ("job", "careers", "careers"))
-        self.assertEqual((by["/privacy"]["role"], by["/privacy"]["include"], by["/privacy"]["reason"]), ("legal", True, "legal (--include)"))
+        self.assertEqual((by["/privacy"]["role"], by["/privacy"]["include"], by["/privacy"]["reason"]), ("legal", False, "excluded: legal"))
         self.assertEqual((by["/de-de/x"]["role"], by["/de-de/x"]["reason"]), ("localized", "excluded: localized"))
         self.assertEqual(by["/private/x"]["reason"], "excluded: robots")
         self.assertEqual((by["/private/open"]["include"], by["/private/open"]["role"]), (True, "product"))
@@ -157,7 +176,7 @@ class Map(SiteBase):
 
     def test_cap_keeps_pages_by_role_priority(self):
         included = [p for p in self.plan["pages"] if p["include"]]
-        self.assertEqual(len(included), 13, "nothing capped at 13")
+        self.assertEqual(len(included), 12, "nothing capped at 13 (12 included)")
         self.assertEqual([p for p in self.plan["pages"] if p["reason"] == "excluded: cap"], [])
         small = [p for p in self.small_plan["pages"] if p["include"]]
         self.assertEqual(len(small), 4)

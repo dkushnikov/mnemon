@@ -177,9 +177,11 @@ def main() -> int:
     m.add_argument("url")
     m.add_argument("--max-pages", default=None)
     m.add_argument("--include", action="append", default=[], metavar="REGEX",
-                   help="include a page the role rules excluded when REGEX is found in its path plus ?query (e.g. ^/blog/); repeatable")
+                   help="restrict the plan to the landing and the pages whose path plus ?query matches some --include REGEX "
+                        "(e.g. ^/help/air/; a matching page the role rules excluded is re-admitted); repeatable")
     m.add_argument("--exclude", action="append", default=[], metavar="REGEX",
-                   help="exclude a page when REGEX is found in its path plus ?query (never the host); applied after --include; repeatable")
+                   help="exclude a page when REGEX is found in its path plus ?query (never the host); applied after --include, "
+                        "before the cap; repeatable")
     m.add_argument("--host", action="append", default=[], help="an extra eligible host (hand-edited plans may add hosts)")
     m.add_argument("--out", default=None)
     m.add_argument("--json", action="store_true")

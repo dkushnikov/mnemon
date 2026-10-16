@@ -6,7 +6,8 @@ GitHub README) and writes a reviewable plan (`mnemon-site-plan/1`) with a role, 
 reason per page; host eligibility is explicit (no public-suffix guessing), robots.txt is honoured per RFC 9309
 (product token `mnemon`, longest match over path?query, the rules of each origin a page belongs to —
 fetched on first use — unreachable = everything disallowed, 4xx = no rules), roles are anchored path rules
-(`en` and `en-*` are never `localized`), and the cap keeps pages by role priority. `fetch_bundle` owns the
+(`en` and `en-*` are never `localized`), `--include` restricts the plan to the landing and the matching
+pages, `--exclude` then removes, and the cap keeps pages by role priority. `fetch_bundle` owns the
 page loop and its deadline: every included page through the chain of §3.3 (host and robots eligibility
 checked per hop, against the destination origin's robots), ≥ 1 s
 between requests to one host, `NN.html` + `NN.fetch.json` per page, `plan.json` (a byte copy) and
@@ -530,8 +531,11 @@ def _map_site(landing_url, policy, max_pages, includes, excludes, deadline, fetc
         note = "no repository linked from the landing"
     sources.append({"name": "github-readme", "yield": n, "note": note})
 
-    # decisions: roles, robots, content type, include/exclude regexes (searched in the URL's path plus
-    # ?query — never the scheme or host — so an anchored `^/blog/` works; G10), the cap
+    # decisions: roles, robots, content type, then the include/exclude regexes (searched in the URL's path
+    # plus ?query — never the scheme or host — so an anchored `^/blog/` works; G10): with any --include the
+    # plan keeps the landing and only the pages matching some include regex (a matching page the rules
+    # excluded by role is re-admitted; robots and content-type exclusions stand), --exclude then removes,
+    # and the cap applies last (G21)
     inc_re = [re.compile(r) for r in includes]
     exc_re = [re.compile(r) for r in excludes]
     for c in order:
@@ -550,9 +554,13 @@ def _map_site(landing_url, policy, max_pages, includes, excludes, deadline, fetc
             c.include, c.reason = True, "%s page" % c.role if c.role == "product" else c.role
         else:
             c.include, c.reason = False, "excluded: %s" % c.role
-        if c.reason.startswith("excluded: ") and c.reason not in ("excluded: robots", "excluded: robots-unreachable", "excluded: content-type"):
-            if any(r.search(path_query(c.url)) for r in inc_re):
-                c.include, c.reason = True, "%s (--include)" % c.role
+        if inc_re:
+            matched = any(r.search(path_query(c.url)) for r in inc_re)
+            if c.reason.startswith("excluded: ") and c.reason not in ("excluded: robots", "excluded: robots-unreachable", "excluded: content-type"):
+                if matched:
+                    c.include, c.reason = True, "%s (--include)" % c.role
+            elif c.include and not matched:
+                c.include, c.reason = False, "excluded: include-regex"
         if c.include and any(r.search(path_query(c.url)) for r in exc_re):
             c.include, c.reason = False, "excluded: exclude-regex"
     # the included pages are fetched once, by role priority: title, final host, content type; a page the

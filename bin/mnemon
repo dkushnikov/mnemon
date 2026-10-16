@@ -33,7 +33,9 @@ Commands:
   status                     Pipeline status for the instance
   site map <url> [--max-pages N] [--include <re>]… [--exclude <re>]… [--out <plan.json>] [--json]
                              Discover a site's pages into a reviewable plan for `add --site`
-                             (a regex is searched in the page's path plus ?query, e.g. ^/blog/)
+                             (a regex is searched in the page's path plus ?query, e.g. ^/blog/;
+                             --include keeps the landing and only the matching pages, --exclude
+                             then removes, the cap applies last)
   search --query <q> [...]   Search extracts (JSON; --human for text)
   reindex [--no-hand-edit-report]
                              Rebuild the vault's index.md from Sources/: every row regenerated,
@@ -1468,7 +1470,7 @@ case "$cmd" in
                    _has_flag --site-timeout "$@" || site_args+=(--site-timeout "${SITE_TIMEOUT:-900}")
                    _has_flag --policy "$@" || site_args+=(--policy "$(jq -cn --arg ua "${FETCH_USER_AGENT:-}" --argjson ct "${FETCH_CONNECT_TIMEOUT:-15}" --argjson rt "${FETCH_READ_TIMEOUT:-45}" --argjson mb "${FETCH_MAX_BYTES:-20000000}" --argjson rmb "${RENDER_MAX_BYTES:-20000000}" --argjson tw "${THIN_WORDS:-60}" --argjson ft "${FETCH_TIMEOUT:-60}" '{user_agent:$ua, connect_timeout:$ct, read_timeout:$rt, max_bytes:$mb, max_redirects:5, fetch_timeout:$ft, render_max_bytes:$rmb, thin_words:$tw}')")
                    exec "${MNEMON_CAPTURE_SITE_CMD:-$BIN_DIR/capture-site.py}" "${site_args[@]}" "$@" ;;
-              *)   usage_error "site: expected map <url> [--max-pages N] [--include <regex>]… [--exclude <regex>]… [--out <plan.json>] [--json] (a regex is searched in the page's path plus ?query)" ;;
+              *)   usage_error "site: expected map <url> [--max-pages N] [--include <regex>]… [--exclude <regex>]… [--out <plan.json>] [--json] (a regex is searched in the page's path plus ?query; --include keeps the landing and only the matching pages)" ;;
             esac ;;
   search)   if ! _has_flag --vault "$@"; then _resolve_or_die; fi
             exec python3 "$BIN_DIR/mnemon-search.py" "$@" ;;
