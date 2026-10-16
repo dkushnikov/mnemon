@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """stub_server.py — a file-backed local HTTP server for the bash suites (tests/test_depth.sh).
 
-    stub_server.py --root <dir> [--delay <path>=<seconds>]… [--status <path>=<code>]…
+    stub_server.py --root <dir> [--delay <path>=<seconds>]… [--status <path>=<code>]… [--log <file>]
 
-Serves the files under --root on 127.0.0.1 (a directory serves its index.html; the content type follows
-the extension), prints the port on stdout and serves until killed. Used under the §3.2 test hooks
+Serves the files under --root on 127.0.0.1 (a directory serves its index.html; a path without an extension
+serves `<path>.html` when that exists, so `/product` can be a plain `product.html`; the content type follows
+the extension), prints the port on stdout and serves until killed. With --log every request is appended
+to the file as one `GET <path>` line (tests/test_chain_capture.sh counts them). Used under the §3.2 test hooks
 (`MNEMON_TEST_HOOKS=1 MNEMON_POLICY_ALLOW_LOOPBACK=1 MNEMON_FETCH_URL_REWRITE=…`) so a suite can point the
 capture policy at it without any network. Stdlib only, python 3.9.
 """
@@ -25,6 +27,7 @@ def main() -> int:
     ap.add_argument("--root", required=True)
     ap.add_argument("--delay", action="append", default=[], metavar="PATH=SECONDS")
     ap.add_argument("--status", action="append", default=[], metavar="PATH=CODE")
+    ap.add_argument("--log", default=None, metavar="FILE", help="append one `GET <path>` line per request")
     args = ap.parse_args()
     root = os.path.abspath(args.root)
     delays = {k: float(v) for k, _, v in (d.partition("=") for d in args.delay)}
@@ -38,6 +41,9 @@ def main() -> int:
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
+            if args.log:
+                with open(args.log, "a", encoding="utf-8") as fh:
+                    fh.write("GET %s\n" % self.path)
             if path in delays:
                 time.sleep(delays[path])
             rel = path.strip("/")
@@ -46,6 +52,8 @@ def main() -> int:
                 full = ""
             if full and os.path.isdir(full):
                 full = os.path.join(full, "index.html")
+            elif full and not os.path.isfile(full) and os.path.isfile(full + ".html"):
+                full = full + ".html"
             status = statuses.get(path)
             if not full or not os.path.isfile(full):
                 body = b"<html><body><p>not found</p></body></html>"
