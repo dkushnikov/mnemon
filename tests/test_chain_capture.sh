@@ -553,7 +553,12 @@ check_keys "$BUNDLE/manifest.json" "$REPORTS/site-manifest.json" "the manifest h
 check_keys "$(receipt g1)" "$REPORTS/site-report.json" "the site report has the key set of reports/site-report.json" capture_report.site "" pages.0
 check_keys "$(receipt g1)" "$REPORTS/receipts/request-v2-site-auto.json" "the site receipt has the key set of receipts/request-v2-site-auto.json" "" "" request capture_report
 check_keys "$BUNDLE/01.fetch.json" "$REPORTS/fetch-ok.json" "a page's fetch report in the bundle has the key set of reports/fetch-ok.json" "" "" stages.0 acquisition metadata hops.0 policy
-printf '%s\n' "$out" | grep '^{' | head -1 > "$TEST_TMPDIR/bundle-stdout.json" || true
+# the one stdout line of fetch-bundle (A12), from the CLI itself on the same plan into a scratch directory
+python3 "$MNEMON_ROOT/bin/capture-site.py" fetch-bundle "$PLAN" --out "$TEST_TMPDIR/bundle2" --report "$TEST_TMPDIR/bundle2.json" > "$TEST_TMPDIR/bundle-stdout.json" 2>/dev/null || fail "capture-site.py fetch-bundle on the plan" "exit $?"
+assert_eq "$(wc -l < "$TEST_TMPDIR/bundle-stdout.json" | tr -d ' ')" "1" "capture-site.py fetch-bundle prints exactly one line on stdout"
+check_keys "$TEST_TMPDIR/bundle-stdout.json" "$REPORTS/site-bundle-stdout.json" "...with the key set of reports/site-bundle-stdout.json" ""
+assert_eq "$(jq -r '.raw_sha256 + " " + (.raw_bytes|tostring)' "$TEST_TMPDIR/bundle-stdout.json")" "$(sha "$TEST_TMPDIR/bundle2/manifest.json") $(jq '[.members[].bytes] | add' "$TEST_TMPDIR/bundle2/manifest.json")" "...raw_sha256 = that bundle's manifest hash, raw_bytes = its members' sum"
+assert_eq "$(jq -r '.schema + " " + (.raw_sha256|tostring) + " " + (.error_class|tostring)' "$TEST_TMPDIR/bundle2.json")" "mnemon-site-fetch/1 $(sha "$TEST_TMPDIR/bundle2/manifest.json") null" "...and --report (mnemon-site-fetch/1, not a frozen schema) carries the same hash and no error"
 # a crash after the bundle was published: the resume assembles the published bundle and fetches nothing
 n_req1="$(requests)"
 MNEMON_TEST_CRASH_AT=after-raw-published run "$MNEMON" --instance t add --url "$BASE/" --site "$PLAN" --recapture --capture-id g2
