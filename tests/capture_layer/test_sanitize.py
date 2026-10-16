@@ -117,8 +117,8 @@ class HtmlLevel(unittest.TestCase):
         self.assertEqual(counts["math_sources"], 5)
         self.assertIn("<p>weights $\\theta$ here</p>", out)
         self.assertIn("<td>$$A_{1}=\\mathcal{M}$$</td>", out, "display math is $$…$$")
-        self.assertIn("<p>$\\tau_{g}$ and $x&lt;y$ and $a &amp;&amp; b$</p>", out,
-                      "annotation, visible-text fallback and the source re-escaped as a text node")
+        self.assertIn("<p>$\\tau_{g}$ and $x &lt; y$ and $a &amp;&amp; b$</p>", out,
+                      "annotation, visible-text fallback (tags become spaces) and the source re-escaped as a text node")
         self.assertNotIn("<math", out)
         self.assertNotIn("θ", out)
         twice, counts2 = sanitize.html(out, "arxiv")
