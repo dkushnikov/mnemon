@@ -50,7 +50,8 @@ class AddressChecks(PolicyBase):
         os.environ.pop("MNEMON_POLICY_ALLOW_LOOPBACK", None)
         try:
             for answer in (["127.0.0.1"], ["10.0.0.1"], ["169.254.1.1"], ["::1"], ["192.168.1.9"], ["0.0.0.0"],
-                           ["224.0.0.1"], ["fe80::1"], ["8.8.8.8", "10.0.0.1"], ["::ffff:127.0.0.1"]):
+                           ["224.0.0.1"], ["fe80::1"], ["8.8.8.8", "10.0.0.1"], ["::ffff:127.0.0.1"],
+                           ["100.64.0.1"], ["100.127.255.254"], ["192.0.0.8"], ["198.18.0.1"]):
                 with mock.patch.object(socket, "getaddrinfo", return_value=addrinfo(*answer)), \
                         mock.patch.object(P._PinnedConnection, "connect", side_effect=AssertionError("socket opened")):
                     with self.assertRaises(P.PolicyError) as ctx:
@@ -67,6 +68,16 @@ class AddressChecks(PolicyBase):
         self.assertIsNotNone(P.address_problem("127.0.0.1"))
         self.assertIsNone(P.address_problem("127.0.0.1", loopback_ok=True))
         self.assertIsNotNone(P.address_problem("10.1.1.1", loopback_ok=True))
+
+    def test_non_global_ranges_refused_on_every_python(self):
+        """RFC 6598 shared space (a tailnet, carrier NAT), the IETF protocol block, benchmarking and
+        documentation ranges, and IPv6 addresses embedding a private IPv4 one (6to4, Teredo, NAT64)."""
+        for a in ("100.64.0.1", "100.127.255.254", "192.0.0.8", "198.18.0.1", "198.19.255.1", "192.0.2.1", "240.0.0.1",
+                  "2001:db8::1", "2002:c0a8:101::1", "2002:0a00:0001::1", "64:ff9b::a00:1", "::ffff:10.0.0.1",
+                  "2001:0:4136:e378:8000:63bf:3fff:fdd2"):
+            self.assertIsNotNone(P.address_problem(a), a)
+        for a in ("100.63.255.255", "100.128.0.1", "198.17.255.255", "198.20.0.1", "1.1.1.1", "2606:4700::1111"):
+            self.assertIsNone(P.address_problem(a), a)
 
     def test_loopback_allowed_only_under_the_hook(self):
         self.server.add("/ok", "<html><body><p>fine</p></body></html>")

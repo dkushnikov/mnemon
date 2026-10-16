@@ -2,7 +2,8 @@
 
 `Policy.get(url)` is the only way the capture layer talks HTTP: `http`/`https` only, no userinfo, every
 hop's host resolved and **every** returned address checked (private, loopback, link-local, reserved,
-multicast, unspecified → `ssrf-blocked` on the first hop, `ssrf-redirect` after a redirect), the connection
+multicast, unspecified, and anything else that is not globally reachable — the RFC 6598 shared space of a
+tailnet or a carrier NAT included → `ssrf-blocked` on the first hop, `ssrf-redirect` after a redirect), the connection
 pinned to the checked address (the socket is opened on the resolved sockaddr — never a second lookup — and
 TLS is verified against the host name with SNI = host; the `Host` header is the host name), at most
 `max_redirects` redirects each re-checked before it is followed, a byte cap measured on the decoded body
@@ -145,17 +146,33 @@ def rewrite_url(url: str) -> str:
 
 # --- address checks ----------------------------------------------------------------------------------------
 
+# Ranges that are not globally reachable but that `ipaddress` of python 3.9 does not flag through
+# is_private/is_reserved (RFC 6598 shared address space, the IETF protocol-assignment block, benchmarking,
+# documentation, the v6 discard-only and ORCHID blocks); `is_global` is checked as well on every python.
+_NON_GLOBAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24",
+    "203.0.113.0/24", "240.0.0.0/4", "100::/64", "2001:db8::/32", "2001:10::/28", "2001:2::/48"))
+
+
 def address_problem(address: str, loopback_ok: bool = False) -> Optional[str]:
-    """Why an address is refused (private, loopback, link-local, reserved, multicast, unspecified), or None."""
+    """Why an address is refused (private, loopback, link-local, reserved, multicast, unspecified, or any
+    address that is not globally reachable — RFC 6598 shared space included), or None. An IPv6 address that
+    embeds an IPv4 one (mapped, 6to4, Teredo, NAT64) is judged by the embedded address too."""
     text = address.split("%", 1)[0]
     try:
         ip = ipaddress.ip_address(text)
     except ValueError:
         return "unparseable address %r" % address
     candidates = [ip]
-    mapped = getattr(ip, "ipv4_mapped", None)
-    if mapped is not None:
-        candidates.append(mapped)
+    if ip.version == 6:
+        for embedded in (ip.ipv4_mapped, ip.sixtofour):
+            if embedded is not None:
+                candidates.append(embedded)
+        teredo = ip.teredo
+        if teredo is not None:
+            candidates.append(teredo[1])
+        if ip in ipaddress.ip_network("64:ff9b::/96"):
+            candidates.append(ipaddress.ip_address(int(ip) & 0xFFFFFFFF))
     for cand in candidates:
         if cand.is_loopback:
             if loopback_ok:
@@ -171,6 +188,11 @@ def address_problem(address: str, loopback_ok: bool = False) -> Optional[str]:
             return "private address %s" % cand
         if cand.is_reserved:
             return "reserved address %s" % cand
+        if not cand.is_global:
+            return "non-global address %s" % cand
+        for net in _NON_GLOBAL_NETWORKS:
+            if cand.version == net.version and cand in net:
+                return "non-global address %s (%s)" % (cand, net)
     return None
 
 
