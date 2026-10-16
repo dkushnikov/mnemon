@@ -12,7 +12,7 @@ is left as it is and counted `tables_unrepaired`, and the conversion deadline is
 Markdown level (`markdown`), after conversion and fence-aware (nothing inside ``` or ~~~ fences is touched):
 `![alt](data:image/…)` → `*[inline figure omitted at capture: alt]*`, remaining `data:` links dropped,
 `_next/image?url=…` → `*[img: alt]*`, `\\iow_now:Ne` residue → line breaks inside a `~~~~text` fence,
-LaTeXML macro residue before the title dropped (arXiv only), reader-comment sections cut, runs of blank lines
+LaTeXML macro residue before the title dropped (arXiv only; LaTeX3 `\\tl_set:Ne…` lines included), reader-comment sections cut, runs of blank lines
 collapsed; a `[TABLE]` pandoc still emits stays and is counted as `tables_unrepaired`. Both levels are
 idempotent: a second pass changes nothing.
 
@@ -51,8 +51,12 @@ _MD_DATA_LINK = re.compile(r"\[([^\[\]\n]{0,2000})\]\([ \t]{0,20}<?data:[^()\s]{
 _MD_NEXT_IMAGE = re.compile(r"!\[([^\[\]\n]{0,2000})\]\([^()\s]{0,4000}?/_next/image\?[^()\s]{0,4000}\)")
 _MD_NEXT_LINK = re.compile(r"\[([^\[\]\n]{0,2000})\]\([^()\s]{0,4000}?/_next/image\?[^()\s]{0,4000}\)")
 _IOW = re.compile(r"\\iow_now:Ne\s*")
+# macro residue before the title: a command opening a group, the preamble macros, and LaTeX3 residue — the
+# `ltx_ERROR` span of an undefined expl3 macro, a backslash command with `_` and `:` in its name
+# (`\\tl_set:Ne\\tcboxmath`, `tcboxmath \\tl_set:Ne\\tcbhighmath…`, arXiv 2605.12978v2)
 _TEX_RESIDUE = re.compile(r"^\s*\\[A-Za-z@]+\s*[{\[]|\\(?:newcommand|renewcommand|providecommand|def\\|DeclareMathOperator|"
-                          r"RequirePackage|usepackage|IfFileExists|makeatletter|newenvironment|newtheorem|DeclarePairedDelimiter)\b")
+                          r"RequirePackage|usepackage|IfFileExists|makeatletter|newenvironment|newtheorem|DeclarePairedDelimiter)\b"
+                          r"|\\[A-Za-z_]+:[A-Za-z]*")
 _HEADING = re.compile(r"^ {0,3}#{1,6}\s")
 _TABLE_PLACEHOLDER = re.compile(r"^\s*\[TABLE\]\s*$")
 _WORDISH = re.compile(r"[^\W_]")

@@ -191,6 +191,21 @@ class MarkdownLevel(unittest.TestCase):
         self.assertEqual(counts2["residue_lines"], 0)
         self.assertTrue(out2.startswith("\\newcommand"))
 
+    def test_latex3_residue_before_title_is_dropped_too(self):
+        """An `ltx_ERROR` span of an undefined LaTeX3 macro (`\\tl_set:Ne\\tcboxmath`, arXiv 2605.12978v2) is residue
+        before the title: dropped and counted in residue_lines on arXiv, kept on a page; the reference projection
+        drops the same lines, so the repair never reads as a loss; after the title such a line is body text."""
+        md = "\\tl_set:Ne\\tcboxmath\n\ntcboxmath \\tl_set:Ne\\tcbhighmathtcbhighmath\n\n# Title\n\nA \\tl_set:Ne after the title is kept.\n"
+        out, counts = sanitize.markdown(md, "arxiv")
+        self.assertTrue(out.startswith("# Title"), out)
+        self.assertIn("A \\tl_set:Ne after the title is kept.", out)
+        self.assertEqual(counts["residue_lines"], 2)
+        ref = sanitize.reference_lines(md.split("\n"), "arxiv")
+        self.assertEqual([l for l in ref[:ref.index("# Title")] if l.strip()], [], "the reference drops the same lines")
+        out2, counts2 = sanitize.markdown(md, "page")
+        self.assertEqual(counts2["residue_lines"], 0)
+        self.assertTrue(out2.startswith("\\tl_set:Ne"))
+
     def test_table_placeholder_counted_outside_fences_untouched_inside(self):
         md = "[TABLE]\n\n```\n[TABLE]\nrows\n```\n"
         out, counts = sanitize.markdown(md, "page")
