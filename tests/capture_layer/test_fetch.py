@@ -262,6 +262,16 @@ class Expect(FetchBase):
         self.assertEqual((report["error_class"], report["retryable"]), ("not-pdf", False))
         self.assertIsNone(raw)
 
+    def test_expect_fetches_the_literal_url(self):
+        """--expect never goes through the resolver's fetch_url: the literal (trimmed) URL is requested, query
+        and all, and recorded as fetch_url."""
+        self.server.add("/doc.pdf", b"%PDF-1.7\nbinary\n%%EOF\n", content_type="application/pdf")
+        rc, report, raw, se = self.fetch("/doc.pdf?utm_source=x&v=2", ["--expect", "pdf", "--kind", "page"])
+        self.assertEqual(rc, 0, se)
+        self.assertEqual([r[1] for r in self.server.requests()], ["/doc.pdf?utm_source=x&v=2"])
+        self.assertEqual(report["fetch_url"], self.server.url("/doc.pdf?utm_source=x&v=2"))
+        self.assertEqual(report["canonical_url"], self.server.url("/doc.pdf?v=2"), "the identity is still canonical")
+
     def test_expect_mapping(self):
         for status, error_class, kind, retryable in ((401, "blocked", "forbidden", False), (403, "blocked", "forbidden", False),
                                                      (404, "not-found", "not-found", False), (429, "blocked", "rate-limit", True),
@@ -337,6 +347,28 @@ class ArXiv(FetchBase):
         self.server.add("/abs/2401.99999", "<html><body>no such paper</body></html>", status=404)
         rc, report, raw, se = self.fetch("", url="https://arxiv.org/abs/2401.99999", env_extra=self.env())
         self.assertEqual((rc, report["error_class"], report["stage"]), (1, "not-found", "metadata"))
+
+    def test_expect_pdf_fetches_the_pdf_of_the_requested_or_resolved_version(self):
+        """`mnemon add --url https://arxiv.org/pdf/<id>vN.pdf` takes the pdf row with --kind arxiv: the target is
+        pdf/<id>vN (the requested version, else the one resolved from the abstract page), never html/<id>vN."""
+        self.arxiv_routes()
+        self.server.add("/pdf/2401.00001v1", b"%PDF-1.5\nv1\n", content_type="application/pdf")
+        rc, report, raw, se = self.fetch("", ["--expect", "pdf", "--kind", "arxiv"], url="https://arxiv.org/pdf/2401.00001v1.pdf",
+                                         env_extra=self.env())
+        self.assertEqual(rc, 0, se)
+        self.assertEqual(raw, b"%PDF-1.5\nv1\n")
+        self.assertEqual(report["fetch_url"], "https://arxiv.org/pdf/2401.00001v1")
+        self.assertEqual((report["raw_kind"], report["ext"], report["metadata"]["arxiv_version"], report["metadata"]["arxiv_requested_version"]),
+                         ("file", "pdf", 1, 1))
+        self.assertEqual(report["metadata"]["authors"], ["Author, First", "Writer, Second"], "the abstract page's metadata travels with the pdf row")
+        self.assertEqual(self.stages(report), [("metadata", "ok"), ("direct", "ok")])
+        self.assertEqual([r[1] for r in self.server.requests()], ["/abs/2401.00001v1", "/pdf/2401.00001v1"])
+        self.server.reset()
+        rc, report, raw, se = self.fetch("", ["--expect", "pdf"], url="https://arxiv.org/pdf/2401.00001", env_extra=self.env())
+        self.assertEqual(rc, 0, se)
+        self.assertEqual(report["fetch_url"], "https://arxiv.org/pdf/2401.00001v3", "no version requested: the resolved one")
+        self.assertEqual([r[1] for r in self.server.requests()], ["/abs/2401.00001", "/pdf/2401.00001v3"])
+        self.assertEqual(raw, b"%PDF-1.5\nv3\n")
 
 
 class Timeouts(FetchBase):

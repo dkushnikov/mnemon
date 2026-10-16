@@ -297,9 +297,19 @@ class Chain:
 
     # -- --expect pdf|audio --
     def expect_file(self) -> int:
+        """One policy GET of the literal (trimmed) URL with the A7 status mapping and no escalation. For
+        `kind: arxiv` under `--expect pdf` the target is `https://arxiv.org/pdf/<id>vN` — the requested or
+        the resolved version — never the resolver's HTML fetch_url."""
+        target = self.url.strip()
+        if self.kind == "arxiv" and self.opts.expect == "pdf":
+            code, version, arxiv_id = self.arxiv_resolve()
+            if code is not None:
+                return code
+            target = "https://arxiv.org/pdf/%s%s" % (arxiv_id, "v%d" % version if version else "")
+        self.report["fetch_url"] = target
         t0 = time.monotonic()
         try:
-            resp = self.get(self.res.fetch_url)
+            resp = self.get(target)
         except policymod.PolicyError as exc:
             self.stage("direct", exc.kind, note=exc.message)
             return self.policy_fail(exc, "direct")
@@ -322,7 +332,7 @@ class Chain:
         if mapping:
             error_class, kind, retryable = mapping
             self.stage("direct", kind, kind, status, len(resp.body), ms, "status %d" % status)
-            return self.fail(error_class, "%s: HTTP %d for %s" % (kind, status, self.res.fetch_url), retryable, "direct",
+            return self.fail(error_class, "%s: HTTP %d for %s" % (kind, status, target), retryable, "direct",
                              check.Acq(kind, kind, "status %d" % status, 0, None))
         body = resp.body
         if self.opts.expect == "pdf":
@@ -349,7 +359,7 @@ class Chain:
         ext = AUDIO_EXT.get(mime or "")
         content_type = mime if ext else header_ct
         if ext is None:
-            url_ext = url_extension(self.res.fetch_url)
+            url_ext = url_extension(target)
             if url_ext in KNOWN_AUDIO_EXTS:
                 ext = url_ext
             elif header_ct and (header_ct.startswith("audio/") or header_ct in AUDIO_EXT):
@@ -542,7 +552,9 @@ class Chain:
         return None, True, acq.kind
 
     # -- arXiv --
-    def arxiv(self) -> int:
+    def arxiv_resolve(self) -> Tuple[Optional[int], Optional[int], str]:
+        """The version resolved once from the abstract page of the requested (or the latest) version, with
+        the citation_* metadata recorded (D10): (exit code when the chain ends here, the version, the id)."""
         arxiv_id = self.res.canonical.url.rsplit("/abs/", 1)[1]
         meta = self.report["metadata"]
         meta["arxiv_id"] = arxiv_id
@@ -551,12 +563,12 @@ class Chain:
             resp = self.get(self.res.metadata_url)
         except policymod.PolicyError as exc:
             self.stage("metadata", exc.kind, note=exc.message)
-            return self.policy_fail(exc, "metadata")
+            return self.policy_fail(exc, "metadata"), None, arxiv_id
         ms = int((time.monotonic() - t0) * 1000)
         if resp.status != 200:
             acq = self.classify(resp.status, resp.headers, resp.body)
             self.stage("metadata", acq.outcome, acq.kind, resp.status, len(resp.body), ms, acq.evidence)
-            return self.acq_fail(acq, "metadata")
+            return self.acq_fail(acq, "metadata"), None, arxiv_id
         text = resp.body.decode("utf-8", "replace")
         metas = _meta_map(text)
         version = None
@@ -582,6 +594,12 @@ class Chain:
         meta["arxiv_version"] = version
         meta["declared_canonical_url"] = _declared_canonical(text)
         self.stage("metadata", "ok", None, resp.status, len(resp.body), ms, "version %s" % (version if version else "unknown"))
+        return None, version, arxiv_id
+
+    def arxiv(self) -> int:
+        code, version, arxiv_id = self.arxiv_resolve()
+        if code is not None:
+            return code
         suffix = "v%d" % version if version else ""
         html_url = "https://arxiv.org/html/%s%s" % (arxiv_id, suffix)
         self.report["fetch_url"] = html_url
