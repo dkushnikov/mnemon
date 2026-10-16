@@ -569,7 +569,14 @@ def convert(raw: bytes, url: str, raw_kind: str = "response", kind: str = "page"
         raise ConvertError("timeout", str(exc))
     try:
         root = parse(sanitized)
-        title = find_title(root) or (meta_in.get("title") if isinstance(meta_in.get("title"), str) else None)
+        meta_title = meta_in.get("title") if isinstance(meta_in.get("title"), str) else None
+        meta_title = normalize_scalar(meta_title, 300) if meta_title else None
+        if kind == "arxiv" and meta_title:
+            # the <title> of a LaTeXML page glues words ("Become FaultyWhen"): the fetch report's
+            # citation_title wins for a paper (G18); a page keeps its own <title> first
+            title = meta_title
+        else:
+            title = find_title(root) or meta_title
         page_meta = page_metadata(root)
         subtree = content_subtree(root, kind)
         subtree_html = to_html(subtree)

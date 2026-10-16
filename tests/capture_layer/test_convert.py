@@ -229,6 +229,20 @@ class FixtureOutcomes(unittest.TestCase):
         self.assertEqual(r["published_candidates"][0], {"value": "2026-01-02", "source": "citation_date"})
         self.assertTrue(r["method"].startswith("direct+"))
 
+    def test_arxiv_title_comes_from_the_metadata(self):
+        """G18: a LaTeXML <title> glues words; for kind arxiv the fetch report's citation_title wins over
+        find_title; a page keeps its own <title> first and falls back to the metadata only without one."""
+        raw = ("<html><head><title>Become FaultyWhen Updated by LLMs</title></head><body><article class=\"ltx_document\">"
+               "<h1>Become Faulty When Updated by LLMs</h1><p>%s</p></article></body></html>" % " ".join("w%d" % i for i in range(80))).encode()
+        fr = {"method": "direct", "charset": "utf-8", "kind": "arxiv", "acquisition": {"outcome": "ok"},
+              "metadata": {"title": "  Become Faulty  When Updated by LLMs ", "authors": []}}
+        self.assertEqual(convert.convert(raw, "https://arxiv.org/abs/2605.00001", "response", "arxiv", fr).report["title"],
+                         "Become Faulty When Updated by LLMs")
+        self.assertEqual(convert.convert(raw, "https://example.com/p", "response", "page", fr).report["title"],
+                         "Become FaultyWhen Updated by LLMs", "a page's own <title> stays first")
+        self.assertEqual(convert.convert(raw, "https://arxiv.org/abs/2605.00001", "response", "arxiv", None).report["title"],
+                         "Become FaultyWhen Updated by LLMs", "...and without metadata the <title> is all there is")
+
     def test_dom_text_projection(self):
         root = convert.parse("<html><body><h1>Title here</h1><p>Deploy<span>the</span>company brain</p>"
                              "<pre>a\n  b</pre><ul><li>one</li><li>two</li></ul><p>x<br>y</p><h4>small</h4></body></html>")
