@@ -403,7 +403,8 @@ class Watchdog(unittest.TestCase):
     """G25: `map` runs as a worker under the CLI's own watchdog — an in-process scan that never checks the
     deadline (the MNEMON_TEST_MAP_HANG hook: C code no signal handler interrupts, the shape the bounded
     patterns of LinearDiscovery no longer produce) is killed with its process group WATCHDOG_GRACE_S after
-    site_timeout: exit 124, no plan, no worker left."""
+    site_timeout: exit 124, no plan, no worker left, and no `mnemon-map-*` staging directory left either —
+    the supervisor allocated it and removes it after the kill (a SIGKILLed worker's own `finally` never runs)."""
 
     def test_map_watchdog_kills_an_in_process_scan(self):
         server = LocalServer()
@@ -413,6 +414,7 @@ class Watchdog(unittest.TestCase):
             env = clean_env({"MNEMON_TEST_MAP_HANG": "1"})
             env["RENDER_URL_CMD"] = write_stub(work, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
             plan = os.path.join(work, "plan.json")
+            before = set(d for d in os.listdir(tempfile.gettempdir()) if d.startswith("mnemon-map-"))
             t0 = time.monotonic()
             rc, so, se = run_cli([CS, "map", server.base + "/", "--out", plan, "--site-timeout", "1"], env=env, timeout=180)
             secs = time.monotonic() - t0
@@ -423,6 +425,8 @@ class Watchdog(unittest.TestCase):
             self.assertFalse(os.path.exists(plan))
             ps = subprocess.run(["pgrep", "-f", "capture-site.py --_worker map %s" % server.base], capture_output=True)
             self.assertEqual(ps.stdout.strip(), b"", "no map worker is left")
+            after = set(d for d in os.listdir(tempfile.gettempdir()) if d.startswith("mnemon-map-"))
+            self.assertEqual(after - before, set(), "a watchdog-killed map leaves no staging directory behind")
         finally:
             server.close()
             shutil.rmtree(work, ignore_errors=True)

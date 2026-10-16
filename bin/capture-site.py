@@ -30,7 +30,9 @@ worker (the hidden `--_worker` flag, its own process group) that does the whole 
 `--site-timeout`, while the parent kills the group at `site_timeout + WATCHDOG_GRACE_S` (the grace covers
 the worker's own teardown and manifest write after its deadline) — so an in-process scan that never checks
 the deadline cannot outlive it. A watchdog kill is exit 124 with `error_class: timeout` (the `--report`
-of fetch-bundle; stderr for map). Test hook (honoured only under MNEMON_TEST_HOOKS=1): MNEMON_TEST_MAP_HANG=1
+of fetch-bundle; stderr for map). The supervisor allocates map's staging directory (`mnemon-map-*`, passed
+as the hidden `--_work`) and removes it after the worker ends, killed or not, so a watchdog kill leaves no
+directory behind. Test hook (honoured only under MNEMON_TEST_HOOKS=1): MNEMON_TEST_MAP_HANG=1
 makes the map worker hang in C code that no signal handler interrupts (proc.hang) — the proof that the
 watchdog's kill, not the worker's cooperation, ends the phase. The discovery patterns themselves are bounded
 (site._HREF, site._LOC), so a hostile landing is a linear scan, not a hang. Stdlib only, python 3.9.
@@ -116,7 +118,10 @@ def cmd_map(args) -> int:
                          render_timeout=number(args.render_timeout, config.get("render_timeout", 90), "--render-timeout"),
                          render_cmd=args.render_cmd, thin_words=int(number(args.thin_words, config.get("thin_words", 60), "--thin-words")),
                          deadline=deadline)
-    work = tempfile.mkdtemp(prefix="mnemon-map-")      # the landing's staging area, whatever --out says
+    # the landing's staging area, whatever --out says: the supervisor allocates it (`--_work`) and removes it
+    # after the worker ends, killed by the watchdog or not — a worker's own `finally` never runs after a
+    # SIGKILL (F8); a direct call allocates its own
+    work = args.work or tempfile.mkdtemp(prefix="mnemon-map-")
     try:
         if policymod.hook("MNEMON_TEST_MAP_HANG"):
             proc.hang()       # the in-process scan that never checks the deadline: only the watchdog ends it
@@ -196,7 +201,15 @@ def supervise(args, config) -> int:
     budget = site_timeout + WATCHDOG_GRACE_S
     rest = sys.argv[2:] if sys.argv[1:2] == [args.cmd] else [a for a in sys.argv[1:] if a != args.cmd]
     argv = [sys.executable, os.path.abspath(__file__), args.cmd, "--_worker"] + rest
-    res = proc.run(argv, timeout=budget, deadline=proc.Deadline(budget))
+    work = None
+    if args.cmd == "map":
+        work = tempfile.mkdtemp(prefix="mnemon-map-")      # the worker's staging area: ours to remove after a kill
+        argv += ["--_work", work]
+    try:
+        res = proc.run(argv, timeout=budget, deadline=proc.Deadline(budget))
+    finally:
+        if work:
+            shutil.rmtree(work, ignore_errors=True)
     if res.stdout:
         sys.stdout.buffer.write(res.stdout)
         sys.stdout.flush()
@@ -266,6 +279,7 @@ def main() -> int:
     a.add_argument("--timeout", default=None, help="convert_timeout for the whole assembly (default %g)" % convert.DEFAULT_TIMEOUT)
     for p in (m, f):
         p.add_argument("--_worker", dest="worker", action="store_true", help=argparse.SUPPRESS)
+    m.add_argument("--_work", dest="work", default=None, help=argparse.SUPPRESS)      # the supervisor's staging dir
     args = ap.parse_args()
     if not args.cmd:
         ap.print_help()
