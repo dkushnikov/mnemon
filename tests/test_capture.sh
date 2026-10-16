@@ -1238,6 +1238,13 @@ assert_eq "$(fm "$srcd2" canonical_url)" '"https://example.com/thin2"' "...while
 assert_eq "$(grep -c '^canonical_url:' "$srcd2")" "1" "...one canonical_url line"
 STUB_DEPTH=timeout run_gw --url "https://example.com/thin3" --capture-id depth-3
 assert_eq "$rc $(result status) $(capfm "$VAULT/Sources/$(result revision)/source.md" raw_kind)" "0 extracted response" "a fold that times out publishes the landing alone"
+# a python without PyYAML (the fold's exit 3 and message): the landing is captured alone and the skip is
+# traced — one stderr line, `depth: skipped (no PyYAML)` in the receipt (G28)
+STUB_DEPTH=noyaml run_gw --url "https://example.com/thin4" --capture-id depth-4
+assert_eq "$rc $(result status) $(capfm "$VAULT/Sources/$(result revision)/source.md" raw_kind)" "0 extracted response" "a fold skipped for a missing PyYAML publishes the landing alone"
+assert_contains "$err" "WARNING: depth fold skipped: PyYAML is missing" "...one stderr line says why"
+assert_eq "$(rget depth-4 '.depth')" "skipped (no PyYAML)" "...and the receipt records depth: skipped (no PyYAML)"
+assert_eq "$(rget depth-3 '.depth')" "null" "...which a fold that merely timed out does not carry"
 # a paywall teaser landing is decided by the chain before any deeper request (§4.2): no fold behind a wall
 stub_reset
 STUB_DEPTH=fold STUB_FETCH=blocked-paywall run_gw --url "https://example.com/teaser-depth" --capture-id depth-pay

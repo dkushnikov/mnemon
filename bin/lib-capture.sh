@@ -1491,7 +1491,18 @@ cap_depth_fold_run() {   # <landing file>
   ctx="$(jq -cn --arg fu "$(jq -r '.final_url // ""' "$report")" --argjson hs "$(jq '.http_status // null' "$report")" \
           --arg acq "$(jq -r '.acquisition.outcome // "unknown"' "$report")" --arg render "$render" --argjson b "$budget" \
           '{final_url:($fu | if . == "" then null else . end), http_status:$hs, acquisition:$acq, render:$render, external:"off", budget_s:$b}')"
-  depth_json="$("$fold" "$URL" --depth "$DEPTH" --landing-file "$1" --budget-s "$budget" --context "$ctx" 2>>"$ATTEMPT_DIR/stderr.txt")" || depth_json=""
+  local rc=0
+  depth_json="$("$fold" "$URL" --depth "$DEPTH" --landing-file "$1" --budget-s "$budget" --context "$ctx" 2>"$ATTEMPT_DIR/depth-stderr.txt")" || rc=$?
+  cat "$ATTEMPT_DIR/depth-stderr.txt" >> "$ATTEMPT_DIR/stderr.txt" 2>/dev/null || true
+  if [[ $rc -eq 3 ]] && grep -q 'PyYAML' "$ATTEMPT_DIR/depth-stderr.txt" 2>/dev/null; then
+    # the fold needs PyYAML for its manifest and this python has none: the landing is captured alone, and
+    # the skip is traced — one stderr line for the operator, `depth` in the receipt (G28)
+    echo "WARNING: depth fold skipped: PyYAML is missing for $(command -v python3 2>/dev/null || echo python3) (pip install pyyaml); the landing is captured alone" >&2
+    cap_receipt_update "$CAPTURE_ID" '.depth="skipped (no PyYAML)"'
+    rm -f "$ATTEMPT_DIR/depth-stderr.txt"
+    return 1
+  fi
+  rm -f "$ATTEMPT_DIR/depth-stderr.txt"
   [[ -n "$depth_json" ]] || return 1
   printf '%s' "$depth_json" | jq -e '.applied == true' >/dev/null 2>&1 || return 1
   printf '%s' "$depth_json" > "$ATTEMPT_DIR/depth.json"

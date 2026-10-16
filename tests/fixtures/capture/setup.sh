@@ -20,7 +20,7 @@
 #   capture-site.py   map · fetch-bundle · verify · assemble (STUB_SITE: ok (default) · page-fail ·
 #                     landing-fail · timeout-after-landing · timeout; STUB_SITE_CONVERT_FAIL=<n>
 #                     makes page n convert-failed); calls in $STUB_DIR/site-calls
-#   kb-depth-fold.py  STUB_DEPTH: off (default) · fold · timeout, the A8 shape (targets, no
+#   kb-depth-fold.py  STUB_DEPTH: off (default) · fold · timeout · noyaml, the A8 shape (targets, no
 #                     composite_body); argv in $STUB_DIR/depth-calls
 #   media-extract.py  STUB_YT=whisper (the whisper fallback), STUB_MEDIA: ok · timeout · env;
 #                     accepts --timeout and records it in $STUB_DIR/media-calls
@@ -395,9 +395,13 @@ cat > "$STUBS/kb-depth-fold.py" <<'STUB'
 # depth-fold stub (capture layer §4.2, §12 A8): the gateway calls it after the landing fetch with
 # --landing-file <staged raw> --budget-s <remaining> --context <json>; the answer lists the folded
 # targets only (no composite_body — the gateway assembles converted landing + targets once).
-# STUB_DEPTH=off (default) answers not applied; fold answers two targets; timeout answers a timeout.
+# STUB_DEPTH=off (default) answers not applied; fold answers two targets; timeout answers a timeout;
+# noyaml is the real helper's answer on a python without PyYAML (the message on stderr, exit 3, no JSON).
 [[ -n "${STUB_DIR:-}" ]] && printf '%s\n' "$*" >> "$STUB_DIR/depth-calls"
 case "${STUB_DEPTH:-off}" in
+  noyaml)
+    echo "kb-depth-fold: PyYAML is required for the depth manifest (pip install pyyaml); no fold applied" >&2
+    exit 3 ;;
   fold)
     printf '{"applied": true, "reason": "folded", "targets": [{"url": "https://example.com/deeper", "role": "docs", "header": "# Folded: https://example.com/deeper", "text": "folded body\\n", "status": 200, "sha256": "0000000000000000000000000000000000000000000000000000000000000001"}], "manifest_yaml": "posted_url: \\"https://example.com/thin\\"\\nfinal_url: \\"https://example.com/thin\\"\\ncanonical_url: \\"https://example.com/thin-declared\\"\\nfolded_sources:\\n  - url: https://example.com/deeper\\n    confidence: high\\nfetch_status: ok\\nsecret_key: never-merged\\n", "folded": ["https://example.com/deeper"], "errors": []}\n' ;;
   timeout)
