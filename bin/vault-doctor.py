@@ -2,7 +2,7 @@
 """vault-doctor.py — the data group of `mnemon doctor` and the line of `mnemon status --brief`
 (docs/specs/2026-10-16-vault-store.md S3–S5, S7).
 
-    vault-doctor.py [--json | --tsv | --list <check> | --brief [--budget <s>] [--json]] [--today YYYY-MM-DD]
+    vault-doctor.py [--json | --tsv | --list <check> | --brief [--json]] [--budget <s>] [--today YYYY-MM-DD]
                     [--vault <path> [--archive <dir>] [--charter <path>] [--reader-context <path>]
                      [--state-dir <dir>] [--instance <name>] [--writer-host <host>] [--guide-version <n>]
                      [--thin-words N] [--stub-words N] [--arxiv-words N] [--rating-hi-share N]]
@@ -11,19 +11,27 @@ Nineteen checks with stable names — 11 of the store (I1–I11), 5 of data qual
 the human loop (H1–H3) — on one read-only snapshot of the vault (bin/lib_vault.py). Severity by
 cause (S4): `fail` = a managed-schema or graph violation, `warn` = a legacy mismatch, a stale
 derivative or a threshold passed; a check that cannot run here says so (`probed: false` +
-`reason`) and is never a `0 fail`. Nothing is fixed, written or created — the vault lock is
-probed, never taken.
+`reason`) and is never a `0 fail`. Tool problems are not checks: they go to `diagnostics`
+(`radius-parse` warn · `error` fail · `budget` warn), printed as `<level> doctor/<code> — …`.
+Nothing is fixed, written or created — the vault lock is probed, never taken.
 
-Output: `ok|warn|fail <group>/<name> — <detail>` (the dispatcher's line), `--tsv` the same as
-`status<TAB>name<TAB>detail` (what bin/mnemon routes through `_check`), `--json` the frozen
-`mnemon-doctor-data/1` document, `--list <check>` every item of one check (`<id>\t<class or
-reason>\t<rating>\t<words>`), `--brief` the one line of `mnemon status --brief` (with `--budget`
-the walk stops honestly: `data: not probed (budget … exceeded at N folders)`).
+Output: `ok|warn|fail <group>/<name> — <detail>` (the dispatcher's line; the 19 checks, then
+the diagnostics), `--tsv` the same as `status<TAB>name<TAB>detail` (what bin/mnemon routes
+through `_check`), `--json` the frozen `mnemon-doctor-data/1` document (always all 19 checks),
+`--list <check>` every item of one check (`<id>\t<reason or class>\t<rating>\t<words>`),
+`--brief` the one line of `mnemon status --brief` (`--json`: the counters and the summary).
+
+`--budget <s>` (the default for `--brief`: 10) is a deadline around the whole run: the scan and
+the checks execute in a child worker (this script with `--worker`), the parent waits at most
+the budget, terminates then kills the worker when it expires and says so — `data: not probed
+(budget 10 s exceeded)`, a `budget` diagnostic, exit 0 — rather than guess.
 
 Without `--vault` the configuration comes from `lib_config.load_config()` (the instance the
 dispatcher resolved); with `--vault` the tool runs on defaults, for tests. Exit 0 unless an
 exception (the dispatcher derives its exit from the fail lines); `--today` fixes the clock.
-Stdlib only, python 3.9.
+Test hooks, honoured only under MNEMON_TEST_HOOKS=1: MNEMON_TEST_DOCTOR_STALL=<s> (the worker
+sleeps before scanning; with MNEMON_TEST_DOCTOR_PIDFILE it writes its pid first) and
+MNEMON_TEST_DOCTOR_RAISE=<check> (that check raises). Stdlib only, python 3.9.
 """
 
 from __future__ import annotations
@@ -34,7 +42,9 @@ import json
 import os
 import re
 import socket
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -42,25 +52,36 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lib_vault as lv  # noqa: E402
 
 SCHEMA = "mnemon-doctor-data/1"
-CHECK_NAMES = (
-    "store/source-integrity", "store/identity", "store/index", "store/supersedes", "store/archive",
-    "store/completeness", "store/ledger", "store/status-vocabulary", "store/context",
-    "store/extract-consistency", "store/guide-version",
-    "data/thin", "data/arxiv-abstract", "data/stubs", "data/rating-scale", "data/reader-context",
-    "human/ratification", "human/seeds", "human/queues",
+# the 19 stable names (S3) and the door each one prints
+FIX = (
+    ("store/source-integrity", "operator"), ("store/identity", "mnemon audit --canonical"),
+    ("store/index", "mnemon reindex"), ("store/supersedes", "operator"), ("store/archive", "mnemon audit"),
+    ("store/completeness", "mnemon add --recapture"), ("store/ledger", "mnemon add --resume"),
+    ("store/status-vocabulary", "operator"), ("store/context", "operator"), ("store/extract-consistency", "operator"),
+    ("store/guide-version", "operator"),
+    ("data/thin", "mnemon add --recapture"), ("data/arxiv-abstract", "mnemon add --recapture"), ("data/stubs", "operator"),
+    ("data/rating-scale", "operator"), ("data/reader-context", "operator"),
+    ("human/ratification", "operator"), ("human/seeds", "operator"), ("human/queues", "operator"),
 )
+CHECK_NAMES = tuple(name for name, _ in FIX)
+FIX_OF = dict(FIX)
 DEFAULTS = {"thin_words": 300, "stub_words": 40, "arxiv_words": 600, "rating_hi_share": 20}
 RATING_HI = 7
 READER_CONTEXT_DEFAULT_DAYS = 14
 COMPLETENESS_VALUES = ("complete", "partial", "blocked", "unknown")
-# S5 — the radius grammar, integers, days; absent → engine defaults (marked)
-RADIUS_RE = re.compile(r"^(seeds|drafts|queues):\s*(?:(\d+)\s+(?:open|unratified)\s*[·,;]\s*)?(\d+)\s+days?\s*$")
+# S5 — one form per key; integers; days. Any other line of the section is a radius-parse diagnostic.
+RADIUS_RES = (
+    ("seeds", re.compile(r"^seeds:\s*(\d+)\s+open\s*[·,;]\s*(\d+)\s+days?\s*$")),
+    ("drafts", re.compile(r"^drafts:\s*(\d+)\s+unratified\s*[·,;]\s*(\d+)\s+days?\s*$")),
+    ("queues", re.compile(r"^queues:\s*(\d+)\s+days?\s*$")),
+)
 RADIUS_DEFAULTS = {"seeds": (10, 30), "drafts": (5, 45), "queues": (None, 30)}
 SHOW = 5           # items named in a text detail; --json and --list carry them all
+DEFAULT_BRIEF_BUDGET = 10.0
 
 
 class Check:
-    def __init__(self, name: str, fix: str):
+    def __init__(self, name: str):
         self.name = name
         self.status = "ok"
         self.probed = True
@@ -68,7 +89,7 @@ class Check:
         self.detail = ""
         self.counts: Dict[str, object] = {}
         self.threshold: Dict[str, object] = {}
-        self.fix = fix
+        self.fix = FIX_OF[name]
         self.items: List[dict] = []
 
     def raise_to(self, status: str) -> None:
@@ -121,19 +142,21 @@ def age_days(today: datetime.date, when: datetime.date) -> int:
 # ---------------------------------------------------------------------------------------------
 
 def parse_radius(lines: List[str]) -> Tuple[Dict[str, Tuple[Optional[int], int]], List[str], List[str]]:
-    """(radius, defaulted keys, unparsable lines): S5 — every line of `## Radius` must match the
-    grammar; a missing key takes the engine default (marked `(defaults)`); a line that does not
-    parse is reported, never silently defaulted."""
+    """(radius, defaulted keys, unparsable lines): S5 — exactly one form per key; a line of the
+    section that matches none of the three is reported (`radius-parse`), never silently defaulted;
+    a key without a valid line takes the engine default (marked `(defaults)`)."""
     radius: Dict[str, Tuple[Optional[int], int]] = {}
     errors: List[str] = []
-    for line in lines:
-        m = RADIUS_RE.match(line.strip())
-        if not m:
-            errors.append(line.strip())
-            continue
-        key, count, days = m.group(1), m.group(2), int(m.group(3))
-        if key not in radius:
-            radius[key] = (int(count) if count is not None else RADIUS_DEFAULTS[key][0], days)
+    for raw in lines:
+        line = raw.strip()
+        for key, rx in RADIUS_RES:
+            m = rx.match(line)
+            if m:
+                if key not in radius:
+                    radius[key] = (None, int(m.group(1))) if key == "queues" else (int(m.group(1)), int(m.group(2)))
+                break
+        else:
+            errors.append(line)
     defaulted = [k for k in ("seeds", "drafts", "queues") if k not in radius]
     for k in defaulted:
         radius[k] = RADIUS_DEFAULTS[k]
@@ -151,7 +174,7 @@ def radius_label(key: str, radius: dict, defaulted: List[str]) -> str:
 # ---------------------------------------------------------------------------------------------
 
 def check_source_integrity(scan: dict, cfg: dict) -> Check:
-    c = Check("store/source-integrity", "operator")
+    c = Check("store/source-integrity")
     managed_ok = 0
     bad: List[str] = []
     damaged: List[str] = []
@@ -210,7 +233,7 @@ def check_source_integrity(scan: dict, cfg: dict) -> Check:
 
 
 def check_identity(scan: dict, cfg: dict) -> Check:
-    c = Check("store/identity", "mnemon audit --canonical")
+    c = Check("store/identity")
     current = [r for r in scan["folders"] if r["current"] and r["source_state"] != "unreadable"]
     by_sha: Dict[str, List[str]] = {}
     by_canon: Dict[str, List[str]] = {}
@@ -253,7 +276,7 @@ def check_identity(scan: dict, cfg: dict) -> Check:
 
 
 def check_index(scan: dict, cfg: dict) -> Check:
-    c = Check("store/index", "mnemon reindex")
+    c = Check("store/index")
     sources_dir = Path(scan["vault"]) / "Sources"
     successors = scan["graph"]["successors"]
     regenerated: Dict[str, str] = {}
@@ -292,7 +315,7 @@ def check_index(scan: dict, cfg: dict) -> Check:
 
 
 def check_supersedes(scan: dict, cfg: dict) -> Check:
-    c = Check("store/supersedes", "operator")
+    c = Check("store/supersedes")
     g = scan["graph"]
     for new, old in g["dangling"]:
         c.add("fail", {"id": new, "reason": "supersedes a folder that does not exist: %s" % old, "rating": None, "words": None})
@@ -321,7 +344,7 @@ def check_supersedes(scan: dict, cfg: dict) -> Check:
 
 
 def check_archive(scan: dict, cfg: dict) -> Check:
-    c = Check("store/archive", "mnemon audit")
+    c = Check("store/archive")
     a = scan["archive"]
     if not a["configured"]:
         return c.not_probed("archive_dir not configured")
@@ -373,7 +396,7 @@ def check_archive(scan: dict, cfg: dict) -> Check:
 
 
 def check_completeness(scan: dict, cfg: dict) -> Check:
-    c = Check("store/completeness", "mnemon add --recapture")
+    c = Check("store/completeness")
     dist: Dict[str, int] = {k: 0 for k in COMPLETENESS_VALUES}
     invalid: List[str] = []
     blocked: List[str] = []
@@ -409,15 +432,19 @@ def check_completeness(scan: dict, cfg: dict) -> Check:
 
 
 def check_ledger(scan: dict, cfg: dict) -> Check:
-    c = Check("store/ledger", "mnemon add --resume")
+    c = Check("store/ledger")
     ledger = scan["ledger"]
     managed = [r for r in scan["folders"] if r["klass"] == "managed"]
     if not ledger["present"]:
-        on_writer = bool(cfg.get("writer_host")) and cfg.get("writer_host") == cfg.get("this_host")
-        reason = "no ledger on this host (%s)" % os.path.join(ledger["state_dir"] or "?", "captures")
-        # S4: a resource the config says should exist here — the writer host's ledger — warns; a
-        # reader host or a vault with nothing captured yet is fine
-        return c.not_probed(reason, "warn" if on_writer and managed else "ok")
+        # S4: the writer evidence is the instance's writer_host alone — no ledger there is a warning
+        # (state lost?); a reader host or an unset writer_host is simply not probed
+        writer = cfg.get("writer_host") or ""
+        where = os.path.join(ledger["state_dir"] or "?", "captures")
+        if not writer:
+            return c.not_probed("no ledger on this host (%s); writer_host unset" % where)
+        if writer == cfg.get("this_host"):
+            return c.not_probed("no ledger on the writer host — state lost? (%s)" % where, "warn")
+        return c.not_probed("no ledger on this host (%s); not the writer (writer_host %s)" % (where, writer))
     by_name = scan["by_name"]
     consistent = 0
     contradict: List[str] = []
@@ -464,9 +491,10 @@ def check_ledger(scan: dict, cfg: dict) -> Check:
 
 
 def check_status_vocabulary(scan: dict, cfg: dict) -> Check:
-    c = Check("store/status-vocabulary", "operator")
+    c = Check("store/status-vocabulary")
     st = scan["counters"]["status"]
     sy = scan["counters"]["synthesis_status"]
+    empty_managed = 0
     for r in scan["folders"]:
         if not r["has_extract"] or r["extract_state"] == "unreadable":
             continue
@@ -476,7 +504,11 @@ def check_status_vocabulary(scan: dict, cfg: dict) -> Check:
         if s in lv.EXTRACT_STATUS_LEGACY:
             c.add("warn", item(r, "legacy status `%s`" % s))
         elif not s:
-            c.add("warn", item(r, "empty status"))
+            if r["klass"] == "managed":
+                empty_managed += 1          # a schema violation: store/extract-consistency fails it
+                c.items.append(item(r, "empty status on a managed extract (schema extract/1 → store/extract-consistency)"))
+            else:
+                c.add("warn", item(r, "empty status"))
         else:
             c.add("warn", item(r, "unknown status `%s`" % s))
     for n in scan["synthesis"]["notes"]:
@@ -484,24 +516,25 @@ def check_status_vocabulary(scan: dict, cfg: dict) -> Check:
             continue
         reason = "empty status" if not n["status"] else "unknown status `%s`" % n["status"]
         c.add("warn", {"id": "Synthesis/" + n["name"], "reason": reason, "rating": None, "words": None})
-    c.counts = {"extract": st, "synthesis": sy}
+    c.counts = {"extract": dict(st, empty_managed=empty_managed), "synthesis": sy}
     legacy = "legacy words %d" % st["legacy_words"]
     if st["legacy"]:
-        legacy += " (%s)" % ", ".join("%s %d" % (w, n) for w, n in sorted(st["legacy"].items(), key=lambda x: -x[1]))
+        legacy += " (%s)" % ", ".join("%s %d" % (w, n) for w, n in sorted(st["legacy"].items(), key=lambda x: (-x[1], x[0])))
+    empty = "empty %d" % st["empty"] + (" (%d managed → schema)" % empty_managed if empty_managed else "")
     unknown = "unknown %d" % st["unknown"]
     if st["unknown_words"]:
         unknown += " (%s)" % ", ".join("%s %d" % (w, n) for w, n in sorted(st["unknown_words"].items()))
     syn_unknown = "unknown %d" % sy["unknown"]
     if sy["unknown_words"]:
         syn_unknown += " (%s)" % ", ".join("%s %d" % (w, n) for w, n in sorted(sy["unknown_words"].items()))
-    c.detail = ("extract: extracted %d · dismissed %d · %s · empty %d · %s; synthesis: seed %d · draft %d · stable %d · empty %d · %s"
-                % (st["extracted"], st["dismissed"], legacy, st["empty"], unknown,
+    c.detail = ("extract: extracted %d · dismissed %d · %s · %s · %s; synthesis: seed %d · draft %d · stable %d · empty %d · %s"
+                % (st["extracted"], st["dismissed"], legacy, empty, unknown,
                    sy["seed"], sy["draft"], sy["stable"], sy["empty"], syn_unknown))
     return c
 
 
 def check_context(scan: dict, cfg: dict) -> Check:
-    c = Check("store/context", "operator")
+    c = Check("store/context")
     declared = scan["charter"]["contexts"]
     inside = 0
     outside: List[str] = []
@@ -533,11 +566,12 @@ def check_context(scan: dict, cfg: dict) -> Check:
 
 
 def check_extract_consistency(scan: dict, cfg: dict) -> Check:
-    c = Check("store/extract-consistency", "operator")
+    c = Check("store/extract-consistency")
     with_source = 0
     orphans: List[str] = []
     pairs = 0
     mismatch: List[str] = []
+    no_status: List[str] = []
     url_differs: List[str] = []
     no_sections: List[str] = []
     for r in scan["folders"]:
@@ -558,6 +592,9 @@ def check_extract_consistency(scan: dict, cfg: dict) -> Check:
             if bad:
                 mismatch.append(r["name"])
                 c.add("fail", item(r, "extract.md and source.md disagree on " + "/".join(bad), "managed"))
+            if not r["status"]:
+                no_status.append(r["name"])
+                c.add("fail", item(r, "extract.md without status (schema extract/1 requires it)", "managed"))
             if r["ex_url"] and r["url"] and r["ex_url"] != r["url"]:
                 url_differs.append(r["name"])
                 c.add("warn", item(r, "url differs between extract.md and source.md", "managed"))
@@ -565,11 +602,13 @@ def check_extract_consistency(scan: dict, cfg: dict) -> Check:
             no_sections.append(r["name"])
             c.add("warn", item(r, "none of the five sections (Summary, Executive Summary, Key Ideas, Connections, Raw Quotes)"))
     c.counts = {"with_source": with_source, "orphans": len(orphans), "managed_pairs": pairs, "mismatch": len(mismatch),
-                "url_differs": len(url_differs), "no_sections": len(no_sections)}
+                "no_status": len(no_status), "url_differs": len(url_differs), "no_sections": len(no_sections)}
     parts = ["%d extracts have a source" % with_source + (", %d do not (%s)" % (len(orphans), names(orphans)) if orphans else "")]
     agree = pairs - len(mismatch)
     parts.append("%d managed pairs agree on capture_id/revision" % agree + (
         ", %d disagree (%s)" % (len(mismatch), names(mismatch)) if mismatch else ""))
+    if no_status:
+        parts.append("%d managed without status (%s)" % (len(no_status), names(no_status)))
     if url_differs:
         parts.append("%d url differ (%s)" % (len(url_differs), names(url_differs)))
     parts.append("%d without sections" % len(no_sections) + (" (%s)" % names(no_sections) if no_sections else ""))
@@ -578,7 +617,7 @@ def check_extract_consistency(scan: dict, cfg: dict) -> Check:
 
 
 def check_guide_version(scan: dict, cfg: dict) -> Check:
-    c = Check("store/guide-version", "operator")
+    c = Check("store/guide-version")
     engine = cfg.get("guide_version")
     if engine is None:
         return c.not_probed("the engine's vault-template carries no mnemon_guide stamp", "warn")
@@ -657,7 +696,7 @@ def rank(items: List[dict]) -> List[dict]:
 
 
 def check_thin(scan: dict, cfg: dict) -> Check:
-    c = Check("data/thin", "mnemon add --recapture")
+    c = Check("data/thin")
     thin_words, stub_words = cfg["thin_words"], cfg["stub_words"]
     by_class: Dict[str, int] = {}
     thin: List[dict] = []
@@ -693,7 +732,7 @@ def check_thin(scan: dict, cfg: dict) -> Check:
 
 
 def check_arxiv(scan: dict, cfg: dict) -> Check:
-    c = Check("data/arxiv-abstract", "mnemon add --recapture")
+    c = Check("data/arxiv-abstract")
     limit = cfg["arxiv_words"]
     suspects: List[dict] = []
     superseded = 0
@@ -719,7 +758,7 @@ def check_arxiv(scan: dict, cfg: dict) -> Check:
 
 
 def check_stubs(scan: dict, cfg: dict) -> Check:
-    c = Check("data/stubs", "operator")
+    c = Check("data/stubs")
     stub_words = cfg["stub_words"]
     counts = {"fetch_status failed": 0, "bookmark": 0, "< %d words" % stub_words: 0}
     stubs: List[dict] = []
@@ -749,7 +788,7 @@ def check_stubs(scan: dict, cfg: dict) -> Check:
 
 
 def check_rating_scale(scan: dict, cfg: dict) -> Check:
-    c = Check("data/rating-scale", "operator")
+    c = Check("data/rating-scale")
     share_limit = cfg["rating_hi_share"]
     current = [r for r in scan["folders"] if r["current"] and r["source_state"] != "unreadable"]
     rated = [r for r in current if r["rating"] is not None]
@@ -767,7 +806,7 @@ def check_rating_scale(scan: dict, cfg: dict) -> Check:
 
 
 def check_reader_context(scan: dict, cfg: dict) -> Check:
-    c = Check("data/reader-context", "operator")
+    c = Check("data/reader-context")
     rc = scan["reader_context"]
     today = scan["today"]
     label = rc["path"] or "reader-context.md"
@@ -816,7 +855,7 @@ def note_age(note: dict, today: datetime.date) -> Tuple[int, str]:
     return age_days(today, note["mtime"]), " (mtime)"
 
 
-def _human_items(c: Check, notes: List[dict], today: datetime.date, label: str) -> List[dict]:
+def _human_items(notes: List[dict], today: datetime.date, label: str) -> List[dict]:
     items = []
     for n in notes:
         age, mark = note_age(n, today)
@@ -827,13 +866,13 @@ def _human_items(c: Check, notes: List[dict], today: datetime.date, label: str) 
 
 
 def check_ratification(scan: dict, cfg: dict) -> Check:
-    c = Check("human/ratification", "operator")
+    c = Check("human/ratification")
     today = scan["today"]
     radius, defaulted = cfg["radius"], cfg["radius_defaulted"]
     count_limit, days_limit = radius["drafts"]
     drafts = [n for n in scan["synthesis"]["notes"] if lv.unratified(n)]
     unknown = [n for n in scan["synthesis"]["notes"] if lv.unknown_authorship(n)]
-    items = _human_items(c, drafts, today, "unratified draft")
+    items = _human_items(drafts, today, "unratified draft")
     oldest = items[0]["age_days"] if items else 0
     over = len(items) > count_limit or oldest > days_limit
     for i in items:
@@ -853,12 +892,12 @@ def check_ratification(scan: dict, cfg: dict) -> Check:
 
 
 def check_seeds(scan: dict, cfg: dict) -> Check:
-    c = Check("human/seeds", "operator")
+    c = Check("human/seeds")
     today = scan["today"]
     radius, defaulted = cfg["radius"], cfg["radius_defaulted"]
     count_limit, days_limit = radius["seeds"]
     seeds = [n for n in scan["synthesis"]["notes"] if n["status"] == "seed"]
-    items = _human_items(c, seeds, today, "seed")
+    items = _human_items(seeds, today, "seed")
     oldest = items[0]["age_days"] if items else 0
     over = len(items) > count_limit or oldest > days_limit
     for i in items:
@@ -875,7 +914,7 @@ def check_seeds(scan: dict, cfg: dict) -> Check:
 
 
 def check_queues(scan: dict, cfg: dict) -> Check:
-    c = Check("human/queues", "operator")
+    c = Check("human/queues")
     today = scan["today"]
     radius, defaulted = cfg["radius"], cfg["radius_defaulted"]
     days_limit = radius["queues"][1]
@@ -904,10 +943,14 @@ def check_queues(scan: dict, cfg: dict) -> Check:
             over.append(q["name"])
         c.add(status, {"id": qid, "reason": "%d items · %d d" % (q["items"], age), "items": q["items"], "age_days": age,
                        "rating": None, "words": None})
+    # S3 H3 / S4: an undeclared _inputs/*.md is a coverage gap the vault must close — a warning
     untyped = [q["name"] for q in inputs["untyped"]]
+    for name in untyped:
+        c.add("warn", {"id": "_inputs/" + name, "reason": "undeclared — declare (type: queue, since) or remove",
+                       "rating": None, "words": None})
     legacy = inputs["pending_writes"]
     if legacy:
-        c.add("warn", {"id": "_inputs/pending-writes", "reason": "%d legacy entries" % legacy, "rating": None, "words": None})
+        c.items.append({"id": "_inputs/pending-writes", "reason": "%d legacy entries" % legacy, "rating": None, "words": None})
     c.counts = {"declared": len(inputs["queues"]), "parked": parked, "over_radius": len(over),
                 "oldest_days": max(ages) if ages else 0, "untyped": len(untyped), "pending_writes_legacy": legacy}
     c.threshold = {"days": days_limit, "defaults": "queues" in defaulted}
@@ -918,7 +961,7 @@ def check_queues(scan: dict, cfg: dict) -> Check:
         parts.append("%d over radius (%s)" % (len(over), names(over)))
     if parked:
         parts.append("parked %d" % parked)
-    parts.append("untyped %d" % len(untyped) + (" (%s)" % names(untyped) if untyped else ""))
+    parts.append("untyped %d" % len(untyped) + (" (%s) — declare (type: queue, since) or remove" % names(untyped) if untyped else ""))
     parts.append("pending-writes legacy %d" % legacy)
     c.detail = "; ".join(parts) + " %s" % radius_label("queues", radius, defaulted)
     return c
@@ -933,91 +976,131 @@ CHECKS = (
 
 
 # ---------------------------------------------------------------------------------------------
-# Running
+# Running: the document, its renderings, the budgeted worker
 # ---------------------------------------------------------------------------------------------
 
-def run_checks(scan: dict, cfg: dict) -> List[Check]:
+def test_hook(name: str) -> Optional[str]:
+    """A test hook's value, honoured only under MNEMON_TEST_HOOKS=1."""
+    if os.environ.get("MNEMON_TEST_HOOKS") != "1":
+        return None
+    return os.environ.get(name) or None
+
+
+def run_checks(scan: dict, cfg: dict) -> Tuple[List[Check], List[dict]]:
+    """All 19 checks (one broken check never hides the others: it is `not probed` with the
+    error as its reason, and a fail-level `error` diagnostic says so) and the diagnostics."""
+    diagnostics: List[dict] = [{"code": "radius-parse", "level": "warn",
+                                "message": 'cannot parse "%s" (defaults used)' % line} for line in cfg["radius_errors"]]
     checks: List[Check] = []
-    snap = scan["snapshot"]
-    for fn in CHECKS:
-        if not snap["complete"]:
-            c = Check(CHECK_NAMES[CHECKS.index(fn)], "operator")
-            checks.append(c.not_probed("budget %g s exceeded at %d folders" % (snap["budget_s"], snap["stopped_at"] or 0)))
-            continue
+    raise_in = test_hook("MNEMON_TEST_DOCTOR_RAISE")
+    for fn, name in zip(CHECKS, CHECK_NAMES):
         try:
+            if raise_in == name:
+                raise RuntimeError("test hook")
             checks.append(fn(scan, cfg))
-        except Exception as exc:   # one broken check never hides the others
-            c = Check(CHECK_NAMES[CHECKS.index(fn)], "operator")
-            c.status = "fail"
-            c.detail = "error: %s: %s" % (type(exc).__name__, exc)
-            checks.append(c)
-    for line in cfg["radius_errors"]:
-        c = Check("radius/parse", "operator")
-        c.status = "warn"
-        c.detail = 'cannot parse "%s" (defaults used)' % line
-        c.counts = {"line": line}
-        checks.append(c)
-    return checks
+        except Exception as exc:
+            checks.append(Check(name).not_probed("error: %s: %s" % (type(exc).__name__, exc), "warn"))
+            diagnostics.append({"code": "error", "level": "fail", "message": "%s: %s: %s" % (name, type(exc).__name__, exc)})
+            scan["snapshot"]["complete"] = False
+    return checks, diagnostics
 
 
-def summary_of(checks: List[Check]) -> dict:
-    s = {"ok": 0, "warn": 0, "fail": 0, "probed": 0, "not_probed": 0}
+def summary_of(checks: List[dict], diagnostics: List[dict]) -> dict:
+    s = {"checks": len(checks), "ok": 0, "warn": 0, "fail": 0, "probed": 0, "not_probed": 0,
+         "diagnostics_warn": 0, "diagnostics_fail": 0}
     for c in checks:
-        s[c.status] += 1
-        s["probed" if c.probed else "not_probed"] += 1
+        s[c["status"]] += 1
+        s["probed" if c["probed"] else "not_probed"] += 1
+    for d in diagnostics:
+        s["diagnostics_" + d["level"]] += 1
     return s
 
 
-def document(scan: dict, cfg: dict, checks: Optional[List[Check]]) -> dict:
-    snap = dict(scan["snapshot"])
-    snap["today"] = scan["today"].isoformat()
-    doc = {"schema": SCHEMA, "instance": cfg["instance"], "vault": scan["vault"],
-           "generated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-           "snapshot": snap, "counters": scan["counters"]}
-    if checks is not None:
-        doc["checks"] = [c.as_json() for c in checks]
-        doc["summary"] = summary_of(checks)
-    return doc
+def build_document(cfg: dict, today: datetime.date) -> dict:
+    """One read-only snapshot, the radius, the 19 checks, the diagnostics — the frozen document."""
+    scan = lv.scan_vault(cfg["vault"], state_dir=cfg["state_dir"], archive_dir=cfg["archive"], charter=cfg["charter"],
+                         reader_context=cfg["reader_context"], today=today)
+    radius, defaulted, errors = parse_radius(scan["charter"]["radius_lines"])
+    cfg.update({"radius": radius, "radius_defaulted": defaulted, "radius_errors": errors})
+    checks, diagnostics = run_checks(scan, cfg)
+    checks_json = [c.as_json() for c in checks]
+    snapshot = dict(scan["snapshot"])
+    snapshot["today"] = today.isoformat()
+    snapshot["budget_s"] = cfg.get("budget")
+    return {"schema": SCHEMA, "instance": cfg["instance"], "vault": scan["vault"], "generated_at": utc_now(),
+            "snapshot": snapshot, "counters": scan["counters"], "checks": checks_json, "diagnostics": diagnostics,
+            "summary": summary_of(checks_json, diagnostics)}
 
 
-def brief_line(scan: dict, cfg: dict, checks: List[Check]) -> str:
-    snap = scan["snapshot"]
-    c = scan["counters"]
-    name = cfg["instance"]
-    label = name[:1].upper() + name[1:] if name else "vault"
-    if not snap["complete"]:
-        return "%s · data: not probed (budget %g s exceeded at %d folders)" % (label, snap["budget_s"], snap["stopped_at"] or 0)
-    s = summary_of(checks)
-    seeds = next((x for x in checks if x.name == "human/seeds"), None)
-    drafts = next((x for x in checks if x.name == "human/ratification"), None)
-    seed_part = "%d seeds" % c["seeds"] + (" / %d d" % seeds.counts["oldest_days"] if seeds and c["seeds"] else "")
-    draft_part = "%d drafts" % c["drafts_unratified"] + (" / %d d" % drafts.counts["oldest_days"] if drafts and c["drafts_unratified"] else "")
-    line = ("%s · %d sources (%d managed · %d current · %d superseded) · %d extracted · %d synthesis (%s · %s)"
-            " · data: %d fail · %d warn · probed %d/%d"
-            % (label, c["folders"], c["managed"], c["current"], c["superseded"], c["extracted"], c["synthesis"],
-               seed_part, draft_part, s["fail"], s["warn"], s["probed"], s["probed"] + s["not_probed"]))
-    if snap["lock_held"]:
-        line += " (snapshot may be partial)"
-    return line
+def not_probed_document(cfg: dict, today: datetime.date, reason: str, diagnostic: dict) -> dict:
+    """The document when nothing could be observed: all 19 checks not probed, one diagnostic."""
+    checks = [Check(name).not_probed(reason).as_json() for name in CHECK_NAMES]
+    snapshot = {"lock_held": False, "unreadable": 0, "budget_s": cfg.get("budget"), "complete": False,
+                "today": today.isoformat()}
+    return {"schema": SCHEMA, "instance": cfg["instance"], "vault": cfg["vault"], "generated_at": utc_now(),
+            "snapshot": snapshot, "counters": {}, "checks": checks, "diagnostics": [diagnostic],
+            "summary": summary_of(checks, [diagnostic])}
 
 
-def text_lines(checks: List[Check], tsv: bool) -> List[str]:
+def utc_now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def rows_of(doc: dict) -> List[Tuple[str, str, str]]:
+    """(status, name, detail) of the 19 checks, then the diagnostics as doctor/<code>."""
+    rows = [(c["status"], c["name"], c["detail"]) for c in doc["checks"]]
+    rows += [(d["level"], "doctor/" + d["code"], d["message"]) for d in doc.get("diagnostics", [])]
+    return rows
+
+
+def text_lines(doc: dict, tsv: bool) -> List[str]:
     if tsv:
-        return ["%s\t%s\t%s" % (c.status, c.name, c.detail.replace("\t", " ").replace("\n", " ")) for c in checks]
-    return ["%s %s — %s" % (c.status, c.name, c.detail) for c in checks]
+        return ["%s\t%s\t%s" % (s, n, d.replace("\t", " ").replace("\n", " ")) for s, n, d in rows_of(doc)]
+    return ["%s %s — %s" % (s, n, d) for s, n, d in rows_of(doc)]
 
 
-def list_lines(checks: List[Check], wanted: str) -> Optional[List[str]]:
-    for c in checks:
-        if c.name == wanted or c.name.split("/", 1)[1] == wanted:
+def list_lines(doc: dict, wanted: str) -> Optional[List[str]]:
+    for c in doc["checks"]:
+        if c["name"] == wanted or c["name"].split("/", 1)[1] == wanted:
             out = []
-            for i in c.items:
+            for i in c["items"]:
                 rating = i.get("rating")
                 words = i.get("words")
                 out.append("%s\t%s\t%s\t%s" % (i["id"], i.get("reason") or i.get("class") or "-",
                                                rating if rating is not None else "-", words if words is not None else "-"))
             return out
     return None
+
+
+def brief_line(doc: dict) -> str:
+    name = doc.get("instance") or "vault"
+    label = name[:1].upper() + name[1:]
+    s = doc["summary"]
+    c = doc.get("counters") or {}
+    stopped = next((d for d in doc.get("diagnostics", []) if d["code"] in ("budget", "error") and not c), None)
+    if stopped:
+        return "%s · data: not probed (%s)" % (label, stopped["message"])
+    oldest = {}
+    for check in doc["checks"]:
+        if check["name"] in ("human/seeds", "human/ratification"):
+            oldest[check["name"]] = (check.get("counts") or {}).get("oldest_days")
+    seed_part = "%d seeds" % c["seeds"] + (" / %d d" % oldest["human/seeds"] if c["seeds"] and oldest.get("human/seeds") is not None else "")
+    draft_part = "%d drafts" % c["drafts_unratified"] + (
+        " / %d d" % oldest["human/ratification"] if c["drafts_unratified"] and oldest.get("human/ratification") is not None else "")
+    line = ("%s · %d sources (%d managed · %d current · %d superseded) · %d extracted · %d synthesis (%s · %s)"
+            " · data: %d fail · %d warn · probed %d/%d"
+            % (label, c["folders"], c["managed"], c["current"], c["superseded"], c["extracted"], c["synthesis"],
+               seed_part, draft_part, s["fail"], s["warn"], s["probed"], s["probed"] + s["not_probed"]))
+    if s["diagnostics_fail"] or s["diagnostics_warn"]:
+        diag = []
+        if s["diagnostics_fail"]:
+            diag.append("%d fail" % s["diagnostics_fail"])
+        if s["diagnostics_warn"]:
+            diag.append("%d warn" % s["diagnostics_warn"])
+        line += " · diagnostics: " + " · ".join(diag)
+    if doc["snapshot"].get("lock_held"):
+        line += " (snapshot may be partial)"
+    return line
 
 
 def this_host() -> str:
@@ -1056,16 +1139,65 @@ def settings(args) -> dict:
             cfg[key] = value
     cfg["guide_version"] = args.guide_version if args.guide_version is not None else lv.engine_guide_version()
     cfg["this_host"] = this_host()
+    cfg["budget"] = args.budget
     return cfg
 
 
+def worker_argv(args) -> List[str]:
+    """The child's command line: this script with --worker and the settings, never the output mode."""
+    argv = [sys.executable, os.path.abspath(__file__), "--worker"]
+    for flag, value in (("--today", args.today), ("--vault", args.vault), ("--archive", args.archive),
+                        ("--charter", args.charter), ("--reader-context", args.reader_context),
+                        ("--state-dir", args.state_dir), ("--instance", args.instance), ("--writer-host", args.writer_host),
+                        ("--guide-version", args.guide_version), ("--thin-words", args.thin_words),
+                        ("--stub-words", args.stub_words), ("--arxiv-words", args.arxiv_words),
+                        ("--rating-hi-share", args.rating_hi_share), ("--budget", args.budget)):
+        if value is not None:
+            argv += [flag, str(value)]
+    return argv
+
+
+def run_with_budget(args, cfg: dict, today: datetime.date, started: float) -> Tuple[dict, int]:
+    """The whole scan in a child worker, killed at the deadline (terminate, then kill): the parent
+    never blocks past the budget, whatever the worker is stuck on."""
+    budget = float(args.budget)
+    remaining = max(0.0, budget - (time.monotonic() - started))   # 0 = already late: start, then kill at once
+    proc = subprocess.Popen(worker_argv(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=os.environ.copy())
+    try:
+        out, err = proc.communicate(timeout=remaining)
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        try:
+            proc.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        try:
+            proc.communicate(timeout=1.0)
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            pass
+        message = "budget %g s exceeded" % budget
+        return not_probed_document(cfg, today, message, {"code": "budget", "level": "warn", "message": message}), 0
+    text = out.decode("utf-8", "replace")
+    if proc.returncode != 0 or not text.strip():
+        message = "worker exited %d: %s" % (proc.returncode, err.decode("utf-8", "replace").strip()[-300:] or "no output")
+        return not_probed_document(cfg, today, "error: " + message, {"code": "error", "level": "fail", "message": message}), 1
+    try:
+        doc = json.loads(text)
+    except ValueError as exc:
+        message = "worker printed no readable document (%s)" % exc
+        return not_probed_document(cfg, today, "error: " + message, {"code": "error", "level": "fail", "message": message}), 1
+    return doc, 0
+
+
 def main(argv: List[str]) -> int:
+    started = time.monotonic()
     ap = argparse.ArgumentParser(description="The data group of mnemon doctor (read-only)")
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--tsv", action="store_true", help="status<TAB>name<TAB>detail per check (the dispatcher's input)")
-    ap.add_argument("--list", metavar="CHECK", help="every item of one check: <id>\\t<class or reason>\\t<rating>\\t<words>")
+    ap.add_argument("--list", metavar="CHECK", help="every item of one check: <id>\\t<reason or class>\\t<rating>\\t<words>")
     ap.add_argument("--brief", action="store_true", help="the one line of mnemon status --brief")
-    ap.add_argument("--budget", type=float, default=None, help="seconds for the folder walk (--brief default 10)")
+    ap.add_argument("--budget", type=float, default=None, help="seconds for the whole run (--brief default 10)")
     ap.add_argument("--today", default=None, help="fix the clock (YYYY-MM-DD)")
     ap.add_argument("--vault", default=None, help="run on this vault without a config (tests)")
     ap.add_argument("--archive", default=None)
@@ -1079,7 +1211,10 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--stub-words", type=int, default=None)
     ap.add_argument("--arxiv-words", type=int, default=None)
     ap.add_argument("--rating-hi-share", type=int, default=None)
+    ap.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv[1:])
+    if args.brief and args.budget is None:
+        args.budget = DEFAULT_BRIEF_BUDGET
 
     try:
         today = datetime.date.fromisoformat(args.today) if args.today else datetime.date.today()
@@ -1094,41 +1229,56 @@ def main(argv: List[str]) -> int:
     if not os.path.isdir(cfg["vault"]):
         print("vault-doctor: vault not found: %s" % cfg["vault"], file=sys.stderr)
         return 1
-    budget = args.budget if args.budget is not None else (10.0 if args.brief else None)
 
-    try:
-        scan = lv.scan_vault(cfg["vault"], state_dir=cfg["state_dir"], archive_dir=cfg["archive"], charter=cfg["charter"],
-                             reader_context=cfg["reader_context"], budget_s=budget, today=today)
-        radius, defaulted, errors = parse_radius(scan["charter"]["radius_lines"])
-        cfg.update({"radius": radius, "radius_defaulted": defaulted, "radius_errors": errors})
-        checks = run_checks(scan, cfg)
-    except Exception as exc:
-        print("vault-doctor: error: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
-        return 1
+    if args.worker:
+        stall = test_hook("MNEMON_TEST_DOCTOR_STALL")
+        if stall:
+            pidfile = test_hook("MNEMON_TEST_DOCTOR_PIDFILE")
+            if pidfile:
+                with open(pidfile, "w") as fh:
+                    fh.write(str(os.getpid()))
+            time.sleep(float(stall))
+        try:
+            doc = build_document(cfg, today)
+        except Exception as exc:
+            print("vault-doctor: error: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
+            return 1
+        print(json.dumps(doc, ensure_ascii=False, default=lv._json_default))
+        return 0
+
+    rc = 0
+    if args.budget is not None:
+        doc, rc = run_with_budget(args, cfg, today, started)
+    else:
+        try:
+            doc = build_document(cfg, today)
+        except Exception as exc:
+            message = "%s: %s" % (type(exc).__name__, exc)
+            doc = not_probed_document(cfg, today, "error: " + message, {"code": "error", "level": "fail", "message": message})
+            rc = 1
 
     if args.list is not None:
-        lines = list_lines(checks, args.list)
+        lines = list_lines(doc, args.list)
         if lines is None:
             print("vault-doctor: no check named %r (names: %s)" % (args.list, ", ".join(CHECK_NAMES)), file=sys.stderr)
             return 2
         for line in lines:
             print(line)
-        return 0
+        return rc
     if args.brief:
         if args.json:
-            doc = document(scan, cfg, None)
-            doc["summary"] = summary_of(checks)
-            doc["brief"] = brief_line(scan, cfg, checks)
-            print(json.dumps(doc, ensure_ascii=False, default=lv._json_default))
+            out = {k: v for k, v in doc.items() if k != "checks"}
+            out["brief"] = brief_line(doc)
+            print(json.dumps(out, ensure_ascii=False, default=lv._json_default))
         else:
-            print(brief_line(scan, cfg, checks))
-        return 0
+            print(brief_line(doc))
+        return rc
     if args.json:
-        print(json.dumps(document(scan, cfg, checks), ensure_ascii=False, default=lv._json_default))
-        return 0
-    for line in text_lines(checks, args.tsv):
+        print(json.dumps(doc, ensure_ascii=False, default=lv._json_default))
+        return rc
+    for line in text_lines(doc, args.tsv):
         print(line)
-    return 0
+    return rc
 
 
 if __name__ == "__main__":

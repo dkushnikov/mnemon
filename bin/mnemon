@@ -32,8 +32,9 @@ Commands:
   add <gateway options>      Capture a source (knowledge-gateway.sh source-add)
   status [--brief [--json] [--budget <s>]]
                              Pipeline status for the instance; --brief prints one line of the
-                             vault store (counters + the data checks' summary; read-only, the
-                             folder walk stops at --budget seconds, default 10, and says so)
+                             vault store (counters + the data checks' summary; read-only; the
+                             whole run is a worker killed at --budget seconds, default 10, and
+                             the line then says `not probed (budget … exceeded)`)
   site map <url> [--max-pages N] [--include <re>]… [--exclude <re>]… [--out <plan.json>] [--json]
                              Discover a site's pages into a reviewable plan for `add --site`
                              (a regex is searched in the page's path plus ?query, e.g. ^/blog/;
@@ -824,9 +825,10 @@ PY
 }
 
 # data — the vault store checks of docs/specs/2026-10-16-vault-store.md (S3–S5): bin/vault-doctor.py
-# on one read-only snapshot of the vault. Every line is routed through _check so text and JSON stay
-# uniform; in --json the tool's whole mnemon-doctor-data/1 document is embedded as "data". An
-# exception in the tool is one `fail doctor/data — error: …` line — the engine checks are never lost.
+# on one read-only snapshot of the vault. Every line — the 19 checks and the tool's diagnostics
+# (`doctor/radius-parse`, `doctor/error`, `doctor/budget`) — is routed through _check so text and JSON
+# stay uniform; in --json the tool's whole mnemon-doctor-data/1 document is embedded as "data". A
+# tool that dies is one `fail doctor/error — …` line — the engine checks are never lost.
 DOCTOR_DATA_JSON=""
 _doctor_data() {
   local outf errf linesf rc=0 tab=$'\t' status name detail err
@@ -838,21 +840,24 @@ _doctor_data() {
   fi
   if [[ $rc -ne 0 || ! -s "$outf" ]]; then
     err="$(tail -c 400 "$errf" | tr '\n\t' '  ' | sed 's/[[:space:]]*$//')"
-    _check fail doctor/data "error: ${err:-vault-doctor.py exited $rc without output}"
+    _check fail doctor/error "${err:-vault-doctor.py exited $rc without output}"
     rm -f "$outf" "$errf" "$linesf"
     return 0
   fi
   if $DOCTOR_JSON; then
     DOCTOR_DATA_JSON="$(cat "$outf")"
+    # the 19 checks, then the diagnostics (radius-parse · error · budget) as doctor/<code>
     if ! python3 - "$outf" >"$linesf" 2>"$errf" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as fh:
     doc = json.load(fh)
-for c in doc["checks"]:
-    print("%s\t%s\t%s" % (c["status"], c["name"], c["detail"].replace("\t", " ").replace("\n", " ")))
+rows = [(c["status"], c["name"], c["detail"]) for c in doc["checks"]]
+rows += [(d["level"], "doctor/" + d["code"], d["message"]) for d in doc.get("diagnostics", [])]
+for status, name, detail in rows:
+    print("%s\t%s\t%s" % (status, name, detail.replace("\t", " ").replace("\n", " ")))
 PY
     then
-      _check fail doctor/data "error: vault-doctor.py --json printed no readable document ($(tail -c 200 "$errf" | tr '\n' ' '))"
+      _check fail doctor/error "vault-doctor.py --json printed no readable document ($(tail -c 200 "$errf" | tr '\n' ' '))"
       DOCTOR_DATA_JSON=""
       rm -f "$outf" "$errf" "$linesf"
       return 0
@@ -1532,8 +1537,9 @@ case "$cmd" in
             exit 2 ;;
   status)   _reject_post_command_selectors "$@"; _resolve_or_die
             # --brief: the one line of the vault store (docs/specs/2026-10-16-vault-store.md S4) from
-            # bin/vault-doctor.py — read-only, budgeted (default 10 s), honest when it cannot finish;
-            # --json gives the counters and the checks' summary instead of the line
+            # bin/vault-doctor.py — read-only; the whole run is a worker the tool kills at --budget
+            # seconds (default 10) and then says `not probed`; --json gives the counters and the
+            # checks' summary instead of the line
             if _has_flag --brief "$@"; then
               _status_args=()
               for _sa in "$@"; do [[ "$_sa" == --brief ]] || _status_args+=("$_sa"); done

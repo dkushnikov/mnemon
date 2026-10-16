@@ -11,8 +11,8 @@ supersedes graph and the derived axes (S2), the Synthesis link resolver, the dec
 Observational by construction: nothing is written, no directory is created, no lock is taken
 (the vault lock is probed on a private descriptor that is closed at once), no network. A file
 that vanishes or cannot be read between the listing and the read is counted
-(`snapshot.unreadable`), never raised. A `budget_s` stops the folder walk when it is exceeded
-and marks the snapshot incomplete.
+(`snapshot.unreadable`), never raised. The scan has no deadline of its own: the doctor's
+`--budget` wraps the whole run in a worker process it can kill.
 
     python3 lib_vault.py --vault <path> [--state-dir <dir>] [--archive <dir>] [--charter <path>]
                          [--reader-context <path>] [--today YYYY-MM-DD] [--json | --status-counts]
@@ -35,7 +35,6 @@ import json
 import os
 import re
 import sys
-import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -362,7 +361,7 @@ def resource_relation(a: dict, b: dict) -> str:
     return "incomparable"
 
 
-def scan_sources(vault: str, snapshot: dict, deadline: Optional[float]) -> Tuple[List[dict], dict]:
+def scan_sources(vault: str, snapshot: dict) -> Tuple[List[dict], dict]:
     """Every `Sources/*/` folder (sorted, dot-names skipped) as a record, and the supersedes graph
     computed by the reindexer's scan (one algorithm for `reindex`, `status` and the doctor)."""
     sources = os.path.join(vault, "Sources")
@@ -376,12 +375,7 @@ def scan_sources(vault: str, snapshot: dict, deadline: Optional[float]) -> Tuple
             snapshot["unreadable"] += 1
             names = []
     snapshot["folders_listed"] = len(names)
-    for i, name in enumerate(names):
-        if deadline is not None and time.monotonic() > deadline:
-            snapshot["complete"] = False
-            snapshot["stopped_at"] = i
-            names = names[:i]
-            break
+    for name in names:
         records.append(read_folder(sources, name, snapshot))
     snapshot["folders_scanned"] = len(records)
 
@@ -654,13 +648,12 @@ def default_reader_context(vault: str) -> str:
 
 def scan_vault(vault: str, state_dir: Optional[str] = None, archive_dir: Optional[str] = None,
                charter: Optional[str] = None, reader_context: Optional[str] = None,
-               budget_s: Optional[float] = None, today: Optional[datetime.date] = None) -> dict:
+               today: Optional[datetime.date] = None) -> dict:
     """The whole read-only snapshot of a vault. `state_dir` defaults to the D6 ledger dir of the
     physical vault path; `charter` to `_meta/charter.md`; `reader_context` to the init rule."""
     vault = os.path.abspath(vault)
-    snapshot = {"unreadable": 0, "budget_s": budget_s, "complete": True, "folders_listed": 0,
-                "folders_scanned": 0, "stopped_at": None, "lock_held": False, "lock": "none"}
-    deadline = time.monotonic() + budget_s if budget_s is not None else None
+    snapshot = {"unreadable": 0, "budget_s": None, "complete": True, "folders_listed": 0,
+                "folders_scanned": 0, "lock_held": False, "lock": "none"}
     if state_dir is None:
         state_dir = vl.vault_state_dir(vault)
     if charter is None:
@@ -670,7 +663,7 @@ def scan_vault(vault: str, state_dir: Optional[str] = None, archive_dir: Optiona
     snapshot["lock"] = probe_lock(state_dir)
     snapshot["lock_held"] = snapshot["lock"] == "held"
 
-    folders, graph = scan_sources(vault, snapshot, deadline)
+    folders, graph = scan_sources(vault, snapshot)
     index_path = os.path.join(vault, "index.md")
     index_text = _read_text(index_path, snapshot) if os.path.isfile(index_path) else None
     scan = {
@@ -815,13 +808,12 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--charter", default=None)
     ap.add_argument("--reader-context", default=None)
     ap.add_argument("--today", default=None, help="fix the clock (YYYY-MM-DD)")
-    ap.add_argument("--budget", type=float, default=None)
     ap.add_argument("--json", action="store_true", help="the counters and the snapshot as JSON")
     ap.add_argument("--status-counts", action="store_true", help="key=value lines for `mnemon status`")
     args = ap.parse_args(argv[1:])
     today = datetime.date.fromisoformat(args.today) if args.today else None
     scan = scan_vault(args.vault, state_dir=args.state_dir, archive_dir=args.archive, charter=args.charter,
-                      reader_context=args.reader_context, budget_s=args.budget, today=today)
+                      reader_context=args.reader_context, today=today)
     c = scan["counters"]
     if args.status_counts:
         st = c["status"]

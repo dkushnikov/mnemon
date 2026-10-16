@@ -31,7 +31,8 @@ run() { rc=0; out="$("$@" 2>"$TEST_TMPDIR/err")" || rc=$?; err="$(cat "$TEST_TMP
 doc() { run python3 "$DOCTOR" --vault "$VAULT" --today "$TODAY" --guide-version 2 "$@"; }
 line_of() { printf '%s\n' "$out" | grep -E "^(ok|warn|fail) $1 — " || true; }
 status_of() { line_of "$1" | cut -d' ' -f1; }
-count_status() { printf '%s\n' "$out" | grep -c "^$1 " || true; }
+count_status() { printf '%s\n' "$out" | grep -c "^$1 \(store\|data\|human\)/" || true; }   # the 19 checks
+count_diag() { printf '%s\n' "$out" | grep -c "^$1 doctor/" || true; }                       # the diagnostics
 jf() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(eval(sys.argv[2]))' "$1" "$2"; }
 jc() { jf "$1" "[c for c in d['checks'] if c['name'] == '$2'][0]$3"; }
 
@@ -155,7 +156,7 @@ L14=2026-09-17_l1400017; L15=2026-09-18_l1500018; L16=2026-09-19_l1600019; L17=2
 L18=2026-09-21_l1800021; T1=2026-09-22_t1000022; T2=2026-09-23_t2000023; T3=2026-09-24_t3000024
 T4=2026-09-25_t4000025; T5=2026-09-26_t5000026; T6=2026-09-27_t6000027; T8=2026-09-28_t8000028
 A2=2026-09-29_a2000029; A3=2026-09-30_a3000030; A4=2026-10-19_a4000031; S1=2026-10-20_s1000032
-E1=2026-10-21_e1000033; U1=2026-10-22_u1000034
+E1=2026-10-21_e1000033; U1=2026-10-22_u1000034; P1=2026-10-23_p1000035; MS=2026-10-24_ms000036
 
 # I1 — a managed body edited after capture, a foreign `_width`, a partial key set (damaged), legacy `_width`,
 # a legacy header without its closing ---, a legacy empty body
@@ -165,10 +166,13 @@ M2_SHA_AT_CAPTURE="$(sha_body "$VAULT/Sources/$M2/source.md")"
 printf 'an edit after capture\n' >> "$VAULT/Sources/$M2/source.md"
 mk_pair "$M3" 350 5 'canonical_url: "https://example.com/m3"' '_width: 100'
 mkdir -p "$VAULT/Sources/$D1"; printf -- '---\ntype: source\ntitle: "%s"\ncapture_id: "cap-d1"\nrevision: "%s"\n---\n# damaged\n\n%s\n' "$D1" "$D1" "$(words 350)" > "$VAULT/Sources/$D1/source.md"
-mk_legacy "$L1" 350 '_width: 100'; STATUS=bogus; mk_extract "$L1" 4; unset STATUS
+mk_legacy "$L1" 350 '_width: 100'; STATUS=triaged; mk_extract "$L1" 4; unset STATUS
 mk_legacy "$L2" 350 'url: "https://example.com/l2"'; mk_extract "$L2" 5 'capture_context:' '  vault: personal'
 mkdir -p "$VAULT/Sources/$L3"; printf -- '---\ntype: source\ntitle: "open"\n# no closing delimiter\n' > "$VAULT/Sources/$L3/source.md"
 mk_legacy "$L4" 0; STATUS=""; NOSECTIONS=1; mk_extract "$L4" 2; unset STATUS NOSECTIONS
+# I8/I10 — `processed` is a tolerated legacy word; a managed extract.md without status breaks the extract/1 schema
+mk_legacy "$P1" 350; STATUS=processed; mk_extract "$P1" 5; unset STATUS
+mk_managed "$MS" 350 'canonical_url: "https://example.com/ms"'; STATUS=""; mk_extract "$MS" 5 "capture_id: \"cap-$MS\"" "revision: \"$MS\""; unset STATUS
 # I2 — two current managed revisions with one resource_sha256 (and different canonical_url: inconsistent),
 # a legacy and a managed revision of one canonical URL, a non-url legacy (unkeyed)
 RSHA="$(printf 'shared' | shasum -a 256 | cut -c1-64)"
@@ -318,9 +322,9 @@ assert_contains "$(line_of store/ledger)" "2 contradict the files (r-gone, r-m2)
 assert_contains "$(line_of store/ledger)" "without a receipt" "I7: managed revisions without a receipt warn (state lost, replay restores)"
 assert_contains "$(line_of store/ledger)" "1 incomplete; 1 unreadable" "I7: a started receipt is a count, an unreadable one too"
 assert_eq "$(status_of store/status-vocabulary)" "warn" "I8 warn"
-assert_contains "$(line_of store/status-vocabulary)" "legacy words 1 (superseded 1)" "I8: the legacy list is counted apart"
-assert_contains "$(line_of store/status-vocabulary)" "empty 1" "I8: an empty status is counted"
-assert_contains "$(line_of store/status-vocabulary)" "unknown 1 (bogus 1)" "I8: an unknown word is named (`processed` is on the tolerated legacy list, S2)"
+assert_contains "$(line_of store/status-vocabulary)" "legacy words 2 (processed 1, superseded 1)" "I8: the legacy list is counted apart (processed is a tolerated legacy word)"
+assert_contains "$(line_of store/status-vocabulary)" "empty 2 (1 managed → schema)" "I8: an empty status is counted; a managed one is a schema violation (I10), only counted here"
+assert_contains "$(line_of store/status-vocabulary)" "unknown 1 (triaged 1)" "I8: an unknown word is named"
 assert_contains "$(line_of store/status-vocabulary)" "synthesis: seed 2 · draft 4 · stable 1 · empty 2 · unknown 1 (weird 1)" "I8: the synthesis vocabulary"
 assert_eq "$(status_of store/context)" "warn" "I9 warn: a managed context outside the charter"
 assert_contains "$(line_of store/context)" "1 outside: $M14" "I9: the managed revision is named"
@@ -331,6 +335,7 @@ assert_contains "$(line_of store/extract-consistency)" "1 do not ($E1)" "I10: an
 assert_contains "$(line_of store/extract-consistency)" "1 disagree ($M15)" "I10: a managed pair disagreeing on revision"
 assert_contains "$(line_of store/extract-consistency)" "1 url differ ($M16)" "I10: a differing url warns"
 assert_contains "$(line_of store/extract-consistency)" "1 without sections ($L4)" "I10: an extract without any of the five sections warns"
+assert_contains "$(line_of store/extract-consistency)" "1 managed without status ($MS)" "I10: a managed extract.md without status is a schema failure"
 assert_eq "$(status_of store/guide-version)" "warn" "I11 warn"
 assert_contains "$(line_of store/guide-version)" "vault CLAUDE.md unstamped, _meta/Protocol.md 1 (behind) (engine guide 2)" "I11: unstamped and behind, against the engine's guide version"
 assert_eq "$(status_of data/thin)" "warn" "Q1 warn"
@@ -350,9 +355,10 @@ assert_contains "$(line_of human/ratification)" "4 unratified agent drafts, olde
 assert_eq "$(status_of human/seeds)" "warn" "H2 warn"
 assert_contains "$(line_of human/seeds)" "2 seeds, oldest 124 d (radius 10 / 30 d)" "H2: seeds of any author, the radius from the charter"
 assert_eq "$(status_of human/queues)" "warn" "H3 warn"
-assert_contains "$(line_of human/queues)" "5 declared queues, oldest 288 d; 2 over radius (parked-expired.md, recapture-queue.md); parked 2; untyped 2 (bookmarks.md, tabs.md); pending-writes legacy 1 (radius 30 d)" "H3: age from since (not mtime), parked excluded until parked_until passes, untyped in the detail, pending-writes legacy"
-assert_contains "$(line_of radius/parse)" 'warn radius/parse — cannot parse "seeds: lots" (defaults used)' "an unparsable radius line is a warning, never a silent default"
-TEXT_OK="$(count_status ok)"; TEXT_WARN="$(count_status warn)"; TEXT_FAIL="$(count_status fail)"
+assert_contains "$(line_of human/queues)" "5 declared queues, oldest 288 d; 2 over radius (parked-expired.md, recapture-queue.md); parked 2; untyped 2 (bookmarks.md, tabs.md) — declare (type: queue, since) or remove; pending-writes legacy 1 (radius 30 d)" "H3: age from since (not mtime), parked excluded until parked_until passes, untyped named with the door, pending-writes legacy counted"
+assert_eq "$(line_of doctor/radius-parse)" 'warn doctor/radius-parse — cannot parse "seeds: lots" (defaults used)' "an unparsable radius line is a diagnostic (doctor/radius-parse), never a silent default"
+TEXT_OK="$(count_status ok)"; TEXT_WARN="$(count_status warn)"; TEXT_FAIL="$(count_status fail)"; TEXT_DIAG_WARN="$(count_diag warn)"
+assert_eq "$((TEXT_OK + TEXT_WARN + TEXT_FAIL)) $TEXT_DIAG_WARN $(count_diag fail)" "19 1 0" "19 check lines, one warn diagnostic, no fail diagnostic"
 TEXT_OUT="$out"
 
 echo "--- the frozen JSON: schema, 19 stable names, summary = text, probed, items complete ---"
@@ -366,9 +372,12 @@ for name in store/source-integrity store/identity store/index store/supersedes s
   assert_eq "$(jf "$JSON" "len([c for c in d['checks'] if c['name'] == '$name'])")" "1" "stable name present once: $name"
 done
 assert_eq "$(jf "$JSON" 'd["summary"]["ok"], d["summary"]["warn"], d["summary"]["fail"]')" "($TEXT_OK, $TEXT_WARN, $TEXT_FAIL)" "summary counts equal the text lines"
-assert_eq "$(jf "$JSON" 'd["summary"]["probed"], d["summary"]["not_probed"]')" "(20, 0)" "every check probed (archive and ledger given)"
+assert_eq "$(jf "$JSON" 'd["summary"]["probed"], d["summary"]["not_probed"]')" "(19, 0)" "every check probed (archive and ledger given)"
+assert_eq "$(jf "$JSON" 'len(d["checks"]), d["summary"]["checks"]')" "(19, 19)" "exactly the 19 checks in checks"
+assert_eq "$(jf "$JSON" 'd["diagnostics"]')" "[{'code': 'radius-parse', 'level': 'warn', 'message': 'cannot parse \"seeds: lots\" (defaults used)'}]" "the diagnostics array, apart from the checks"
+assert_eq "$(jf "$JSON" 'd["summary"]["diagnostics_warn"], d["summary"]["diagnostics_fail"]')" "($TEXT_DIAG_WARN, 0)" "summary.diagnostics_* equal the doctor/* lines"
 assert_eq "$(jf "$JSON" 'sorted(d["checks"][0].keys())')" "['counts', 'detail', 'fix', 'items', 'name', 'probed', 'reason', 'status', 'threshold']" "the check shape"
-assert_eq "$(jf "$JSON" 'sorted(d["summary"].keys())')" "['fail', 'not_probed', 'ok', 'probed', 'warn']" "the summary shape"
+assert_eq "$(jf "$JSON" 'sorted(d["summary"].keys())')" "['checks', 'diagnostics_fail', 'diagnostics_warn', 'fail', 'not_probed', 'ok', 'probed', 'warn']" "the summary shape"
 assert_eq "$(jf "$JSON" 'sorted(k for k in d["snapshot"] if k in ("lock_held", "unreadable", "budget_s", "complete"))')" "['budget_s', 'complete', 'lock_held', 'unreadable']" "the snapshot fields"
 assert_eq "$(jf "$JSON" 'd["snapshot"]["complete"], d["snapshot"]["lock_held"], d["snapshot"]["budget_s"]')" "(True, False, None)" "a full run: complete, lock free, no budget"
 if [[ "$(id -u)" == 0 ]]; then
@@ -393,9 +402,9 @@ assert_eq "$(jc "$JSON" human/ratification '["threshold"]')" "{'count': 5, 'days
 assert_eq "$(jc "$JSON" human/queues '["counts"]["parked"]')" "2" "H3 parked count"
 rated="$(jc "$JSON" data/rating-scale '["counts"]["rated"]')"; hi="$(jc "$JSON" data/rating-scale '["counts"]["hi"]')"; cur="$(jc "$JSON" data/rating-scale '["counts"]["current"]')"
 assert_contains "$(printf '%s\n' "$TEXT_OUT" | grep '^warn data/rating-scale')" "($hi/$rated, coverage $rated/$cur); threshold 20 %" "Q4: the denominator is the rated current revisions, coverage shown"
-assert_eq "$(jf "$JSON" 'd["counters"]["folders"], d["counters"]["managed"], d["counters"]["damaged"], d["counters"]["legacy"]')" "(92, 17, 1, 72)" "counters: folders, managed, damaged, legacy (the unreadable one in none of the classes)"
-assert_eq "$(jf "$JSON" 'd["counters"]["superseded"], d["counters"]["current"], d["counters"]["current_incomplete"]')" "(6, 85, True)" "counters: superseded (cycle members included), current, current incomplete"
-assert_eq "$(jf "$JSON" 'd["counters"]["extracted"], d["counters"]["captured"]')" "(88, 4)" "counters: extracted = folders with extract.md; captured = source.md without one"
+assert_eq "$(jf "$JSON" 'd["counters"]["folders"], d["counters"]["managed"], d["counters"]["damaged"], d["counters"]["legacy"]')" "(94, 18, 1, 73)" "counters: folders, managed, damaged, legacy (the unreadable one in none of the classes)"
+assert_eq "$(jf "$JSON" 'd["counters"]["superseded"], d["counters"]["current"], d["counters"]["current_incomplete"]')" "(6, 87, True)" "counters: superseded (cycle members included), current, current incomplete"
+assert_eq "$(jf "$JSON" 'd["counters"]["extracted"], d["counters"]["captured"]')" "(90, 4)" "counters: extracted = folders with extract.md; captured = source.md without one"
 assert_eq "$(jf "$JSON" 'd["counters"]["integrated"], d["counters"]["links_unresolved"]')" "(2, 1)" "the S2 link resolver: [[Sources/<rev>/extract…]] and ![[…/source]] resolve, [[Other Note]] does not"
 assert_eq "$(jf "$JSON" 'd["counters"]["seeds"], d["counters"]["drafts_unratified"], d["counters"]["unknown_authorship"]')" "(2, 4, 1)" "counters: seeds, unratified drafts, unknown authorship"
 
@@ -417,15 +426,36 @@ echo "--- the one-line brief: numbers equal --json; a budget that cannot be met 
 doc --archive "$ARCHIVE" --state-dir "$LEDGER" --brief
 assert_eq "$rc" "0" "--brief exits 0"
 assert_eq "$(printf '%s\n' "$out" | grep -c .)" "1" "--brief is one physical line"
-assert_eq "$out" "Dirty · 92 sources (17 managed · 85 current · 6 superseded) · 88 extracted · 10 synthesis (2 seeds / 124 d · 4 drafts / 137 d) · data: $TEXT_FAIL fail · $TEXT_WARN warn · probed 20/20" "the brief's numbers are the JSON's counters and summary"
+assert_eq "$out" "Dirty · 94 sources (18 managed · 87 current · 6 superseded) · 90 extracted · 10 synthesis (2 seeds / 124 d · 4 drafts / 137 d) · data: $TEXT_FAIL fail · $TEXT_WARN warn · probed 19/19 · diagnostics: 1 warn" "the brief's numbers are the JSON's counters and summary; diagnostics named apart"
 doc --archive "$ARCHIVE" --state-dir "$LEDGER" --brief --budget 0.001
 assert_eq "$rc" "0" "--budget 0.001 exits 0"
-assert_contains "$out" "Dirty · data: not probed (budget 0.001 s exceeded at " "a budget the walk cannot meet: not probed, with the folder count — never 0 fail"
+assert_eq "$out" "Dirty · data: not probed (budget 0.001 s exceeded)" "a budget the run cannot meet: not probed — never 0 fail"
 doc --archive "$ARCHIVE" --state-dir "$LEDGER" --json --budget 0.001
-assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["snapshot"]["complete"], d["summary"]["probed"], d["summary"]["not_probed"], d["checks"][0]["probed"], d["checks"][0]["status"])')" "False 1 19 False ok" "--json under the budget: snapshot incomplete, every check not probed with status ok (the radius diagnostic does not depend on the walk)"
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["snapshot"]["complete"], d["summary"]["probed"], d["summary"]["not_probed"], len(d["checks"]), d["checks"][0]["probed"], d["checks"][0]["status"], d["diagnostics"][0]["code"], d["diagnostics"][0]["level"])')" "False 0 19 19 False ok budget warn" "--json under the budget: snapshot incomplete, all 19 checks not probed (status ok), a budget diagnostic"
+echo "--- a stalled worker is killed at the deadline: the parent never waits past the budget ---"
+PIDFILE="$TEST_TMPDIR/worker.pid"; rm -f "$PIDFILE"
+t0=$(date +%s)
+rc=0; out="$(MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_STALL=30 MNEMON_TEST_DOCTOR_PIDFILE="$PIDFILE" python3 "$DOCTOR" --vault "$DIRTY" --today "$TODAY" --guide-version 2 --brief --budget 1 2>"$TEST_TMPDIR/err")" || rc=$?
+t1=$(date +%s)
+assert_eq "$rc" "0" "exit 0 when the worker is killed at the deadline"
+assert_eq "$out" "Dirty · data: not probed (budget 1 s exceeded)" "the line says the budget was exceeded"
+[[ $((t1 - t0)) -le 5 ]] && pass "the parent returned within the budget plus slack ($((t1 - t0)) s, worker stalled for 30 s)" || fail "the parent returned within the budget plus slack" "took $((t1 - t0)) s"
+assert_file_exists "$PIDFILE" "the stalled worker wrote its pid (test hook)"
+wpid="$(cat "$PIDFILE" 2>/dev/null || echo 0)"
+if kill -0 "$wpid" 2>/dev/null; then fail "no worker survives the parent" "pid $wpid still alive"; kill -9 "$wpid" 2>/dev/null || true; else pass "no worker survives the parent (pid $wpid is gone)"; fi
+rc=0; out="$(MNEMON_TEST_DOCTOR_STALL=30 python3 "$DOCTOR" --vault "$DIRTY" --today "$TODAY" --guide-version 2 --brief --budget 1 2>/dev/null)" || rc=$?
+assert_contains "$out" " sources (" "the stall hook is ignored without MNEMON_TEST_HOOKS=1"
+echo "--- an exception inside one check: that check not probed, a fail diagnostic, the other 18 still run ---"
+rc=0; out="$(MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_RAISE=store/index python3 "$DOCTOR" --vault "$DIRTY" --today "$TODAY" --guide-version 2 --archive "$ARCHIVE" --state-dir "$LEDGER" 2>/dev/null)" || rc=$?
+assert_eq "$rc" "0" "the tool still exits 0 (the dispatcher derives its exit from the fail line)"
+assert_eq "$(line_of store/index)" "warn store/index — not probed: error: RuntimeError: test hook" "the broken check is not probed, with the error as its reason"
+assert_eq "$(line_of doctor/error)" "fail doctor/error — store/index: RuntimeError: test hook" "...and a fail-level error diagnostic names it"
+assert_eq "$((TEXT_OK + TEXT_WARN + TEXT_FAIL))" "$(( $(count_status ok) + $(count_status warn) + $(count_status fail) ))" "still 19 check lines"
+rc=0; out="$(MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_RAISE=store/index python3 "$DOCTOR" --vault "$DIRTY" --today "$TODAY" --guide-version 2 --archive "$ARCHIVE" --state-dir "$LEDGER" --json 2>/dev/null)" || rc=$?
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["snapshot"]["complete"], d["summary"]["probed"], d["summary"]["not_probed"], d["summary"]["diagnostics_fail"], [x["code"] for x in d["diagnostics"]])')" "False 18 1 1 ['radius-parse', 'error']" "--json: snapshot incomplete, 18 probed, the error diagnostic next to the radius one"
 doc --archive "$ARCHIVE" --state-dir "$LEDGER" --brief --json
 assert_contains "$out" '"schema": "mnemon-doctor-data/1"' "--brief --json carries the schema"
-assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("checks" in d, d["counters"]["folders"], d["summary"]["fail"])')" "False 92 $TEXT_FAIL" "--brief --json: counters and summary, no checks"
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("checks" in d, d["counters"]["folders"], d["summary"]["fail"], len(d["diagnostics"]))')" "False 94 $TEXT_FAIL 1" "--brief --json: counters, summary and diagnostics, no checks"
 
 echo "--- the vault lock: probed, never taken; held → the snapshot is marked ---"
 READY="$TEST_TMPDIR/holder.ready"
@@ -452,12 +482,16 @@ assert_eq "$(line_of store/archive)" "ok store/archive — not probed: archive_d
 doc --state-dir "$LEDGER" --archive "$TEST_TMPDIR/no-such-archive"
 assert_eq "$(line_of store/archive)" "warn store/archive — not probed: archive_dir not accessible: $TEST_TMPDIR/no-such-archive" "I5 with an archive_dir that is not there: warn, not probed"
 doc --archive "$ARCHIVE"
-assert_contains "$(line_of store/ledger)" "ok store/ledger — not probed: no ledger on this host" "I7 without a ledger (a reader host, a fresh copy): ok, not probed"
+assert_contains "$(line_of store/ledger)" "ok store/ledger — not probed: no ledger on this host" "I7 without a ledger, writer_host unset: ok, not probed"
+assert_contains "$(line_of store/ledger)" "; writer_host unset" "...saying why"
 doc --archive "$ARCHIVE" --writer-host "$THIS_HOST"
-assert_contains "$(line_of store/ledger)" "warn store/ledger — not probed: no ledger on this host" "I7 without a ledger on the writer host (managed revisions exist): warn, not probed"
+assert_contains "$(line_of store/ledger)" "warn store/ledger — not probed: no ledger on the writer host — state lost?" "I7 without a ledger on the writer host (writer_host = this host): warn, not probed"
+doc --archive "$ARCHIVE" --writer-host other-host
+assert_contains "$(line_of store/ledger)" "ok store/ledger — not probed: no ledger on this host" "I7 without a ledger on a reader host (writer_host = another host): ok, not probed"
+assert_contains "$(line_of store/ledger)" "; not the writer (writer_host other-host)" "...saying why"
 doc --archive "$ARCHIVE" --json
 assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=[x for x in d["checks"] if x["name"]=="store/ledger"][0]; print(c["probed"], c["status"], c["reason"][:22]); print(d["summary"]["probed"], d["summary"]["not_probed"])')" "False ok no ledger on this host
-19 1" "probed: false with the reason; the summary counts it as not probed"
+18 1" "probed: false with the reason; the summary counts it as not probed"
 
 echo "--- the doctor writes nothing: vault, ledger and archive are byte-for-byte the same before and after ---"
 before="$(snap "$DIRTY" "$LEDGER" "$ARCHIVE")"
@@ -560,16 +594,21 @@ assert_contains "$(line_of data/reader-context)" "no freshness data (missing $TE
 echo "--- the radius: partial section, a line without the count, --charter ---"
 fresh_vault radius
 mk_synth "Seed" seed - 2026-09-01
-printf '# C\n\n## Radius\nseeds: 20 days\n' > "$TEST_TMPDIR/charter-partial.md"
+printf '# C\n\n## Radius\nseeds: 20 open · 20 days\n' > "$TEST_TMPDIR/charter-partial.md"
 doc --charter "$TEST_TMPDIR/charter-partial.md"
-assert_eq "$(line_of human/seeds)" "warn human/seeds — 1 seeds, oldest 45 d (radius 10 / 20 d)" "seeds: the count is optional (engine default), the days are the charter's"
+assert_eq "$(line_of human/seeds)" "warn human/seeds — 1 seeds, oldest 45 d (radius 20 / 20 d)" "seeds: the charter's form holds (count and days)"
 assert_eq "$(line_of human/ratification)" "ok human/ratification — 0 unratified agent drafts (radius 5 / 45 d) (defaults); unknown authorship 0" "drafts absent from the section: defaults, marked"
-assert_eq "$(printf '%s\n' "$out" | grep -c 'radius/parse' || true)" "0" "nothing to report when every line parses"
-printf '# C\n\n## Radius\nseeds: 10 open; 30 days\ndrafts: five unratified · 45 days\n' > "$TEST_TMPDIR/charter-bad.md"
+assert_eq "$(count_diag warn)" "0" "nothing to report when every line parses"
+printf '# C\n\n## Radius\nseeds: 10 open; 30 days\ndrafts: five unratified · 45 days\nqueues: 5 open · 30 days\nseeds: 30 days\n' > "$TEST_TMPDIR/charter-bad.md"
 doc --charter "$TEST_TMPDIR/charter-bad.md"
-assert_eq "$(line_of radius/parse)" 'warn radius/parse — cannot parse "drafts: five unratified · 45 days" (defaults used)' "a line off the grammar is named"
-assert_contains "$(line_of human/ratification)" "(radius 5 / 45 d) (defaults)" "...and that key takes the defaults, marked"
-assert_contains "$(line_of human/seeds)" "(radius 10 / 30 d)" "...while the parsable line holds (; as the separator)"
+assert_eq "$(count_diag warn)" "3" "three lines off the grammar: one diagnostic each"
+assert_contains "$out" 'warn doctor/radius-parse — cannot parse "drafts: five unratified · 45 days" (defaults used)' "a line off the grammar is named"
+assert_contains "$out" 'warn doctor/radius-parse — cannot parse "queues: 5 open · 30 days" (defaults used)' "the seeds form under the queues key is a parse diagnostic (one form per key)"
+assert_contains "$out" 'warn doctor/radius-parse — cannot parse "seeds: 30 days" (defaults used)' "the queues form under the seeds key is a parse diagnostic"
+assert_contains "$(line_of human/ratification)" "(radius 5 / 45 d) (defaults)" "...and drafts takes the defaults, marked"
+assert_contains "$(line_of human/queues)" "(radius 30 d) (defaults)" "...queues too"
+assert_contains "$(line_of human/seeds)" "(radius 10 / 30 d)" "...while the parsable seeds line holds (; as the separator)"
+assert_not_contains "$(line_of human/seeds)" "(defaults)" "...not marked as default"
 
 echo "--- H3: a declared queue without since; parked_until in the past ends the parking ---"
 fresh_vault h3
@@ -583,6 +622,17 @@ assert_contains "$out" "_inputs/parked.md	parked (indefinitely)	-	-" "parked wit
 doc
 assert_contains "$(line_of human/queues)" "3 declared queues, oldest 288 d; 2 over radius (expired.md, nosince.md); parked 1; untyped 0" "H3 counts"
 
+echo "--- H3: an undeclared _inputs file alone is a warning the vault must close; probed ---"
+fresh_vault h3u
+mk_queue notes
+printf '{}\n' > "$VAULT/_inputs/index-hand-edits-2026-10-01.md"
+doc
+assert_eq "$(line_of human/queues)" "warn human/queues — 0 declared queues; untyped 1 (notes.md) — declare (type: queue, since) or remove; pending-writes legacy 0 (radius 30 d) (defaults)" "H3 warn on coverage: the undeclared file is named with the door; hand-edits reports are not queues"
+doc --json
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=[x for x in d["checks"] if x["name"]=="human/queues"][0]; print(c["probed"], c["status"], c["counts"]["untyped"])')" "True warn 1" "...probed: true (coverage is the vault's gap, not the doctor's)"
+doc --list queues
+assert_eq "$out" "_inputs/notes.md	undeclared — declare (type: queue, since) or remove	-	-" "--list queues names the undeclared file"
+
 echo "--- the dispatcher: doctor --data, --json envelope, --list, exit codes; status --brief; the one Extracted ---"
 printf 'instance: dirty\nvault_path: %s\narchive_dir: %s\nreader_context_path: %s/_meta/reader-context.md\nsearch_provider: grep\n' "$DIRTY" "$ARCHIVE" "$DIRTY" > "$TEST_TMPDIR/dirty.yaml"
 printf 'instance: clean\nvault_path: %s\narchive_dir: %s\nreader_context_path: %s/_meta/reader-context.md\nsearch_provider: grep\n' "$CLEAN" "$CARCH" "$CLEAN" > "$TEST_TMPDIR/clean.yaml"
@@ -591,8 +641,8 @@ run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" doctor --data
 assert_eq "$rc" "1" "doctor --data exits 1 on a data fail"
 assert_contains "$out" "fail store/source-integrity — " "the data group follows the engine checks, in the dispatcher's line shape"
 assert_contains "$out" "ok config — $TEST_TMPDIR/dirty.yaml" "...after the engine checks"
-assert_eq "$(printf '%s\n' "$out" | grep -c '^[a-z]* \(store\|data\|human\|radius\)/' || true)" "20" "20 data lines"
-assert_eq "$(printf '%s\n' "$out" | grep -c '^fail doctor/data' || true)" "0" "no tool error"
+assert_eq "$(printf '%s\n' "$out" | grep -c '^[a-z]* \(store\|data\|human\|doctor\)/' || true)" "20" "19 check lines and the radius diagnostic"
+assert_eq "$(printf '%s\n' "$out" | grep -c '^fail doctor/' || true)" "0" "no tool error"
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" doctor
 assert_eq "$(printf '%s\n' "$out" | grep -c '^[a-z]* \(store\|data\|human\)/' || true)" "0" "without --data the doctor is unchanged"
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" doctor --data --json
@@ -601,7 +651,9 @@ ENV="$TEST_TMPDIR/envelope.json"; printf '%s' "$out" > "$ENV"
 assert_eq "$(jf "$ENV" 'd["exit"]')" "1" "the envelope's exit"
 assert_eq "$(jf "$ENV" 'd["data"]["schema"]')" "mnemon-doctor-data/1" "the tool's document is embedded as data"
 assert_eq "$(jf "$ENV" 'len([c for c in d["checks"] if c["name"] == "store/source-integrity" and c["status"] == "fail"])')" "1" "...and its checks are in checks[] too (uniform)"
-assert_eq "$(jf "$ENV" 'd["data"]["summary"]["probed"], d["data"]["summary"]["not_probed"]')" "(19, 1)" "through the config: archive probed, the ledger (XDG state of this test) not"
+assert_eq "$(jf "$ENV" 'd["data"]["summary"]["probed"], d["data"]["summary"]["not_probed"]')" "(18, 1)" "through the config: archive probed, the ledger (XDG state of this test) not"
+assert_eq "$(jf "$ENV" 'len([c for c in d["checks"] if c["name"] == "doctor/radius-parse" and c["status"] == "warn"])')" "1" "...the diagnostics are in checks[] as doctor/<code>"
+assert_eq "$(jf "$ENV" 'd["data"]["summary"]["checks"], len(d["data"]["diagnostics"])')" "(19, 1)" "...and the embedded document keeps them apart"
 assert_not_contains "$out" "ok config —" "--json emits no text lines"
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" doctor --list thin
 assert_eq "$rc" "0" "doctor --list thin exits 0"
@@ -616,24 +668,29 @@ assert_eq "$(printf '%s\n' "$out" | grep -c '^ok \(store\|data\|human\)/' || tru
 assert_contains "$out" "ok store/ledger — not probed: no ledger on this host" "...the ledger line says so"
 run "$MNEMON" --config "$TEST_TMPDIR/gone.yaml" doctor --data
 assert_eq "$rc" "1" "a vault that is not there: exit 1"
-assert_contains "$out" "fail doctor/data — error: vault-doctor: vault not found: $TEST_TMPDIR/no-such-vault" "an error in the tool is one fail line, the engine checks are kept"
+assert_contains "$out" "fail doctor/error — vault-doctor: vault not found: $TEST_TMPDIR/no-such-vault" "a tool that dies is one fail doctor/error line, the engine checks are kept"
 assert_contains "$out" " deps — " "...the engine checks are still there"
+run env MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_RAISE=store/index "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" doctor --data
+assert_eq "$rc" "1" "an exception inside one check: exit 1 through the dispatcher"
+assert_contains "$out" "fail doctor/error — store/index: RuntimeError: test hook" "...the fail diagnostic line"
+assert_contains "$out" "warn store/index — not probed: error: RuntimeError: test hook" "...the broken check not probed"
+assert_eq "$(printf '%s\n' "$out" | grep -c '^ok \(store\|data\|human\)/' || true)" "18" "...the other 18 still ran"
 run "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" status --brief
 assert_eq "$rc" "0" "status --brief exits 0"
 assert_eq "$(printf '%s\n' "$out" | grep -c .)" "1" "status --brief is one physical line"
 assert_contains "$out" "Clean · 3 sources (3 managed · 3 current · 0 superseded) · 3 extracted · 2 synthesis (1 seeds / " "...with the instance's counters"
 assert_contains "$out" " · data: 0 fail · 0 warn · probed 18/19" "...and the data summary (the ledger not probed here)"
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" status --brief --budget 0.001
-assert_contains "$out" "Dirty · data: not probed (budget 0.001 s exceeded at " "status --brief --budget: honest"
+assert_eq "$out" "Dirty · data: not probed (budget 0.001 s exceeded)" "status --brief --budget: honest"
 run "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" status --brief --json
 assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["instance"], d["counters"]["folders"], d["summary"]["fail"], "checks" in d)')" "clean 3 0 False" "status --brief --json: counters + summary"
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" status
 assert_eq "$rc" "0" "status exits 0"
-assert_contains "$out" "Extracted: 88" "status takes Extracted from lib_vault: folders with extract.md (88), not the word count"
-assert_contains "$out" "By status: extracted 85 · dismissed 0 · legacy words 1 · empty 1 · unknown 1" "status shows the stored words as a breakdown"
+assert_contains "$out" "Extracted: 90" "status takes Extracted from lib_vault: folders with extract.md (90), not the word count"
+assert_contains "$out" "By status: extracted 85 · dismissed 0 · legacy words 2 · empty 2 · unknown 1" "status shows the stored words as a breakdown"
 assert_contains "$out" "Superseded: " "status keeps its other counters"
 run python3 "$LIBV" --vault "$DIRTY" --status-counts
-assert_contains "$out" "extracted=88" "lib_vault --status-counts: the same number"
+assert_contains "$out" "extracted=90" "lib_vault --status-counts: the same number"
 before="$(snap "$DIRTY" "$ARCHIVE" "$CLEAN" "$CARCH")"
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" doctor --data --json
 run "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" status --brief
