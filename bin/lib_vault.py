@@ -66,7 +66,7 @@ SYNTHESIS_STATUS = ("seed", "draft", "stable")
 MEDIA_TYPES = frozenset(("video", "podcast"))
 SITE_TYPES = frozenset(("website", "repo", "document"))
 ARXIV_HOSTS = frozenset(("arxiv.org", "www.arxiv.org"))
-SECTION_RE = re.compile(r"^#{2,3}[ \t]+(Summary|Executive Summary|Key Ideas|Connections|Raw Quotes)[ \t]*$", re.M)
+SECTION_RE = re.compile(r"^#{2,3}[ \t]+(Summary|Executive Summary|Key Ideas|Connections|Raw Quotes)[ \t]*\r?$", re.M)
 HAND_EDITS_RE = re.compile(r"^index-hand-edits-(\d{4}-\d{2}-\d{2})\.md$")
 WIKILINK_RE = re.compile(r"!?\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]")
 GUIDE_COMMENT_RE = re.compile(r"<!--\s*mnemon_guide:\s*(\d+)\s*-->")
@@ -282,11 +282,15 @@ def read_folder(sources: str, name: str, snapshot: dict) -> dict:
             body = body_bytes(data)
             if body is not None:
                 rec["body_sha256"] = hashlib.sha256(body).hexdigest()
-                rec["body_bytes"] = len(body)
-                rec["body_words"] = len(body.decode("utf-8", "replace").split())
-            elif state == "none":          # no header at all: the whole file is the body
-                rec["body_bytes"] = len(data)
-                rec["body_words"] = len(data.decode("utf-8", "replace").split())
+            # the body is measured on the text after the header (tolerant of \r\n and a `...`
+            # terminator, like split_frontmatter): the gateway's byte rule above is for the hash only
+            text = data.decode("utf-8", "replace")
+            _blk, body_text = split_frontmatter(text)
+            if state == "none":            # no header at all: the whole file is the body
+                _blk, body_text = "", text
+            if _blk is not None:
+                rec["body_bytes"] = len(body_text.encode("utf-8"))
+                rec["body_words"] = len(body_text.split())
 
     if os.path.isfile(ep):
         rec["has_extract"] = True
@@ -377,6 +381,10 @@ def scan_sources(vault: str, snapshot: dict) -> Tuple[List[dict], dict]:
             snapshot["complete"] = False
             snapshot["sources_unlisted"] = "%s: %s" % (type(exc).__name__, exc)
             names = []
+    else:
+        # no Sources/ at all (a vault_path at an unrelated directory): the same coverage loss
+        snapshot["complete"] = False
+        snapshot["sources_unlisted"] = "missing: %s" % sources
     snapshot["folders_listed"] = len(names)
     for name in names:
         records.append(read_folder(sources, name, snapshot))
@@ -669,7 +677,7 @@ def scan_vault(vault: str, state_dir: Optional[str] = None, archive_dir: Optiona
     if reader_context is None:
         reader_context = default_reader_context(vault)
     snapshot["lock"] = probe_lock(state_dir)
-    snapshot["lock_held"] = snapshot["lock"] == "held"
+    snapshot["lock_held"] = None if snapshot["lock"] == "error" else snapshot["lock"] == "held"
 
     folders, graph = scan_sources(vault, snapshot)
     index_path = os.path.join(vault, "index.md")
@@ -696,10 +704,26 @@ def scan_vault(vault: str, state_dir: Optional[str] = None, archive_dir: Optiona
 # Derived values and counters (S2, S4)
 # ---------------------------------------------------------------------------------------------
 
+def queue_parking_error(q: dict) -> Optional[str]:
+    """S5: `parked:` must be a date and `parked_until:`, when present, a date too — anything else
+    leaves the queue unparked and is reported (an unparsable `parked_until` must never mean
+    "parked forever")."""
+    parked_raw = (q.get("parked") or "").strip()
+    if not parked_raw:
+        return None
+    if parse_date(parked_raw) is None:
+        return "invalid `parked: %s` (not a date) — the queue is not parked" % parked_raw
+    until_raw = (q.get("parked_until") or "").strip()
+    if until_raw and parse_date(until_raw) is None:
+        return "invalid `parked_until: %s` (not a date) — the queue is not parked" % until_raw
+    return None
+
+
 def queue_is_parked(q: dict, today: datetime.date) -> bool:
     """S5: `parked:` parks the whole file until `parked_until` (none → indefinitely); a
-    `parked_until` in the past ends the parking."""
-    if not (q.get("parked") or "").strip():
+    `parked_until` in the past ends the parking; an invalid `parked`/`parked_until` (see
+    queue_parking_error) never parks."""
+    if queue_parking_error(q) is not None or not (q.get("parked") or "").strip():
         return False
     until = parse_date(q.get("parked_until"))
     return until is None or until >= today

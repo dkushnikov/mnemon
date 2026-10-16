@@ -778,6 +778,42 @@ t0=$(date +%s); MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_STALL_INIT=30 doc --brief
 assert_contains "$out" "not probed (budget" "the deadline covers initialization: a settings() that stalls is cut by the parent"
 if [[ $((t1 - t0)) -le 6 ]]; then pass "...within the budget ($((t1 - t0)) s)"; else fail "...within the budget" "took $((t1 - t0)) s"; fi
 
+echo "--- second review: CRLF and ... bodies, a missing Sources/, integrity-error receipts, no ledger yet, a duplicate radius key, invalid parking, an unprobeable lock ---"
+VAULT="$TEST_TMPDIR/cr"; mkdir -p "$VAULT/Sources" "$VAULT/_meta"
+CR1=2026-06-01_cr000001; CR2=2026-06-02_cr000002
+mkdir -p "$VAULT/Sources/$CR1" "$VAULT/Sources/$CR2"
+printf -- '---\r\ntype: source\r\nsource_type: article\r\nurl: "https://cr.example.com/one"\r\n---\r\n%s\r\n' "$(words 50)" > "$VAULT/Sources/$CR1/source.md"
+printf -- '---\r\ntype: extract\r\nstatus: extracted\r\ntitle: "crlf"\r\nrating: 5\r\n---\r\n## Summary\r\n\r\ntext\r\n## Key Ideas\r\n' > "$VAULT/Sources/$CR1/extract.md"
+printf -- '---\ntype: source\nsource_type: article\nurl: "https://cr.example.com/two"\n...\n%s\n' "$(words 50)" > "$VAULT/Sources/$CR2/source.md"
+mk_extract "$CR2" 5
+printf '# Charter\n\n## Radius\nseeds: 10 open · 30 days\nseeds: 20 open · 60 days\nqueues: 30 days\n' > "$VAULT/_meta/charter.md"
+mkdir -p "$VAULT/_inputs"
+printf -- '---\ntype: queue\nsince: 2026-01-01\nparked: yes\nparked_until: nonsense\n---\n- one\n' > "$VAULT/_inputs/badly-parked.md"
+doc --json
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=[x for x in d["checks"] if x["name"]=="store/source-integrity"][0]; print(c["status"], c["counts"]["legacy_empty"])')" "ok 0" "I1: a CRLF body and a ...-terminated body are measured, not reported empty (P2)"
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=[x for x in d["checks"] if x["name"]=="data/thin"][0]; print(sorted(i["words"] for i in c["items"]))')" "[50, 50]" "Q1: both bodies count 50 words (CRLF, ...)"
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=[x for x in d["checks"] if x["name"]=="store/extract-consistency"][0]; print(c["counts"]["no_sections"])')" "0" "I10: sections are found in a CRLF extract.md"
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print([x["message"] for x in d["diagnostics"] if x["code"]=="radius-parse"])')" "['duplicate seeds: line \"seeds: 20 open · 60 days\" (first kept)']" "radius: a second line for one key is a parse diagnostic, the first is kept"
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=[x for x in d["checks"] if x["name"]=="human/queues"][0]; print(c["counts"]["parked"], c["counts"]["over_radius"], [i["reason"] for i in c["items"] if "invalid" in i["reason"]][0][:34])')" "0 1 invalid \`parked: yes\` (not a date)" "H3: an invalid parked never parks; the queue is measured and the parking reported"
+doc --brief
+assert_contains "$out" "probed 17/19 · diagnostics: 1 warn" "the brief on this vault: 17 probed (no archive dir, no ledger — both not probed) and the radius diagnostic counted"
+CRS="$TEST_TMPDIR/cr-state"; mkdir -p "$CRS/captures"
+printf '{"schema":"mnemon-capture-receipt/1","capture_id":"cap-x","state":"integrity-error","revision":"%s"}\n' "$CR1" > "$CRS/captures/cap-x.json"
+doc --state-dir "$CRS"
+assert_contains "$(line_of store/ledger)" "integrity-error 1 ($CR1)" "I7: an integrity-error receipt is counted apart and named"
+assert_eq "$(status_of store/ledger)" "warn" "I7: ...as a warning"
+: > "$CRS/lock"; chmod 000 "$CRS/lock"
+doc --state-dir "$CRS" --json
+chmod 644 "$CRS/lock"
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["snapshot"]["lock_held"], d["snapshot"]["lock"], any("lock not probed" in x["message"] for x in d["diagnostics"]))')" "None error True" "an unopenable lock file: lock_held null, lock error, a warn diagnostic"
+VAULT="$TEST_TMPDIR/cr-noledger"; mkdir -p "$VAULT/Sources" "$VAULT/_meta"
+mk_legacy "$CR2" 350 'url: "https://cr.example.com/two"'; mk_extract "$CR2" 5
+doc --writer-host "$THIS_HOST"
+assert_contains "$(line_of store/ledger)" "ok store/ledger — not probed: no ledger yet — nothing captured" "I7: on the writer host with nothing managed and no ledger, 'no ledger yet', not 'state lost'"
+VAULT="$TEST_TMPDIR/cr-nosources"; mkdir -p "$VAULT/_meta"
+doc --json
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["snapshot"]["complete"], d["summary"]["not_probed"], d["summary"]["diagnostics_fail"])')" "False 14 1" "a vault without Sources/ is as unobserved as an unlistable one"
+
 echo "--- the engine's own guide stamp ---"
 assert_eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import lib_vault; print(lib_vault.engine_guide_version())' "$MNEMON_ROOT/bin")" "2" "vault-template/CLAUDE.md is stamped mnemon_guide: 2"
 assert_eq "$(head -1 "$MNEMON_ROOT/vault-template/_meta/Protocol.md")" "<!-- mnemon_guide: 2 -->" "vault-template/_meta/Protocol.md starts with the stamp comment"

@@ -833,12 +833,16 @@ DOCTOR_DATA_JSON=""
 _doctor_data() {
   local outf errf linesf rc=0 tab=$'\t' status name detail err
   outf="$(mktemp)"; errf="$(mktemp)"; linesf="$(mktemp)"
+  # an interrupted doctor leaves nothing in $TMPDIR (the dispatcher exits from cmd_doctor)
+  trap "rm -f '$outf' '$errf' '$linesf'" EXIT
   if $DOCTOR_JSON; then
     python3 "$BIN_DIR/vault-doctor.py" --json >"$outf" 2>"$errf" || rc=$?
   else
     python3 "$BIN_DIR/vault-doctor.py" --tsv >"$outf" 2>"$errf" || rc=$?
   fi
-  if [[ $rc -ne 0 || ! -s "$outf" ]]; then
+  # a non-zero exit with a document on stdout is a tool error the document itself reports
+  # (`fail doctor/error — …` among its lines, the 19 checks not probed): keep the lines
+  if [[ ! -s "$outf" ]]; then
     err="$(tail -c 400 "$errf" | tr '\n\t' '  ' | sed 's/[[:space:]]*$//')"
     _check fail doctor/error "${err:-vault-doctor.py exited $rc without output}"
     rm -f "$outf" "$errf" "$linesf"

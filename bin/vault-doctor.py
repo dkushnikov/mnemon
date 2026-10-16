@@ -156,9 +156,11 @@ def parse_radius(lines: List[str]) -> Tuple[Dict[str, Tuple[Optional[int], int]]
             if m:
                 if key not in radius:
                     radius[key] = (None, int(m.group(1))) if key == "queues" else (int(m.group(1)), int(m.group(2)))
+                else:
+                    errors.append('duplicate %s: line "%s" (first kept)' % (key, line))
                 break
         else:
-            errors.append(line)
+            errors.append('cannot parse "%s" (defaults used)' % line)
     defaulted = [k for k in ("seeds", "drafts", "queues") if k not in radius]
     for k in defaulted:
         radius[k] = RADIUS_DEFAULTS[k]
@@ -465,6 +467,8 @@ def check_ledger(scan: dict, cfg: dict) -> Check:
         # (state lost?); a reader host or an unset writer_host is simply not probed
         writer = cfg.get("writer_host") or ""
         where = os.path.join(ledger["state_dir"] or "?", "captures")
+        if not managed:
+            return c.not_probed("no ledger yet — nothing captured on this host (%s)" % where)
         if not writer:
             return c.not_probed("no ledger on this host (%s); writer_host unset" % where)
         if writer == cfg.get("this_host"):
@@ -473,6 +477,7 @@ def check_ledger(scan: dict, cfg: dict) -> Check:
     by_name = scan["by_name"]
     consistent = 0
     contradict: List[str] = []
+    integrity: List[str] = []
     incomplete = 0
     named: set = set()
     for rc in ledger["receipts"]:
@@ -481,6 +486,13 @@ def check_ledger(scan: dict, cfg: dict) -> Check:
             named.add(rc["revision"])
         if state in ("started", "failed", "extract-failed"):
             incomplete += 1
+            continue
+        if state == "integrity-error":
+            # a terminal verdict of the engine (contracts §3.6): the published source was edited or
+            # missing when it last looked — named, counted apart, never silently dropped
+            integrity.append(rc["revision"] or rc["id"])
+            c.add("warn", {"id": rc["revision"] or rc["id"], "reason": "receipt %s in integrity-error (the engine found the published source.md edited or missing)" % rc["id"],
+                           "rating": None, "words": None})
             continue
         if state not in ("extracted", "source-published") or not rc["revision"]:
             continue
@@ -501,11 +513,13 @@ def check_ledger(scan: dict, cfg: dict) -> Check:
             without.append(r["name"])
             c.add("warn", item(r, "managed revision without a receipt (state lost; replay restores it)", "managed"))
     c.counts = {"managed": len(managed), "receipts": len(ledger["receipts"]), "consistent": consistent,
-                "contradict": len(contradict), "without_receipt": len(without), "incomplete": incomplete,
-                "unreadable": ledger["unreadable"]}
+                "contradict": len(contradict), "integrity_error": len(integrity), "without_receipt": len(without),
+                "incomplete": incomplete, "unreadable": ledger["unreadable"]}
     parts = ["%d managed revisions, %d receipts consistent" % (len(managed), consistent)]
     if contradict:
         parts.append("%d contradict the files (%s)" % (len(contradict), names(contradict)))
+    if integrity:
+        parts.append("integrity-error %d (%s)" % (len(integrity), names(integrity)))
     if without:
         parts.append("%d without a receipt (%s)" % (len(without), names(without)))
     parts.append("%d incomplete" % incomplete)
@@ -657,7 +671,7 @@ def check_extract_consistency(scan: dict, cfg: dict) -> Check:
                 "aliases": len(aliased), "alias_unknown": len(alias_unknown),
                 "no_status": len(no_status), "url_differs": len(url_differs), "no_sections": len(no_sections)}
     parts = ["%d extracts have a source" % with_source + (", %d do not (%s)" % (len(orphans), names(orphans)) if orphans else "")]
-    agree = pairs - len(mismatch)
+    agree = pairs - len(mismatch) - len(alias_unknown)
     parts.append("%d managed pairs agree on capture_id/revision" % agree + (
         ", %d disagree (%s)" % (len(mismatch), names(mismatch)) if mismatch else ""))
     if aliased:
@@ -981,6 +995,9 @@ def check_queues(scan: dict, cfg: dict) -> Check:
     ages: List[int] = []
     for q in inputs["queues"]:
         qid = "_inputs/" + q["name"]
+        perr = lv.queue_parking_error(q)
+        if perr:
+            c.add("warn", {"id": qid, "reason": perr, "items": q["items"], "age_days": None, "rating": None, "words": None})
         if lv.queue_is_parked(q, today):
             parked += 1
             until = lv.parse_date(q.get("parked_until"))
@@ -1046,8 +1063,10 @@ def test_hook(name: str) -> Optional[str]:
 def run_checks(scan: dict, cfg: dict) -> Tuple[List[Check], List[dict]]:
     """All 19 checks (one broken check never hides the others: it is `not probed` with the
     error as its reason, and a fail-level `error` diagnostic says so) and the diagnostics."""
-    diagnostics: List[dict] = [{"code": "radius-parse", "level": "warn",
-                                "message": 'cannot parse "%s" (defaults used)' % line} for line in cfg["radius_errors"]]
+    diagnostics: List[dict] = [{"code": "radius-parse", "level": "warn", "message": msg} for msg in cfg["radius_errors"]]
+    if scan["snapshot"].get("lock") == "error":
+        diagnostics.append({"code": "error", "level": "warn",
+                            "message": "vault lock not probed: the lock file could not be opened or flocked (lock_held: null)"})
     checks: List[Check] = []
     raise_in = test_hook("MNEMON_TEST_DOCTOR_RAISE")
     unlisted = scan["snapshot"].get("sources_unlisted")
@@ -1164,6 +1183,8 @@ def brief_line(doc: dict) -> str:
         line += " · diagnostics: " + " · ".join(diag)
     if doc["snapshot"].get("lock_held"):
         line += " (snapshot may be partial)"
+    elif doc["snapshot"].get("lock_held") is None and doc["snapshot"].get("lock") == "error":
+        line += " (lock not probed)"
     return line
 
 
@@ -1235,11 +1256,15 @@ def run_with_budget(args, cfg: dict, today: datetime.date, started: float) -> Tu
             proc.wait(timeout=1.0)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.wait()
-        try:
-            proc.communicate(timeout=1.0)
-        except (subprocess.TimeoutExpired, ValueError, OSError):
-            pass
+            try:
+                proc.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                pass        # stuck in an uninterruptible call: reparented, it dies when the call returns
+        if proc.returncode is not None:
+            try:
+                proc.communicate(timeout=1.0)
+            except (subprocess.TimeoutExpired, ValueError, OSError):
+                pass
         message = "budget %g s exceeded" % budget
         return not_probed_document(cfg, today, message, {"code": "budget", "level": "warn", "message": message}), 0
     text = out.decode("utf-8", "replace")
@@ -1326,6 +1351,7 @@ def main(argv: List[str]) -> int:
         except Exception as exc:
             message = "%s: %s" % (type(exc).__name__, exc)
             doc = not_probed_document(cfg, today, "error: " + message, {"code": "error", "level": "fail", "message": message})
+            print("vault-doctor: error: %s" % message, file=sys.stderr)
             rc = 1
 
     if args.list is not None:
