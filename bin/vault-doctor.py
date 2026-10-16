@@ -252,9 +252,18 @@ def check_identity(scan: dict, cfg: dict) -> Check:
             if len(members) >= 2 and frozenset(members) not in seen:
                 seen.add(frozenset(members))
                 groups.append((label + " " + key, members))
+    # severity by cause (S4): a duplicate that includes a managed revision bypassed the engine's dedup
+    # (fail); a group of legacy revisions only is a pre-contract capture (legacy nonconformity, warn)
+    klass = {r["name"]: r["klass"] for r in current}
+    legacy_only = 0
     for key, members in groups:
-        c.add("fail", {"id": " + ".join(members), "reason": "duplicate (%s)" % key, "members": members,
-                       "rating": None, "words": None})
+        if any(klass.get(m) == "managed" for m in members):
+            c.add("fail", {"id": " + ".join(members), "reason": "duplicate (%s)" % key, "members": members,
+                           "rating": None, "words": None})
+        else:
+            legacy_only += 1
+            c.add("warn", {"id": " + ".join(members), "reason": "duplicate (%s) — legacy-only, pre-contract captures" % key,
+                           "members": members, "rating": None, "words": None})
     # managed revisions sharing a resource_sha256 must agree on the canonical URL (any revision)
     all_sha: Dict[str, set] = {}
     for r in scan["folders"]:
@@ -265,10 +274,13 @@ def check_identity(scan: dict, cfg: dict) -> Check:
         members = [r["name"] for r in scan["folders"] if r["resource_sha256"] == key]
         c.add("warn", {"id": " + ".join(members), "reason": "inconsistent canonical_url for resource_sha256 %s…" % key[:12],
                        "members": members, "rating": None, "words": None})
-    c.counts = {"current": len(current), "duplicate_groups": len(groups), "inconsistent": len(inconsistent), "unkeyed": unkeyed}
+    c.counts = {"current": len(current), "duplicate_groups": len(groups), "legacy_only_groups": legacy_only,
+                "inconsistent": len(inconsistent), "unkeyed": unkeyed}
     share = "0 share a resource" if not groups else "%s share a resource: %s" % (
         plural(len(groups), "group"), names([" + ".join(m) for _, m in groups], 3))
     c.detail = "%d current revisions, %s (resource_sha256 · canonical URL v1)" % (len(current), share)
+    if legacy_only:
+        c.detail += "; legacy-only %d" % legacy_only
     if inconsistent:
         c.detail += "; inconsistent %d" % len(inconsistent)
     c.detail += "; unkeyed %d (non-url legacy)" % unkeyed

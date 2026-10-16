@@ -718,6 +718,23 @@ assert_contains "$idx" '- `mnemon reindex`' "Commands: mnemon reindex"
 assert_not_contains "$idx" "/source-process" "Commands: the removed /source-process is gone"
 assert_not_contains "$idx" "/knowledge-status" "Commands: the removed /knowledge-status is gone"
 
+echo "--- I2: a legacy-only duplicate group is a warning (pre-contract); a group with a managed revision fails ---"
+VAULT="$TEST_TMPDIR/legdup"; mkdir -p "$VAULT/Sources" "$VAULT/_meta"
+LD1=2026-04-04_ld000001; LD2=2026-04-05_ld000001
+mk_legacy "$LD1" 350 'url: "https://legacy.example.com/page"'; mk_extract "$LD1" 5
+mk_legacy "$LD2" 350 'url: "https://legacy.example.com/page?utm_source=x"'; mk_extract "$LD2" 5
+doc
+assert_eq "$(status_of store/identity)" "warn" "I2: two current legacy revisions of one canonical URL warn, not fail"
+assert_contains "$(line_of store/identity)" "1 group share a resource: $LD1 + $LD2" "I2: the legacy pair is named"
+assert_contains "$(line_of store/identity)" "; legacy-only 1" "I2: counted as legacy-only"
+doc --json
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=[x for x in d["checks"] if x["name"]=="store/identity"][0]; print(c["counts"]["legacy_only_groups"], c["items"][0]["reason"])')" "1 duplicate (canonical https://legacy.example.com/page) — legacy-only, pre-contract captures" "I2 JSON: legacy_only_groups and the item reason"
+MD1=2026-10-01_md000001
+mk_managed "$MD1" 350 'url: "https://legacy.example.com/page"' 'canonical_url: "https://legacy.example.com/page"'; mk_extract "$MD1" 5 "capture_id: \"cap-$MD1\"" "revision: \"$MD1\""
+doc
+assert_eq "$(status_of store/identity)" "fail" "I2: the same group with a managed member fails (the engine's dedup was bypassed)"
+assert_not_contains "$(line_of store/identity)" "legacy-only" "I2: a mixed group is not legacy-only"
+
 echo "--- the engine's own guide stamp ---"
 assert_eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import lib_vault; print(lib_vault.engine_guide_version())' "$MNEMON_ROOT/bin")" "2" "vault-template/CLAUDE.md is stamped mnemon_guide: 2"
 assert_eq "$(head -1 "$MNEMON_ROOT/vault-template/_meta/Protocol.md")" "<!-- mnemon_guide: 2 -->" "vault-template/_meta/Protocol.md starts with the stamp comment"

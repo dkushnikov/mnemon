@@ -84,7 +84,7 @@ Stable names; `group/name`. Severity by cause (§6.1).
 | # | Name | Invariant and what is counted | Severity | Fix door |
 |---|---|---|---|---|
 | I1 | `store/source-integrity` | managed: body hash (`cap_py body-sha256`: the bytes after the first `\n---\n` of a file starting with `---\n`) = `capture.text_sha256`; the four keys present; no top-level key starting with `_`. Damaged managed → fail. Legacy: header closed, body non-empty; `_` keys → warn | fail (managed) · warn (legacy) | operator (restore the immutable file) |
-| I2 | `store/identity` | **current** revisions grouped by `resource_sha256` (managed, decisive) and by canonical URL v1 of `url:`/`canonical_url:` (every folder with a URL); a group of ≥ 2 current = duplicate; one `resource_sha256` with different `canonical_url` → `inconsistent`; non-url legacy → `unkeyed N` | fail (duplicate) · warn (inconsistent) | `mnemon audit --canonical` → `--recapture --supersedes` |
+| I2 | `store/identity` | **current** revisions grouped by `resource_sha256` (managed, decisive) and by canonical URL v1 of `url:`/`canonical_url:` (every folder with a URL); a group of ≥ 2 current = duplicate — **fail when a managed revision is among them** (the engine's dedup was bypassed), **warn when all are legacy** (pre-contract captures, `legacy-only N`); one `resource_sha256` with different `canonical_url` → `inconsistent`; non-url legacy → `unkeyed N` | fail (duplicate with managed) · warn (legacy-only, inconsistent) | `mnemon audit --canonical` → `--recapture --supersedes` |
 | I3 | `store/index` | rows of `index.md` = in-memory regeneration by the reindex module (exact text, suffixes included): `differ / missing / extra`; the **current** size of the newest `_inputs/index-hand-edits-*.md` (growth is not derivable from one snapshot) | warn | `mnemon reindex` |
 | I4 | `store/supersedes` | acyclic; every target exists; **cross-resource edges** (different keys) counted apart (allowed through an explicit `--supersedes`, always visible); fan-out counted; stored `superseded` words = legacy. On a cycle or a dangling edge the `current` counter is marked incomplete | fail (cycle, dangling) · warn (cross-resource, legacy words) | operator |
 | I5 | `store/archive` | `archive:` resolves — forms `<name>`, `<name> (in archive_dir: …)` (suffix dropped), `unarchivable` (legacy marker, skipped); managed with `capture.raw_store: archive` and no raw → fail; owners of archive entries: `<rev>.<ext>` by `archive:`, `<rev>.report.json` and `<rev>.site/` of an existing revision folder; everything else unowned | fail (managed without raw) · warn (unresolved reference, unowned entries) · `archive_dir` unset → ok, not probed · set but unreachable → warn, not probed | `mnemon audit` |
@@ -110,8 +110,8 @@ Stable names; `group/name`. Severity by cause (§6.1).
 | Cause | Severity |
 |---|---|
 | managed schema violated (I1 hash/keys/`_` keys, I5 raw, I6 field, I10 mismatch, I7 receipt contradicting files) | **fail** |
-| graph violated (I2 duplicate current, I4 cycle or dangling) | **fail** |
-| legacy nonconformity (`_` keys in legacy, legacy status words, suffix-form archive references, cross-resource edges) | warn |
+| graph violated (I2 duplicate current revisions including a managed one, I4 cycle or dangling) | **fail** |
+| legacy nonconformity (`_` keys in legacy, legacy status words, suffix-form archive references, cross-resource edges, legacy-only duplicate groups) | warn |
 | a derivative is stale (I3 drift, I11 guide version) | warn |
 | a threshold is crossed (Q1–Q5, H1–H3) | warn |
 | not probed, but the configuration says the resource should exist (archive dir set but missing; a writer host without a ledger) | warn, `probed: false` |
