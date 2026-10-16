@@ -7,11 +7,14 @@
 # capture-text, the word floor holds. tests/live/capture-gate.sh fetches with external_fetch off (the vendor
 # stage is a separate, labelled run) and records the defuddle, pandoc and Chrome versions and the engine
 # commit in its report header; tests/live/replay.sh re-converts a snapshot. Notes after `#` are for the
-# maintainer (a site whose landing needs an --include plan is mapped by hand before the gate runs).
+# maintainer. A site whose landing needs an --include plan is mapped by hand before the gate runs —
+# `capture-site.py map <url> --include '^/help/air/' --out <MNEMON_FIXTURES_DIR>/<date>/<slug>/plan.json`
+# (the regex is searched in the page's path plus ?query) — and the runner uses a plan.json that already
+# sits in the item's snapshot directory instead of mapping.
 #
 # five sites
 https://dylanzsz.github.io/faulty-memory/ | site | 6000 | data:,[TABLE]    # github-pages project page, 13 sections; defuddle returned 1 of 13
-https://www.jetbrains.com/help/air/supported-agents.html | site | 300 | data:    # docs page with tabbed content (pandoc dropped tabs); plan: map https://www.jetbrains.com/air/ with --include '/help/air/'
+https://www.jetbrains.com/help/air/supported-agents.html | site | 300 | data:    # docs page with tabbed content (pandoc dropped tabs); plan: map https://www.jetbrains.com/air/ with --include '^/help/air/', pre-placed
 https://vidiq.com/ | site | 400 | _next/image    # spa product site behind a bot checkpoint (429 to curl, passes headless chrome); plan: map with defaults
 https://www.codos.ai/ | site | 800 | _next/image,<svg    # marketing site: per-word span headings ("Deploythecompanybrain"), Next.js images, SVG; plan: map with defaults
 https://whrrari.substack.com/p/graph-engineering-how-to-build-ai | page | 1500 | data:    # substack article with a reader-comment section to cut

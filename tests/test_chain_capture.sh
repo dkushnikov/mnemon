@@ -603,6 +603,22 @@ assert_eq "$(fm "$VAULT/Sources/$RG2/source.md" supersedes) $(fm "$VAULT/Sources
 assert_eq "$(ls "$ARCHIVE" | grep -c 'staging' || true)" "0" "no staging left in the archive"
 
 # ==================================================================================================
+echo "--- (g2) the live gate runner with a pre-placed plan (G13): no mapping, the plan used as it is ---"
+GATE_OUT="$TEST_TMPDIR/gate"; GATE_DATE="$(date -u +%Y-%m-%d)"
+gslug="$(printf '%s' "$BASE/" | sed -e 's#^https\{0,1\}://##' -e 's#[^A-Za-z0-9._-]#_#g' | cut -c1-80)"
+mkdir -p "$GATE_OUT/$GATE_DATE/$gslug"
+jq '.pages |= map(if .role == "landing" then . else (.include = false | .reason = "excluded: hand-edited") end)' "$PLAN" > "$GATE_OUT/$GATE_DATE/$gslug/plan.json"
+printf '%s | site | 10 | data:\n' "$BASE/" > "$TEST_TMPDIR/gate-corpus.txt"
+sitemap_before="$(grep -c 'GET /sitemap.xml' "$REQLOG" || true)"
+rc=0; MNEMON_FIXTURES_DIR="$GATE_OUT" bash "$MNEMON_ROOT/tests/live/capture-gate.sh" "$TEST_TMPDIR/gate-corpus.txt" >"$TEST_TMPDIR/gate.out" 2>"$TEST_TMPDIR/gate.err" || rc=$?
+assert_eq "$rc" "0" "capture-gate.sh over a one-item corpus with a pre-placed plan exits 0 ($(tail -n 1 "$TEST_TMPDIR/gate.err" 2>/dev/null | cut -c1-120))"
+assert_contains "$(cat "$TEST_TMPDIR/gate.out")" "using the pre-placed plan $GATE_OUT/$GATE_DATE/$gslug/plan.json" "...the runner says it used the pre-placed plan"
+assert_contains "$(cat "$TEST_TMPDIR/gate.out")" "[ok] $BASE/" "...and the item is ok"
+assert_eq "$(jq -r '[.pages[] | select(.include)] | length' "$GATE_OUT/$GATE_DATE/$gslug/bundle/plan.json" 2>/dev/null)" "1" "...the bundle was fetched from that plan (the landing alone)"
+assert_eq "$(grep -c 'GET /sitemap.xml' "$REQLOG" || true)" "$sitemap_before" "...and no mapping request was made"
+assert_contains "$(cat "$GATE_OUT/$GATE_DATE/report.md")" "| $gslug | site |" "...the summary row is written"
+
+# ==================================================================================================
 echo "--- (h) a 1 MB text: chunked extraction under extract_inline_max_bytes ---"
 python3 - "$TEST_TMPDIR/big.md" <<'PY'
 import random, sys

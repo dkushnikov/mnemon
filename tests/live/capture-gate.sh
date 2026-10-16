@@ -11,6 +11,11 @@
 # summary (method, converter, acquisition, completeness, missing, glued, repairs, seconds) land next to the
 # snapshot; tests/live/replay.sh re-converts the snapshot deterministically. Exit 1 when any item fails.
 #
+# A site item is mapped by the runner unless <snapshot>/<slug>/plan.json already exists: a landing that
+# needs an --include plan is mapped by hand first (`capture-site.py map <url> --include '^/help/air/'
+# --out <MNEMON_FIXTURES_DIR>/<date>/<slug>/plan.json`, the slug as slug_of below prints it) and the
+# runner then uses that plan as it is, fetching the bundle from it and saying so.
+#
 # The gateway-level assertions of §7.17 (publication without manual repair, `--recapture` of a phase-1
 # paper yielding `supersedes`, the `⤳` marker after `mnemon reindex`) are run by the integrator against the
 # merged gateway; this script exercises the layer the gateway calls.
@@ -55,7 +60,11 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   t0=$(date +%s)
   verdict="ok"; notes=""
   if [[ "$kind" == "site" ]]; then
-    python3 "$ROOT/bin/capture-site.py" map "$url" --out "$dir/plan.json" ${POLICY:+--policy "$POLICY"} || { verdict="map-failed"; }
+    if [[ -s "$dir/plan.json" ]]; then
+      echo "using the pre-placed plan $dir/plan.json (not mapping)"; notes="$notes pre-placed plan;"
+    else
+      python3 "$ROOT/bin/capture-site.py" map "$url" --out "$dir/plan.json" ${POLICY:+--policy "$POLICY"} || { verdict="map-failed"; }
+    fi
     if [[ "$verdict" == "ok" ]]; then
       rm -rf "$dir/bundle"
       python3 "$ROOT/bin/capture-site.py" fetch-bundle "$dir/plan.json" --out "$dir/bundle" --report "$dir/bundle.json" ${POLICY:+--policy "$POLICY"} > "$dir/bundle.stdout" || verdict="fetch-failed"
