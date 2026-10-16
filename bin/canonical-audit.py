@@ -3,6 +3,7 @@
 canonicalization v1.
 
     canonical-audit.py <vault path> [--json]
+    canonical-audit.py --vault <vault path> [--json]     # the form `mnemon audit --canonical` dispatches
 
 Groups `Sources/*/source.md` by the v1 canonical form of `url:` (and of `canonical_url:` when present),
 prints the groups of two or more folders with their revisions, `supersedes:` links and extract status,
@@ -102,10 +103,14 @@ def audit(vault: str) -> List[dict]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Folders that coincide under canonicalization v1 (read-only)")
-    ap.add_argument("vault", help="the vault path (holds Sources/)")
+    ap.add_argument("vault", nargs="?", help="the vault path (holds Sources/)")
+    ap.add_argument("--vault", dest="vault_opt", metavar="PATH", help="the vault path (the dispatcher's form)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
-    groups = audit(args.vault)
+    vault = args.vault_opt or args.vault
+    if not vault or (args.vault_opt and args.vault):
+        ap.error("one vault path, positional or --vault")
+    groups = audit(vault)
     if args.json:
         print(json.dumps({"schema": "mnemon-canonical-audit/1", "canonical_version": resolve.VERSION, "groups": groups},
                          ensure_ascii=False, indent=1))

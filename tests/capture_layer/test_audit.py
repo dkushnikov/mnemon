@@ -64,6 +64,17 @@ class Audit(unittest.TestCase):
                          "canonical_url: joins the group of url:")
         self.assertIn("malformed-frontmatter 2026-10-06_ffffffff", se)
 
+    def test_vault_option_is_the_dispatcher_form(self):
+        """`mnemon audit --canonical` runs `canonical-audit.py --vault <vault> …` (§3.10, bin/mnemon)."""
+        rc, so, se = run_cli([AUDIT, "--vault", self.vault, "--json"])
+        self.assertEqual(rc, 0, se)
+        rc2, so2, _ = run_cli([AUDIT, self.vault, "--json"])
+        self.assertEqual((rc2, so2), (0, so), "the positional and the --vault forms answer alike")
+        rc, so, se = run_cli([AUDIT, "--json"])
+        self.assertEqual(rc, 2, "no vault at all is usage")
+        rc, so, se = run_cli([AUDIT, "--vault", self.vault, self.vault])
+        self.assertEqual(rc, 2, "two vault paths are usage")
+
     def test_text_output(self):
         rc, so, se = run_cli([AUDIT, self.vault])
         self.assertEqual(rc, 0)
