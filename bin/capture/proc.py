@@ -6,7 +6,8 @@ from its parent the installed handler tears every tracked group down the same wa
 so site → fetch → Chrome and depth → probe → renderer are torn down from the top, never orphaned.
 
 `Deadline` is the budget an owner passes down; `run` bounds one child by the smaller of its timeout and the
-remaining deadline. The inherited vault-lock descriptor never reaches a child (close_fds) and the
+remaining deadline. `watch_parent` is the worker's side of the hierarchy: a SIGKILLed owner (whose handler
+never ran) leaves no worker behind — the worker notices its parent is gone and exits. The inherited vault-lock descriptor never reaches a child (close_fds) and the
 `MNEMON_VAULT_LOCK_*` variables are scrubbed from its environment: capture-layer children never write into
 the vault (D11). Stdlib only, python 3.9.
 """
@@ -150,6 +151,32 @@ def terminate_all() -> None:
             kill_group(proc)
         with _lock:
             _children.pop(proc.pid, None)
+
+
+def watch_parent(interval: float = 0.25, exit_code: int = 1) -> None:
+    """A worker never outlives its supervisor (D11): a daemon thread polls the parent pid every `interval`
+    seconds (at most one second) and, when it changes — the supervisor died without its own teardown (a
+    SIGKILL; a SIGTERM runs the handler above) and the worker, in its own session, was reparented — SIGKILLs
+    every tracked child group and exits the process at once. The thread needs the interpreter: python code
+    and subprocess waits yield to it within milliseconds; C code that never returns (the regex hang of
+    `hang`) does not, and that case is the supervisor's kill to end."""
+    parent = os.getppid()
+
+    def _watch():
+        while True:
+            time.sleep(interval)
+            if os.getppid() == parent:
+                continue
+            with _lock:
+                procs = list(_children.values())
+            for child in procs:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+            os._exit(exit_code)
+
+    threading.Thread(target=_watch, name="parent-watch", daemon=True).start()
 
 
 def install_term_handler(exit_code: int = 143) -> None:

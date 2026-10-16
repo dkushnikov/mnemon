@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -447,6 +448,43 @@ class CaptureTextCLI(unittest.TestCase):
         helptext = subprocess.run([PY, CT, "--help"], capture_output=True).stdout.decode("utf-8", "replace")
         self.assertNotIn("_worker", helptext, "the worker flag is hidden")
         self.assertIn("convert_timeout in seconds (default 120)", helptext)
+
+    def test_the_worker_does_not_outlive_a_sigkilled_supervisor(self):
+        """The worker polls its parent (proc.watch_parent): when the supervisor is SIGKILLed — no SIGTERM
+        handler runs, and the worker in its own session would be orphaned — the worker is gone within 2 s.
+        The hang is the hook's `sleep` mode, interruptible python code where the watch thread runs; the C-code
+        hang of proc.hang is the supervisor's kill to end (the test above), not the watch's."""
+        raw = os.path.join(self.dir, "raw.html")
+        shutil.copy(os.path.join(HTML_FIX, "cookie.html"), raw)
+        out, rep = os.path.join(self.dir, "orphan.md"), os.path.join(self.dir, "orphan.json")
+        env = clean_env({"MNEMON_TEST_CONVERT_HANG": "sleep"})
+        sup = subprocess.Popen([PY, CT, raw, "--url", "https://example.com/orphan", "--out", out, "--report", rep,
+                                "--raw-kind", "rendered", "--timeout", "120"], env=env,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        worker_pid = None
+        try:
+            end = time.monotonic() + 15
+            while worker_pid is None and time.monotonic() < end:
+                ps = subprocess.run(["pgrep", "-f", "capture-text.py --_worker %s" % raw], capture_output=True)
+                pids = [int(p) for p in ps.stdout.split()]
+                if pids:
+                    worker_pid = pids[0]
+                else:
+                    time.sleep(0.05)
+            self.assertIsNotNone(worker_pid, "the worker did not start")
+            self.assertIsNone(sup.poll(), "the supervisor is still waiting on its worker")
+            os.kill(sup.pid, signal.SIGKILL)
+            sup.wait(timeout=5)
+            self.assertTrue(wait_gone(worker_pid, 2.0), "the worker outlived its SIGKILLed supervisor by more than 2 s")
+            self.assertFalse(os.path.exists(out))
+        finally:
+            if worker_pid is not None and pid_alive(worker_pid):
+                try:
+                    os.killpg(worker_pid, signal.SIGKILL)
+                except OSError:
+                    pass
+            if sup.poll() is None:
+                sup.kill()
 
     def test_bounded_markdown_regexes_are_linear(self):
         """G26: every regex applied to candidate markdown uses bounded, nesting-free character classes, so a

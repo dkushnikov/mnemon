@@ -27,15 +27,20 @@ expiry the supervisor kills the group, reaps it, writes the report `{error_class
 cannot be converted in the budget will not convert on a retry either (the raw is retained for `--resume`
 after raising the budget). Inside the worker the same deadline supervises `defuddle` and `pandoc` (a stuck
 converter is skipped for the next candidate) and is checked between the tables the sanitizer rewrites.
+The worker watches its parent in turn (proc.watch_parent): when the supervisor is gone — SIGKILLed, so its
+own teardown never ran — the worker kills its tracked children and exits within a second, so no conversion
+outlives the owner that would have reaped it.
 Test hook (honoured only under MNEMON_TEST_HOOKS=1): MNEMON_TEST_CONVERT_HANG=1 makes the worker hang in
 C code that no signal handler interrupts, the shape of a quadratic scan — the proof that the supervisor's
-kill, not the worker's cooperation, ends the conversion. Stdlib only, python 3.9.
+kill, not the worker's cooperation, ends the conversion; MNEMON_TEST_CONVERT_HANG=sleep makes it wait in
+interruptible python code instead — the proof of the parent watch. Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
 import argparse
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -47,6 +52,7 @@ EXIT_TIMEOUT = 124
 
 def worker(args) -> int:
     """The conversion itself, in the child process."""
+    proc.watch_parent()         # a SIGKILLed supervisor leaves no worker behind
     deadline = proc.Deadline(args.timeout)
     rep = convert.empty_report(args.url)
     fetch_report = None
@@ -59,7 +65,10 @@ def worker(args) -> int:
         acq = (fetch_report.get("acquisition") or {}).get("outcome")
         if acq:
             rep["acquisition"] = acq
-    if policymod.hook("MNEMON_TEST_CONVERT_HANG"):
+    hang = policymod.hook("MNEMON_TEST_CONVERT_HANG")
+    if hang == "sleep":
+        time.sleep(600)         # interruptible python code: the parent watch can act, as during any python code
+    elif hang:
         proc.hang()
 
     if args.rendered:
