@@ -604,8 +604,10 @@ class Bundle(SiteBase):
         self.assertEqual((report["pages"][0]["disposition"], report["pages"][0]["error_class"]), ("convert-failed", "timeout"))
         self.assertFalse(os.path.exists(out))
         self.assertIn("timeout", se)
-        ps = subprocess.run(["pgrep", "-f", "capture-text.py --_worker"], capture_output=True)
-        self.assertEqual(ps.stdout.strip(), b"", "no conversion worker is left")
+        # scoped to this bundle's members (the worker's argv names the raw it converts), as test_convert.py
+        # does with its raw: a conversion worker of another suite or operator on the machine is not ours
+        ps = subprocess.run(["pgrep", "-f", "capture-text.py --_worker %s" % self.bundle], capture_output=True)
+        self.assertEqual(ps.stdout.strip(), b"", "no conversion worker of this bundle is left")
 
     def test_assemble_fails_when_the_landing_has_no_text(self):
         copy = os.path.join(self.work, "nolanding")
