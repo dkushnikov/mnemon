@@ -66,6 +66,8 @@ FIX = (
 CHECK_NAMES = tuple(name for name, _ in FIX)
 FIX_OF = dict(FIX)
 DEFAULTS = {"thin_words": 300, "stub_words": 40, "arxiv_words": 600, "rating_hi_share": 20}
+# the checks that do not read Sources/ — still probed when the folder listing itself fails
+FOLDER_FREE_CHECKS = ("store/guide-version", "data/reader-context", "human/ratification", "human/seeds", "human/queues")
 RATING_HI = 7
 READER_CONTEXT_DEFAULT_DAYS = 14
 COMPLETENESS_VALUES = ("complete", "partial", "blocked", "unknown")
@@ -303,23 +305,30 @@ def check_index(scan: dict, cfg: dict) -> Check:
             regenerated[r["name"]] = row
     existing = lv.kr.parse_existing_entries(scan["index_text"] or "")
     differ = sorted(f for f, rows in existing.items() if f in regenerated and any(row != regenerated[f] for row in rows))
+    # the same correct row twice is drift too: regeneration writes every row once
+    duplicated = sorted(f for f, rows in existing.items() if f in regenerated and len(rows) > 1 and f not in differ)
     missing = sorted(f for f in regenerated if f not in existing)
     extra = sorted(f for f in existing if f not in regenerated)
     for f in differ:
         c.add("warn", {"id": f, "reason": "row differs from the regenerated one", "rating": None, "words": None})
+    for f in duplicated:
+        c.add("warn", {"id": f, "reason": "row present %d times (regeneration writes it once)" % len(existing[f]),
+                       "rating": None, "words": None})
     for f in missing:
         c.add("warn", {"id": f, "reason": "row missing", "rating": None, "words": None})
     for f in extra:
         c.add("warn", {"id": f, "reason": "extra row (no extract.md, or the folder is gone)", "rating": None, "words": None})
     he = scan["inputs"]["hand_edits"]
     c.counts = {"rows": len(regenerated), "differ": len(differ), "missing": len(missing), "extra": len(extra),
-                "hand_edits_rows": he["rows"] if he else 0}
+                "duplicated": len(duplicated), "hand_edits_rows": he["rows"] if he else 0}
     if scan["index_text"] is None:
         if regenerated:
             c.raise_to("warn")
         c.detail = "index.md missing; %d rows to generate" % len(regenerated)
     else:
         c.detail = "%d rows differ, %d missing, %d extra" % (len(differ), len(missing), len(extra))
+        if duplicated:
+            c.detail += ", %d duplicated" % len(duplicated)
         if differ:
             c.detail += " (differ: %s)" % names(differ, 3)
     c.detail += "; hand-edits report %s: %d rows" % (he["date"], he["rows"]) if he else "; no hand-edits report"
@@ -333,15 +342,19 @@ def check_supersedes(scan: dict, cfg: dict) -> Check:
         c.add("fail", {"id": new, "reason": "supersedes a folder that does not exist: %s" % old, "rating": None, "words": None})
     for cyc in g["cycles"]:
         c.add("fail", {"id": " → ".join(cyc + [cyc[0]]), "reason": "cycle", "rating": None, "words": None})
+    for name in g.get("self_edges", []):
+        c.add("fail", {"id": name, "reason": "supersedes itself (a cycle of one)", "rating": None, "words": None})
+    cycles_n = len(g["cycles"]) + len(g.get("self_edges", []))
     for new, old in g["cross_resource"]:
         c.add("warn", {"id": "%s → %s" % (new, old), "reason": "cross-resource edge", "rating": None, "words": None})
     stored = sorted(r["name"] for r in scan["folders"] if r["has_extract"] and r["status"] == "superseded")
     for name in stored:
         c.add("warn", {"id": name, "reason": "extract.md carries a stored `superseded` (legacy word)", "rating": None, "words": None})
-    c.counts = {"edges": g["edges"], "dangling": len(g["dangling"]), "cycles": len(g["cycles"]),
+    c.counts = {"edges": g["edges"], "dangling": len(g["dangling"]), "cycles": cycles_n,
+                "self_edges": len(g.get("self_edges", [])),
                 "cross_resource": len(g["cross_resource"]), "fan_out": len(g["fan_out"]), "stored_superseded": len(stored),
                 "current_incomplete": g["current_incomplete"]}
-    parts = ["%d edges, %d dangling, %d cycles" % (g["edges"], len(g["dangling"]), len(g["cycles"]))]
+    parts = ["%d edges, %d dangling, %d cycles" % (g["edges"], len(g["dangling"]), cycles_n)]
     if g["current_incomplete"]:
         parts[0] += " — current count incomplete"
     if g["cross_resource"]:
@@ -577,6 +590,21 @@ def check_context(scan: dict, cfg: dict) -> Check:
     return c
 
 
+def alias_verdict(scan: dict, r: dict, ex_cid: str, src_cid: str) -> str:
+    """alias · unknown · mismatch — is extract.md's capture_id a recovery alias of source.md's? After
+    `mnemon add --resume <revision>` without the owner receipt the alias writes its own id into
+    extract.md while the immutable source.md keeps the original (contracts §12 A4); the ledger's
+    alias receipt (`resolved_to_capture_id` / `resolved_to_revision`) is the evidence."""
+    ledger = scan["ledger"]
+    if not ledger["present"]:
+        return "unknown"
+    for rec in ledger["receipts"]:
+        if rec["capture_id"] == ex_cid and (rec.get("resolved_to_capture_id") == src_cid
+                                            or rec.get("resolved_to_revision") == r["name"]):
+            return "alias"
+    return "mismatch"
+
+
 def check_extract_consistency(scan: dict, cfg: dict) -> Check:
     c = Check("store/extract-consistency")
     with_source = 0
@@ -586,6 +614,8 @@ def check_extract_consistency(scan: dict, cfg: dict) -> Check:
     no_status: List[str] = []
     url_differs: List[str] = []
     no_sections: List[str] = []
+    aliased: List[str] = []
+    alias_unknown: List[str] = []
     for r in scan["folders"]:
         if not r["has_extract"] or r["extract_state"] == "unreadable":
             continue
@@ -597,10 +627,20 @@ def check_extract_consistency(scan: dict, cfg: dict) -> Check:
         if r["klass"] == "managed":
             pairs += 1
             bad = []
-            if (r["ex_capture_id"] or "") != (r["src"].get("capture_id") or ""):
-                bad.append("capture_id")
             if (r["ex_revision"] or "") != (r["src"].get("revision") or ""):
                 bad.append("revision")
+            src_cid = r["src"].get("capture_id") or ""
+            ex_cid = r["ex_capture_id"] or ""
+            if ex_cid != src_cid:
+                verdict = alias_verdict(scan, r, ex_cid, src_cid)
+                if verdict == "alias":
+                    aliased.append(r["name"])
+                elif verdict == "unknown":
+                    alias_unknown.append(r["name"])
+                    c.add("warn", item(r, "capture_id differs from source.md (%s vs %s) — a recovery alias? no ledger here to confirm"
+                                       % (ex_cid[:28], src_cid[:28]), "managed"))
+                else:
+                    bad.append("capture_id")
             if bad:
                 mismatch.append(r["name"])
                 c.add("fail", item(r, "extract.md and source.md disagree on " + "/".join(bad), "managed"))
@@ -614,11 +654,16 @@ def check_extract_consistency(scan: dict, cfg: dict) -> Check:
             no_sections.append(r["name"])
             c.add("warn", item(r, "none of the five sections (Summary, Executive Summary, Key Ideas, Connections, Raw Quotes)"))
     c.counts = {"with_source": with_source, "orphans": len(orphans), "managed_pairs": pairs, "mismatch": len(mismatch),
+                "aliases": len(aliased), "alias_unknown": len(alias_unknown),
                 "no_status": len(no_status), "url_differs": len(url_differs), "no_sections": len(no_sections)}
     parts = ["%d extracts have a source" % with_source + (", %d do not (%s)" % (len(orphans), names(orphans)) if orphans else "")]
     agree = pairs - len(mismatch)
     parts.append("%d managed pairs agree on capture_id/revision" % agree + (
         ", %d disagree (%s)" % (len(mismatch), names(mismatch)) if mismatch else ""))
+    if aliased:
+        parts.append("%s (%s)" % (plural(len(aliased), "recovery alias", "recovery aliases"), names(aliased)))
+    if alias_unknown:
+        parts.append("%d capture_id differ without a ledger to confirm an alias (%s)" % (len(alias_unknown), names(alias_unknown)))
     if no_status:
         parts.append("%d managed without status (%s)" % (len(no_status), names(no_status)))
     if url_differs:
@@ -1005,7 +1050,14 @@ def run_checks(scan: dict, cfg: dict) -> Tuple[List[Check], List[dict]]:
                                 "message": 'cannot parse "%s" (defaults used)' % line} for line in cfg["radius_errors"]]
     checks: List[Check] = []
     raise_in = test_hook("MNEMON_TEST_DOCTOR_RAISE")
+    unlisted = scan["snapshot"].get("sources_unlisted")
+    if unlisted:
+        diagnostics.append({"code": "error", "level": "fail",
+                            "message": "Sources/ could not be listed (%s): the folder checks were not probed" % unlisted})
     for fn, name in zip(CHECKS, CHECK_NAMES):
+        if unlisted and name not in FOLDER_FREE_CHECKS:
+            checks.append(Check(name).not_probed("Sources/ could not be listed: %s" % unlisted, "warn"))
+            continue
         try:
             if raise_in == name:
                 raise RuntimeError("test hook")
@@ -1233,35 +1285,42 @@ def main(argv: List[str]) -> int:
     except ValueError:
         print("vault-doctor: --today expects YYYY-MM-DD, got %r" % args.today, file=sys.stderr)
         return 2
-    try:
-        cfg = settings(args)
-    except Exception as exc:
-        print("vault-doctor: %s" % exc, file=sys.stderr)
-        return 1
-    if not os.path.isdir(cfg["vault"]):
-        print("vault-doctor: vault not found: %s" % cfg["vault"], file=sys.stderr)
-        return 1
-
-    if args.worker:
-        stall = test_hook("MNEMON_TEST_DOCTOR_STALL")
-        if stall:
-            pidfile = test_hook("MNEMON_TEST_DOCTOR_PIDFILE")
-            if pidfile:
-                with open(pidfile, "w") as fh:
-                    fh.write(str(os.getpid()))
-            time.sleep(float(stall))
-        try:
-            doc = build_document(cfg, today)
-        except Exception as exc:
-            print("vault-doctor: error: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
-            return 1
-        print(json.dumps(doc, ensure_ascii=False, default=lv._json_default))
-        return 0
-
     rc = 0
-    if args.budget is not None:
-        doc, rc = run_with_budget(args, cfg, today, started)
+    if args.budget is not None and not args.worker:
+        # everything that can block — the configuration loader (up to its own 15 s), the guide stamp,
+        # the scan, the checks — runs in the worker under the deadline; the parent loads nothing and
+        # knows only the names it was given (§6.4)
+        vault_hint = os.path.abspath(args.vault) if args.vault else (os.environ.get("VAULT_PATH") or "?")
+        instance_hint = args.instance or (os.path.basename(vault_hint.rstrip("/")) if args.vault else os.environ.get("MNEMON_INSTANCE")) or "?"
+        stub = {"instance": instance_hint, "vault": vault_hint, "budget": args.budget}
+        doc, rc = run_with_budget(args, stub, today, started)
     else:
+        stall_init = test_hook("MNEMON_TEST_DOCTOR_STALL_INIT")
+        if stall_init:
+            time.sleep(float(stall_init))
+        try:
+            cfg = settings(args)
+        except Exception as exc:
+            print("vault-doctor: %s" % exc, file=sys.stderr)
+            return 1
+        if not os.path.isdir(cfg["vault"]):
+            print("vault-doctor: vault not found: %s" % cfg["vault"], file=sys.stderr)
+            return 1
+        if args.worker:
+            stall = test_hook("MNEMON_TEST_DOCTOR_STALL")
+            if stall:
+                pidfile = test_hook("MNEMON_TEST_DOCTOR_PIDFILE")
+                if pidfile:
+                    with open(pidfile, "w") as fh:
+                        fh.write(str(os.getpid()))
+                time.sleep(float(stall))
+            try:
+                doc = build_document(cfg, today)
+            except Exception as exc:
+                print("vault-doctor: error: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
+                return 1
+            print(json.dumps(doc, ensure_ascii=False, default=lv._json_default))
+            return 0
         try:
             doc = build_document(cfg, today)
         except Exception as exc:

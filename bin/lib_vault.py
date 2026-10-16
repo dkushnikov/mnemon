@@ -346,7 +346,7 @@ def read_folder(sources: str, name: str, snapshot: dict) -> dict:
     rec["ex_capture_id"] = ex.get("capture_id")
     rec["ex_revision"] = ex.get("revision")
     rec["ex_url"] = ex.get("url") or None
-    rec["is_url"] = bool(rec["canonical_url"]) or rec["origin"] == "url"
+    rec["is_url"] = bool(rec["canonical"]) or bool(rec["canonical_url"]) or rec["origin"] == "url"
     rec["host"] = host_of(rec["canonical_url"] or rec["url"])
     return rec
 
@@ -371,8 +371,11 @@ def scan_sources(vault: str, snapshot: dict) -> Tuple[List[dict], dict]:
         try:
             names = sorted(n for n in os.listdir(sources)
                            if not n.startswith(".") and os.path.isdir(os.path.join(sources, n)))
-        except OSError:
+        except OSError as exc:
+            # the listing itself failed: nothing below it is observed — coverage lost, never a clean vault
             snapshot["unreadable"] += 1
+            snapshot["complete"] = False
+            snapshot["sources_unlisted"] = "%s: %s" % (type(exc).__name__, exc)
             names = []
     snapshot["folders_listed"] = len(names)
     for name in names:
@@ -382,6 +385,9 @@ def scan_sources(vault: str, snapshot: dict) -> Tuple[List[dict], dict]:
     ks = kr.scan_sources([Path(sources) / n for n in names]) if names else \
         {"successors": {}, "dangling": [], "cycles": [], "legacy": set(), "malformed": []}
     by_name = {r["name"]: r for r in records}
+    # a revision naming itself in `supersedes:` — the reindexer drops that edge when it renders,
+    # the validation graph keeps it (a cycle of one; the revision stays current and is reported)
+    self_edges = sorted(r["name"] for r in records if r["supersedes"] and r["supersedes"] == r["name"])
     superseded = set(ks["successors"])
     for cyc in ks["cycles"]:
         superseded.update(cyc)
@@ -394,13 +400,14 @@ def scan_sources(vault: str, snapshot: dict) -> Tuple[List[dict], dict]:
                 cross.append((new, old))
             elif rel == "incomparable":
                 incomparable += 1
-    edges = sum(len(v) for v in ks["successors"].values()) + len(ks["dangling"]) + sum(len(c) for c in ks["cycles"])
+    edges = sum(len(v) for v in ks["successors"].values()) + len(ks["dangling"]) + sum(len(c) for c in ks["cycles"]) + len(self_edges)
     graph = {
         "successors": ks["successors"], "dangling": ks["dangling"], "cycles": ks["cycles"],
         "malformed": ks["malformed"], "edges": edges, "superseded": superseded,
         "cross_resource": cross, "incomparable": incomparable,
         "fan_out": sorted(old for old, news in ks["successors"].items() if len(news) >= 2),
-        "current_incomplete": bool(ks["cycles"] or ks["dangling"]),
+        "self_edges": self_edges,
+        "current_incomplete": bool(ks["cycles"] or ks["dangling"] or self_edges),
     }
     for r in records:
         r["superseded"] = r["name"] in superseded
@@ -575,7 +582,8 @@ def scan_ledger(state_dir: Optional[str], snapshot: dict) -> dict:
 
         out["receipts"].append({"id": n[:-5], "capture_id": s("capture_id"), "state": s("state"),
                                 "revision": s("revision"), "text_sha256": s("text_sha256"),
-                                "resolved_to_revision": s("resolved_to_revision")})
+                                "resolved_to_revision": s("resolved_to_revision"),
+                                "resolved_to_capture_id": s("resolved_to_capture_id")})
     return out
 
 
@@ -653,7 +661,7 @@ def scan_vault(vault: str, state_dir: Optional[str] = None, archive_dir: Optiona
     physical vault path; `charter` to `_meta/charter.md`; `reader_context` to the init rule."""
     vault = os.path.abspath(vault)
     snapshot = {"unreadable": 0, "budget_s": None, "complete": True, "folders_listed": 0,
-                "folders_scanned": 0, "lock_held": False, "lock": "none"}
+                "folders_scanned": 0, "lock_held": False, "lock": "none", "sources_unlisted": None}
     if state_dir is None:
         state_dir = vl.vault_state_dir(vault)
     if charter is None:

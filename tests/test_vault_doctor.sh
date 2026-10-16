@@ -735,6 +735,49 @@ doc
 assert_eq "$(status_of store/identity)" "fail" "I2: the same group with a managed member fails (the engine's dedup was bypassed)"
 assert_not_contains "$(line_of store/identity)" "legacy-only" "I2: a mixed group is not legacy-only"
 
+echo "--- review fixes: a self-edge, legacy url coverage, a recovery alias, a duplicated index row, an unlistable Sources/, init under the deadline ---"
+VAULT="$TEST_TMPDIR/rf"; mkdir -p "$VAULT/Sources" "$VAULT/_meta"
+RF1=2026-05-01_rf000001; RF2=2026-05-02_rf000002; RF3=2026-05-03_rf000003
+mk_legacy "$RF1" 350 'url: "https://rf.example.com/one"' "supersedes: \"$RF1\""; mk_extract "$RF1" 5
+mk_legacy "$RF2" 350 'url: "https://rf.example.com/two"'; mk_extract "$RF2" 5
+mk_managed "$RF3" 350 'url: "https://rf.example.com/three"' 'canonical_url: "https://rf.example.com/three"'; mk_extract "$RF3" 5 "capture_id: \"alias-$RF3\"" "revision: \"$RF3\""
+doc
+assert_eq "$(status_of store/supersedes)" "fail" "I4: a revision that supersedes itself fails (a cycle of one)"
+assert_contains "$(line_of store/supersedes)" "1 cycles" "I4: the self-edge is counted as a cycle"
+assert_contains "$(line_of store/supersedes)" "current count incomplete" "I4: the current count is marked incomplete"
+assert_contains "$(line_of store/completeness)" "legacy url revisions without a record" "I6: a legacy url-only source (no origin, no canonical_url) is in the coverage"
+assert_contains "$(printf '%s\n' "$out" | grep -E '^ok +store/completeness')" "2 legacy url revisions without a record" "I6: both legacy url sources are counted"
+assert_eq "$(status_of store/extract-consistency)" "warn" "I10: a differing capture_id without a ledger is a warning (a recovery alias?), not a failure"
+assert_contains "$(line_of store/extract-consistency)" "without a ledger to confirm an alias" "I10: ...saying why"
+RFL="$TEST_TMPDIR/rf-ledger"; mkdir -p "$RFL/captures"
+printf '{"schema":"mnemon-capture-receipt/1","capture_id":"alias-%s","state":"extracted","revision":"%s","resolved_to_capture_id":"cap-%s","resolved_to_revision":"%s"}\n' "$RF3" "$RF3" "$RF3" "$RF3" > "$RFL/captures/alias-$RF3.json"
+doc --state-dir "$RFL"
+assert_eq "$(status_of store/extract-consistency)" "ok" "I10: the ledger's alias receipt confirms the differing capture_id"
+assert_contains "$(line_of store/extract-consistency)" "1 recovery alias" "I10: counted as a recovery alias"
+rm -f "$RFL/captures/alias-$RF3.json"
+printf '{"schema":"mnemon-capture-receipt/1","capture_id":"other-%s","state":"extracted","revision":"%s"}\n' "$RF3" "$RF3" > "$RFL/captures/other-$RF3.json"
+doc --state-dir "$RFL"
+assert_eq "$(status_of store/extract-consistency)" "fail" "I10: a ledger without an alias receipt makes the differing capture_id a failure"
+python3 "$MNEMON_ROOT/bin/knowledge-reindex.py" "$VAULT" --no-hand-edit-report >/dev/null 2>&1 || true
+dup_row="$(grep -F -- "- [[Sources/$RF2/" "$VAULT/index.md" | head -1)"
+printf '%s\n' "$dup_row" >> "$VAULT/index.md"
+doc --state-dir "$RFL"
+assert_eq "$(status_of store/index)" "warn" "I3: a duplicated (otherwise correct) index row is drift"
+assert_contains "$(line_of store/index)" "1 duplicated" "I3: ...counted as duplicated"
+VAULT="$TEST_TMPDIR/rf-unlisted"; mkdir -p "$VAULT/Sources" "$VAULT/_meta"
+mk_legacy "$RF2" 350 'url: "https://rf.example.com/two"'; mk_extract "$RF2" 5
+chmod 000 "$VAULT/Sources"
+doc --json; unlisted_json="$out"
+doc --brief; unlisted_brief="$out"
+chmod 755 "$VAULT/Sources"
+assert_eq "$(printf '%s' "$unlisted_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["snapshot"]["complete"], d["summary"]["not_probed"], d["summary"]["diagnostics_fail"], [x["status"] for x in d["checks"] if x["name"]=="store/source-integrity"][0], [x["probed"] for x in d["checks"] if x["name"]=="human/seeds"][0])')" "False 14 1 warn True" "an unlistable Sources/ is a fail diagnostic and 14 not-probed checks; guide-version, reader-context and human/* still run — never a clean vault"
+assert_contains "$unlisted_brief" "data: 0 fail" "the brief of an unlistable Sources/ shows the checks' counts honestly"
+assert_contains "$unlisted_brief" "probed 5/19" "...and the coverage"
+VAULT="$TEST_TMPDIR/rf"
+t0=$(date +%s); MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_STALL_INIT=30 doc --brief --budget 1; t1=$(date +%s)
+assert_contains "$out" "not probed (budget" "the deadline covers initialization: a settings() that stalls is cut by the parent"
+if [[ $((t1 - t0)) -le 6 ]]; then pass "...within the budget ($((t1 - t0)) s)"; else fail "...within the budget" "took $((t1 - t0)) s"; fi
+
 echo "--- the engine's own guide stamp ---"
 assert_eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import lib_vault; print(lib_vault.engine_guide_version())' "$MNEMON_ROOT/bin")" "2" "vault-template/CLAUDE.md is stamped mnemon_guide: 2"
 assert_eq "$(head -1 "$MNEMON_ROOT/vault-template/_meta/Protocol.md")" "<!-- mnemon_guide: 2 -->" "vault-template/_meta/Protocol.md starts with the stamp comment"
