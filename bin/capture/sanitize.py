@@ -2,8 +2,10 @@
 
 HTML level (`html`), on the raw before the reference and the converters see it: an SVG with `<text>`
 becomes a `<p>` placeholder carrying its labels, an icon SVG is removed; LaTeXML `div.ltx_listingline` runs
-become `<pre><code>` (indentation from `ltx_lst_space`); `<a href="data:…">` listing buttons are removed;
-merged-cell tables are rewritten into simple tables (lib_table) so pandoc never emits `[TABLE]` for them.
+become `<pre><code>` (indentation from `ltx_lst_space`); `<a href="data:…">` listing buttons are removed (an
+anchor with real text is unwrapped to its text); merged-cell tables are rewritten into simple tables
+(lib_table) so pandoc never emits `[TABLE]` for them — a table whose expansion would exceed the cell cap
+is left as it is and counted `tables_unrepaired`, and the conversion deadline is checked between tables.
 Markdown level (`markdown`), after conversion and fence-aware (nothing inside ``` or ~~~ fences is touched):
 `![alt](data:image/…)` → `*[inline figure omitted at capture: alt]*`, remaining `data:` links dropped,
 `_next/image?url=…` → `*[img: alt]*`, `\\iow_now:Ne` residue → line breaks inside a `~~~~text` fence,
@@ -20,9 +22,13 @@ from typing import List, Tuple
 from . import lib_table
 from .check import COMMENTS
 
-HTML_KEYS = ("svg_diagrams", "svg_icons", "latexml_listings", "data_links", "tables_rewritten")
+HTML_KEYS = ("svg_diagrams", "svg_icons", "latexml_listings", "data_links", "tables_rewritten", "tables_unrepaired")
 MD_KEYS = ("data_uris", "data_links", "next_images", "tcolorbox_residue", "residue_lines", "comment_sections",
            "tables_unrepaired")
+
+
+class Timeout(Exception):
+    """The conversion deadline passed during sanitation (checked between tables)."""
 
 _SVG = re.compile(r"<svg\b[^>]*>.*?</svg\s*>", re.IGNORECASE | re.DOTALL)
 _SVG_TEXT = re.compile(r"<text\b[^>]*>(.*?)</text\s*>", re.IGNORECASE | re.DOTALL)
@@ -33,7 +39,7 @@ _LISTING_LINE = re.compile(r"<div\b[^>]*\bclass=[\"'][^\"']*\bltx_listingline\b[
 _LISTING_RUN = re.compile(r"(?:<div\b[^>]*\bclass=[\"'][^\"']*\bltx_listingline\b[^\"']*[\"'][^>]*>.*?</div>\s*)+",
                           re.IGNORECASE | re.DOTALL)
 _LST_SPACE = re.compile(r"<span\b[^>]*\bltx_lst_space\b[^>]*>\s*(?:&nbsp;|\s)*</span>", re.IGNORECASE | re.DOTALL)
-_DATA_LINK = re.compile(r"<a\b[^>]*\bhref=[\"']data:[^\"']*[\"'][^>]*>.*?</a\s*>", re.IGNORECASE | re.DOTALL)
+_DATA_LINK = re.compile(r"<a\b[^>]*\bhref=[\"']data:[^\"']*[\"'][^>]*>(.*?)</a\s*>", re.IGNORECASE | re.DOTALL)
 _TABLE = re.compile(r"<table\b.*?</table\s*>", re.IGNORECASE | re.DOTALL)
 
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
@@ -84,24 +90,40 @@ def _listing_repl(counts):
     return repl
 
 
-def _table_repl(counts):
+def _data_link_html_repl(counts):
+    """A `data:` anchor is removed when its text has no word characters (a download button); otherwise it
+    is unwrapped to its content, so the text it carried stays in the reference and in every candidate."""
     def repl(m):
-        rewritten, changed = lib_table.expand_table(m.group(0))
+        counts["data_links"] += 1
+        inner = m.group(1)
+        text = htmlmod.unescape(_TAG.sub(" ", inner))
+        return inner if _WORDISH.search(text) else ""
+    return repl
+
+
+def _table_repl(counts, deadline=None):
+    def repl(m):
+        if deadline is not None and deadline.expired():
+            raise Timeout("the conversion deadline passed while rewriting tables")
+        try:
+            rewritten, changed = lib_table.expand_table(m.group(0))
+        except lib_table.TooLarge:
+            counts["tables_unrepaired"] += 1
+            return m.group(0)
         if changed:
             counts["tables_rewritten"] += 1
         return rewritten
     return repl
 
 
-def html(raw_html: str, kind: str = "page") -> Tuple[str, dict]:
-    """The HTML-level repairs; (sanitized html, counts)."""
+def html(raw_html: str, kind: str = "page", deadline=None) -> Tuple[str, dict]:
+    """The HTML-level repairs; (sanitized html, counts). `deadline` (a proc.Deadline) is checked between
+    tables; past it `Timeout` is raised."""
     counts = _counts(HTML_KEYS)
     out = _SVG.sub(_svg_repl(counts), raw_html)
     out = _LISTING_RUN.sub(_listing_repl(counts), out)
-    before = out
-    out = _DATA_LINK.sub("", out)
-    counts["data_links"] = len(_DATA_LINK.findall(before))
-    out = _TABLE.sub(_table_repl(counts), out)
+    out = _DATA_LINK.sub(_data_link_html_repl(counts), out)
+    out = _TABLE.sub(_table_repl(counts, deadline), out)
     return out, counts
 
 

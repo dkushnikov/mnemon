@@ -4,7 +4,8 @@
 cells: a spanned cell's content is duplicated into every grid position it covered, stacked header rows are
 joined per column with " · " (consecutive duplicates collapsed), paragraphs inside a cell are joined with a
 space. pandoc then emits a pipe table instead of `[TABLE]`, and nothing has to guess which placeholder was
-which table. A table without spans is returned unchanged. Stdlib only, python 3.9.
+which table. A table without spans is returned unchanged. Spans are clamped to MAX_SPAN and the expanded
+grid is bounded by MAX_CELLS (TooLarge; the caller keeps the original HTML). Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
@@ -16,6 +17,15 @@ from typing import List, Optional, Tuple
 _SPAN = re.compile(r"\b(?:row|col)span\s*=\s*[\"']?\s*(\d+)", re.IGNORECASE)
 _P_TAG = re.compile(r"</?p\b[^>]*>", re.IGNORECASE)
 _WS = re.compile(r"\s+")
+
+# Fetched HTML controls rowspan/colspan: each span is clamped and the expanded grid is bounded before any
+# cell is placed, so a tiny table declaring spans of a million cannot exhaust memory or time.
+MAX_SPAN = 1000
+MAX_CELLS = 20000
+
+
+class TooLarge(ValueError):
+    """The expanded grid would exceed MAX_CELLS: the table is left as the original HTML (`tables_unrepaired`)."""
 
 
 def has_merged_cells(table_html: str) -> bool:
@@ -42,7 +52,7 @@ def _span(attrs, name: str) -> int:
     for k, v in attrs:
         if k.lower() == name:
             try:
-                return max(1, int(str(v).strip()))
+                return min(MAX_SPAN, max(1, int(str(v).strip())))
             except (TypeError, ValueError):
                 return 1
     return 1
@@ -165,7 +175,11 @@ class _TableParser(HTMLParser):
 
 
 def _grid(rows: List[List[_Cell]]) -> List[List[str]]:
-    """Cells placed on a grid; a spanned cell's content is duplicated into every position it covers."""
+    """Cells placed on a grid; a spanned cell's content is duplicated into every position it covers.
+    Raises TooLarge before placing anything when the spans would cover more than MAX_CELLS positions, and
+    again before returning when the padded grid (rows × width) would exceed it."""
+    if sum(c.rowspan * c.colspan for row in rows for c in row) > MAX_CELLS:
+        raise TooLarge("the spans cover more than %d cells" % MAX_CELLS)
     grid: List[dict] = []
     for r, row in enumerate(rows):
         while len(grid) <= r:
@@ -181,11 +195,14 @@ def _grid(rows: List[List[_Cell]]) -> List[List[str]]:
                     grid[r + dr].setdefault(col + dc, cell.html)
             col += cell.colspan
     width = max((max(d.keys()) + 1 for d in grid if d), default=0)
+    if len(grid) * width > MAX_CELLS:
+        raise TooLarge("the padded grid would hold more than %d cells" % MAX_CELLS)
     return [[d.get(c, "") for c in range(width)] for d in grid if d]
 
 
 def expand_table(table_html: str) -> Tuple[str, bool]:
-    """A merged-cell table rewritten into a simple one; (html, changed)."""
+    """A merged-cell table rewritten into a simple one; (html, changed). Raises TooLarge when the expanded
+    grid would exceed MAX_CELLS (the caller keeps the original and counts it unrepaired)."""
     if not has_merged_cells(table_html):
         return table_html, False
     parser = _TableParser()
@@ -209,6 +226,8 @@ def expand_table(table_html: str) -> Tuple[str, bool]:
     header_grid = _grid(header_rows) if header_rows else []
     body_grid = _grid(body_rows) if body_rows else []
     width = max([len(r) for r in header_grid + body_grid] or [0])
+    if (len(header_grid) + len(body_grid)) * width > MAX_CELLS:
+        raise TooLarge("the rewritten table would hold more than %d cells" % MAX_CELLS)
     out = ["<table>"]
     caption = _WS.sub(" ", "".join(parser.caption_parts)).strip()
     if caption:

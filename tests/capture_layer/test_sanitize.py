@@ -1,11 +1,12 @@
 """§7.7 — sanitation on the fixtures: both levels, every repair counted, idempotent; lib_table."""
 from __future__ import annotations
 
+import time
 import unittest
 
 from _helpers import read_fixture
 
-from capture import lib_table, sanitize
+from capture import lib_table, proc, sanitize
 
 
 class Tables(unittest.TestCase):
@@ -36,6 +37,33 @@ class Tables(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual(out.count("<table>"), 3)
 
+    def test_expansion_is_bounded(self):
+        """Spans are clamped and the grid is bounded before any cell is placed (a million-span table is refused
+        at once); a table whose padded grid would exceed the cap is refused too."""
+        bomb = "<table><tr><td rowspan='1000000' colspan='1000000'>x</td></tr></table>"
+        t0 = time.monotonic()
+        with self.assertRaises(lib_table.TooLarge):
+            lib_table.expand_table(bomb)
+        self.assertLess(time.monotonic() - t0, 1.0)
+        wide = "<table><tr><td colspan='150'>w</td></tr>" + "<tr><td>r</td></tr>" * 200 + "</table>"
+        with self.assertRaises(lib_table.TooLarge):
+            lib_table.expand_table(wide)
+        fine = "<table><tr><td colspan='100'>w</td></tr>" + "<tr><td>r</td></tr>" * 100 + "</table>"
+        out, changed = lib_table.expand_table(fine)
+        self.assertTrue(changed)
+        html = "<p>before</p>" + bomb + "<p>after</p>"
+        out, counts = sanitize.html(html, "page")
+        self.assertEqual(counts["tables_unrepaired"], 1)
+        self.assertEqual(counts["tables_rewritten"], 0)
+        self.assertIn(bomb, out, "the oversized table is left as the original HTML")
+
+    def test_deadline_checked_between_tables(self):
+        html = "<table><tr><td colspan='2'>a</td></tr></table>" * 3
+        with self.assertRaises(sanitize.Timeout):
+            sanitize.html(html, "page", deadline=proc.Deadline(0))
+        out, counts = sanitize.html(html, "page", deadline=proc.Deadline(60))
+        self.assertEqual(counts["tables_rewritten"], 3)
+
 
 class HtmlLevel(unittest.TestCase):
     def test_latexml_fixture(self):
@@ -49,6 +77,16 @@ class HtmlLevel(unittest.TestCase):
         self.assertNotIn("rowspan", out)
         self.assertIn("<th>Task A · Acc</th>", out)
         self.assertIn('<img src="data:image/png;base64,', out, "base64 figures are a markdown-level repair")
+
+    def test_data_links_keep_their_text(self):
+        html = ('<p><a href="data:text/plain;base64,AAAA">⬇</a> <a href="data:text/plain,x">Read the <b>full</b> sentence here</a>'
+                ' <a href="data:image/png;base64,BB"><img src="x.png"></a></p>')
+        out, counts = sanitize.html(html, "page")
+        self.assertEqual(counts["data_links"], 3)
+        self.assertNotIn("data:", out)
+        self.assertNotIn("⬇", out)
+        self.assertIn("Read the <b>full</b> sentence here", out, "an anchor with real text is unwrapped, not dropped")
+        self.assertNotIn("<img", out, "an anchor without word characters is removed with its content")
 
     def test_svg_fixture(self):
         out, counts = sanitize.html(read_fixture("svg.html"), "page")

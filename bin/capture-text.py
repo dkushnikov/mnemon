@@ -17,7 +17,8 @@ The report is `mnemon-capture-text/2` (the phase-1 keys plus the converter, the 
 the counts, the inventory, the repairs, the dated candidates). An empty or failed conversion is an
 acquisition failure: exit 1, `error_class: convert` (or `invalid-utf8`), nothing at --out — the raw stays
 published and a retry converts it again. `--timeout` (convert_timeout, default 300) supervises `defuddle` and
-`pandoc` in their own process groups. Stdlib only, python 3.9.
+`pandoc` in their own process groups (a stuck converter is skipped for the next candidate) and is checked
+between the tables the sanitizer rewrites (past it: exit 124, `error_class: timeout`). Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
@@ -92,7 +93,7 @@ def main() -> int:
         rep["error_class"], rep["error"] = exc.error_class, str(exc)
         reportmod.write_report(args.report, rep)
         print("capture-text: %s for %s: %s" % (exc.error_class, args.url, exc), file=sys.stderr)
-        return 1
+        return 124 if exc.error_class == "timeout" else 1
     if not result.text.strip():
         rep["error_class"], rep["error"] = "convert", "empty conversion output"
         reportmod.write_report(args.report, rep)

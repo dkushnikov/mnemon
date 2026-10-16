@@ -503,7 +503,10 @@ def convert(raw: bytes, url: str, raw_kind: str = "response", kind: str = "page"
     kind = kind or fetch_report.get("kind") or "page"
     if kind not in ("page", "arxiv", "youtube", "github"):
         kind = "page"
-    sanitized, html_repairs = sanitize.html(text, kind)
+    try:
+        sanitized, html_repairs = sanitize.html(text, kind, deadline=deadline)
+    except sanitize.Timeout as exc:
+        raise ConvertError("timeout", str(exc))
     root = parse(sanitized)
     title = find_title(root) or (meta_in.get("title") if isinstance(meta_in.get("title"), str) else None)
     page_meta = page_metadata(root)
