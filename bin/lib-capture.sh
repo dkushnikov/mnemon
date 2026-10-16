@@ -1311,7 +1311,11 @@ cap_text_fields() {   # <text report> [fetch report]
   CAPX_MISSING="$(jq -r '.missing_count // 0' "$r")"
   CAPX_GLUED="$(jq -r '.glued_count // 0' "$r")"
   CAPX_HEADINGS_MISSING="$(jq -r '.headings_missing_count // 0' "$r")"
-  CAPX_REPAIRS="$(jq -r '[((.repairs.html // {}) + (.repairs.markdown // {})) | to_entries[] | select(.value != null and .value != 0) | "\(.key)=\(.value)"] | join(",")' "$r")"
+  # `key=n,…` over both levels in their order (html, then markdown); a key both levels carry (data_links:
+  # the HTML-level buttons and the markdown-level links) is summed, never overwritten
+  CAPX_REPAIRS="$(jq -r '[(.repairs.html // {}), (.repairs.markdown // {})] | map(to_entries) | add // []
+    | reduce .[] as $e ({o: [], s: {}}; if .s[$e.key] == null then .o += [$e.key] | .s[$e.key] = ($e.value // 0) else .s[$e.key] += ($e.value // 0) end)
+    | . as $r | [$r.o[] | select($r.s[.] != 0) | "\(.)=\($r.s[.])"] | join(",")' "$r")"
   [[ -n "$CAPX_REPAIRS" ]] || CAPX_REPAIRS=none
   CAPX_BLOCKED_KIND=""
   local acq_kind=""
