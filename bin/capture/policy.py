@@ -9,8 +9,9 @@ TLS is verified against the host name with SNI = host; the `Host` header is the 
 `max_redirects` redirects each re-checked before it is followed, a byte cap measured on the decoded body
 (`too-large` is an error, never a truncated body; a `Content-Length` above the cap stops before any body is
 read; decompression is bounded per chunk), connect/read timeouts bounded by the caller's deadline — the
-body is read one recv at a time under the absolute deadline, so a trickling server cannot outlast it — one
-User-Agent, no cookies, no
+body is read one recv at a time under the absolute deadline, and a daemon timer armed at that deadline
+shuts the socket down so neither a trickling body nor a trickling status line or header can outlast it —
+one User-Agent, no cookies, no
 `Authorization`, no proxy of any kind (`http.client` directly; the `*_PROXY` environment is never read).
 DNS resolution runs in a daemon thread bounded by the remaining deadline (§12 A9). An HTTP error status is
 not an exception: the response comes back with its status and body for classification (§3.4).
@@ -222,24 +223,63 @@ def _resolve(host: str, port: int, deadline: proc.Deadline):
     return infos
 
 
+class _Watchdog:
+    """A daemon timer armed at the absolute deadline that shuts the socket down (`shutdown(SHUT_RDWR)`),
+    so no blocking read can outlast the deadline — the status line and the headers above all, which
+    http.client reads line by line with no per-chunk check of ours, so a server trickling one header byte
+    per second under the inactivity timeout could otherwise hold the acquisition indefinitely (G11). Once it
+    fired, the request is a `timeout` whatever the read raised or returned."""
+
+    def __init__(self, deadline: proc.Deadline):
+        self.sock = None
+        self.fired = False
+        self.timer = None
+        remaining = deadline.remaining()
+        if remaining is not None:
+            self.timer = threading.Timer(remaining, self._fire)
+            self.timer.daemon = True
+            self.timer.start()
+
+    def watch(self, sock) -> None:
+        self.sock = sock
+
+    def _fire(self) -> None:
+        self.fired = True
+        sock = self.sock
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def cancel(self) -> None:
+        if self.timer is not None:
+            self.timer.cancel()
+
+
 class _PinnedConnection(http.client.HTTPConnection):
     """An HTTP(S) connection opened on a checked sockaddr; TLS verified against the host name (SNI = host)."""
 
-    def __init__(self, host: str, port: int, family, sockaddr, tls: bool, timeout: float):
+    def __init__(self, host: str, port: int, family, sockaddr, tls: bool, timeout: float, watchdog: Optional[_Watchdog] = None):
         super().__init__(host, port, timeout=timeout)
         self._pin_family = family
         self._pin_sockaddr = sockaddr
         self._pin_tls = tls
         self._tls_host = host
+        self._watchdog = watchdog
 
     def connect(self):
         sock = socket.socket(self._pin_family, socket.SOCK_STREAM)
         sock.settimeout(self.timeout)
+        if self._watchdog is not None:
+            self._watchdog.watch(sock)
         try:
             sock.connect(self._pin_sockaddr)
             if self._pin_tls:
                 ctx = ssl.create_default_context()
                 sock = ctx.wrap_socket(sock, server_hostname=self._tls_host)
+                if self._watchdog is not None:
+                    self._watchdog.watch(sock)
         except BaseException:
             sock.close()
             raise
@@ -370,7 +410,8 @@ class Policy:
             address = sockaddr[0]
             self._pace(host, deadline)
             connect_bound = deadline.bound(self.connect_timeout)
-            conn = _PinnedConnection(host, port, family, sockaddr, scheme == "https", connect_bound or 0.1)
+            watchdog = _Watchdog(deadline)
+            conn = _PinnedConnection(host, port, family, sockaddr, scheme == "https", connect_bound or 0.1, watchdog)
             try:
                 try:
                     conn.connect()
@@ -385,6 +426,8 @@ class Policy:
                     conn.putheader("Connection", "close")
                     conn.endheaders()
                     resp = conn.getresponse()
+                    if watchdog.fired or deadline.expired():
+                        raise PolicyError("timeout", "deadline reached while reading the response headers from %s" % host, current)
                     headers = {}
                     for name, value in resp.getheaders():
                         key = name.lower()
@@ -405,12 +448,17 @@ class Policy:
                 except socket.timeout:
                     raise PolicyError("timeout", "timed out talking to %s" % host, current)
                 except ssl.SSLError as exc:
+                    if watchdog.fired:
+                        raise PolicyError("timeout", "deadline reached while talking to %s" % host, current)
                     raise PolicyError("tls", "TLS failure with %s: %s" % (host, exc), current)
                 except (http.client.HTTPException, ConnectionError, OSError) as exc:
                     if isinstance(exc, socket.timeout):
                         raise PolicyError("timeout", "timed out talking to %s" % host, current)
+                    if watchdog.fired:
+                        raise PolicyError("timeout", "deadline reached while talking to %s" % host, current)
                     raise PolicyError("connection", "connection to %s failed: %s" % (host, exc), current)
             finally:
+                watchdog.cancel()
                 try:
                     conn.close()
                 except Exception:

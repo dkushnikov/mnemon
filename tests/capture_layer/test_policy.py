@@ -335,6 +335,34 @@ class Transport(PolicyBase):
             self.policy().get(self.server.url("/slow2"), deadline=proc.Deadline(0.5))
         self.assertEqual(ctx.exception.kind, "timeout")
 
+    def test_header_phase_watchdog_cuts_a_trickling_header(self):
+        """G11: one header byte per second keeps every receive under the inactivity timeout, and the status
+        line and headers are read with no per-chunk check of ours; the watchdog armed at the deadline shuts
+        the socket down, so the request is a `timeout` at the deadline, not after the last header byte."""
+        def trickle_headers(handler):
+            handler.wfile.write(b"HTTP/1.1 200 OK\r\n")
+            handler.wfile.flush()
+            try:
+                for ch in b"X-Slow: " + b"a" * 20 + b"\r\nContent-Length: 2\r\n\r\nok":
+                    handler.wfile.write(bytes([ch]))
+                    handler.wfile.flush()
+                    time.sleep(1.0)
+            except OSError:
+                pass
+            return None
+
+        self.server.add("/slow-headers", handler=trickle_headers)
+        p = P.Policy(connect_timeout=5, read_timeout=5, max_bytes=1000)
+        t0 = time.monotonic()
+        with self.assertRaises(P.PolicyError) as ctx:
+            p.get(self.server.url("/slow-headers"), deadline=proc.Deadline(2.0))
+        elapsed = time.monotonic() - t0
+        self.assertEqual(ctx.exception.kind, "timeout")
+        self.assertIn("headers", ctx.exception.message)
+        self.assertTrue(ctx.exception.retryable)
+        self.assertLess(elapsed, 5.0, "the header read outlived the deadline (%.1f s)" % elapsed)
+        self.assertGreaterEqual(elapsed, 1.5, "the watchdog fired before the deadline")
+
     def test_url_rewrite_hook_keeps_the_logical_url(self):
         self.server.add("/abs/2401.00001", "<html><body>abs</body></html>")
         os.environ["MNEMON_FETCH_URL_REWRITE"] = "https://arxiv.org=%s;https://www.youtube.com=%s" % (self.server.base, self.server.base)
