@@ -198,6 +198,60 @@ class Caps(PolicyBase):
             self.policy(max_bytes=999).get(self.server.url("/gz"))
         self.assertEqual(ctx.exception.kind, "too-large")
 
+    def test_decompression_bounded_per_chunk(self):
+        """A few KB of gzip that decode to megabytes never expand past the room left under the cap."""
+        self.server.add("/bomb", b"\0" * 3000000, gzip_body=True)
+        sizes = []
+        real = P.zlib.decompressobj
+
+        class Recording:
+            def __init__(self, *a, **kw):
+                self.d = real(*a, **kw)
+
+            def decompress(self, data, max_length=0):
+                out = self.d.decompress(data, max_length)
+                sizes.append(len(out))
+                return out
+
+            @property
+            def unconsumed_tail(self):
+                return self.d.unconsumed_tail
+
+            def flush(self):
+                return self.d.flush()
+
+        with mock.patch.object(P.zlib, "decompressobj", Recording):
+            with self.assertRaises(P.PolicyError) as ctx:
+                self.policy(max_bytes=10000).get(self.server.url("/bomb"))
+        self.assertEqual(ctx.exception.kind, "too-large")
+        self.assertTrue(sizes)
+        self.assertLessEqual(max(sizes), 10001, "one chunk decoded past the cap")
+
+    def test_trickling_body_is_cut_at_the_absolute_deadline(self):
+        """One byte every 50 ms keeps every recv under the inactivity timeout; the absolute deadline still wins."""
+        def trickle(handler):
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/html")
+            handler.send_header("Content-Length", "100000")
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            try:
+                for _ in range(200):
+                    handler.wfile.write(b"x")
+                    handler.wfile.flush()
+                    time.sleep(0.05)
+            except OSError:
+                pass
+            return None
+
+        self.server.add("/trickle", handler=trickle)
+        p = P.Policy(connect_timeout=5, read_timeout=5, max_bytes=1000000)
+        t0 = time.monotonic()
+        with self.assertRaises(P.PolicyError) as ctx:
+            p.get(self.server.url("/trickle"), deadline=proc.Deadline(1.0))
+        self.assertEqual(ctx.exception.kind, "timeout")
+        self.assertLess(time.monotonic() - t0, 4.0, "the read outlived the deadline")
+
 
 class Scheme(PolicyBase):
     def test_ftp_and_userinfo_refused(self):

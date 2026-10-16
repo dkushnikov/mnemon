@@ -8,7 +8,9 @@ pinned to the checked address (the socket is opened on the resolved sockaddr —
 TLS is verified against the host name with SNI = host; the `Host` header is the host name), at most
 `max_redirects` redirects each re-checked before it is followed, a byte cap measured on the decoded body
 (`too-large` is an error, never a truncated body; a `Content-Length` above the cap stops before any body is
-read), connect/read timeouts bounded by the caller's deadline, one User-Agent, no cookies, no
+read; decompression is bounded per chunk), connect/read timeouts bounded by the caller's deadline — the
+body is read one recv at a time under the absolute deadline, so a trickling server cannot outlast it — one
+User-Agent, no cookies, no
 `Authorization`, no proxy of any kind (`http.client` directly; the `*_PROXY` environment is never read).
 DNS resolution runs in a daemon thread bounded by the remaining deadline (§12 A9). An HTTP error status is
 not an exception: the response comes back with its status and body for classification (§3.4).
@@ -433,24 +435,36 @@ class Policy:
             decomp = zlib.decompressobj()
         chunks = []
         total = 0
+        # The body is read under the absolute deadline: one underlying recv per read1 (a read(n) would loop
+        # over recvs until n bytes arrived, each recv restarting the inactivity timeout — a trickling server
+        # could hold the acquisition, and the vault lock, indefinitely); the socket timeout is re-armed to
+        # min(read_timeout, remaining) before every read, and a read that returns after the deadline is a
+        # timeout. Decompression is bounded per chunk: the decoder may emit at most the room left under
+        # the cap, and input it could not consume (unconsumed_tail) means the body is too large.
         while True:
             if deadline.expired():
                 raise PolicyError("timeout", "deadline reached while reading %s" % url, url)
             if conn.sock is not None:
                 conn.sock.settimeout(deadline.bound(self.read_timeout) or 0.1)
-            piece = resp.read(CHUNK)
+            piece = resp.read1(CHUNK)
+            if deadline.expired():
+                raise PolicyError("timeout", "deadline reached while reading %s" % url, url)
             if not piece:
                 break
             if decomp is not None:
+                room = self.max_bytes + 1 - total
                 try:
-                    piece = decomp.decompress(piece)
+                    out = decomp.decompress(piece, room)
                 except zlib.error:
                     if encoding == "deflate" and not raw_deflate and not chunks:
                         raw_deflate = True
                         decomp = zlib.decompressobj(-zlib.MAX_WBITS)
-                        piece = decomp.decompress(piece)
+                        out = decomp.decompress(piece, room)
                     else:
                         raise PolicyError("connection", "corrupt %s body from %s" % (encoding, url), url)
+                if decomp.unconsumed_tail:
+                    raise PolicyError("too-large", "body exceeds the cap of %d bytes" % self.max_bytes, url)
+                piece = out
             total += len(piece)
             if total > self.max_bytes:
                 raise PolicyError("too-large", "body exceeds the cap of %d bytes" % self.max_bytes, url)
