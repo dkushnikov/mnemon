@@ -5,10 +5,10 @@ MNEMON_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$MNEMON_ROOT/bin/mnemon-config.sh"
 
 echo "=== Config Loader Tests ==="
-echo "toolchain: $(bash --version | head -1) · $(python3 --version 2>&1)"
+echo "toolchain: bash $BASH_VERSION · $(python3 --version 2>&1)"   # the running bash, never the PATH-resolved one (G30)
 # the legacy run (PATH=/usr/bin:/bin:$PATH): the system bash first on PATH means bash 3.2 / python 3.9 — asserted
 if [[ "$(command -v bash)" == /bin/bash ]]; then
-  [[ "$(bash --version | head -1)" == *"version 3.2."* ]] && pass "legacy toolchain: bash 3.2.x" || fail "legacy toolchain: bash 3.2.x" "$(bash --version | head -1)"
+  [[ "$BASH_VERSION" == 3.2.* ]] && pass "legacy toolchain: bash 3.2.x" || fail "legacy toolchain: bash 3.2.x" "running bash $BASH_VERSION"
   [[ "$(python3 --version 2>&1)" == "Python 3.9."* ]] && pass "legacy toolchain: python 3.9.x" || fail "legacy toolchain: python 3.9.x" "$(python3 --version 2>&1)"
 fi
 
@@ -21,7 +21,7 @@ export XDG_STATE_HOME="$TEST_TMPDIR/state"
 unset MNEMON_CONFIG MNEMON_INSTANCE MNEMON_CONFIG_DIR
 unset FIRECRAWL_API_KEY JINA_API_KEY HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
 unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT MNEMON_POLICY_ALLOW_LOOPBACK MNEMON_FETCH_URL_REWRITE MNEMON_EXTERNAL_FETCH_CMD
-unset MNEMON_CAPTURE_FETCH_CMD MNEMON_CAPTURE_SITE_CMD MNEMON_DEPTH_FOLD_CMD
+unset MNEMON_CAPTURE_FETCH_CMD MNEMON_CAPTURE_SITE_CMD MNEMON_CAPTURE_TEXT_CMD MNEMON_DEPTH_FOLD_CMD MNEMON_TEST_CONVERT_HANG
 CFG_DIR="$XDG_CONFIG_HOME/mnemon"
 mkdir -p "$CFG_DIR/instances" "$TEST_TMPDIR/cwd" "$TEST_TMPDIR/emptyroot"
 

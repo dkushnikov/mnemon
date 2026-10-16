@@ -18,10 +18,10 @@ FIX="$MNEMON_ROOT/tests/fixtures/capture"
 REPORTS="$FIX/reports"
 
 echo "=== Real Capture Chain Tests ==="
-echo "toolchain: $(bash --version | head -1) · $(python3 --version 2>&1)"
+echo "toolchain: bash $BASH_VERSION · $(python3 --version 2>&1)"   # the running bash, never the PATH-resolved one (G30)
 # the legacy run (PATH=/usr/bin:/bin:$PATH, §7.16 / A12): asserted, not assumed
 if [[ "$(command -v bash)" == /bin/bash ]]; then
-  [[ "$(bash --version | head -1)" == *"version 3.2."* ]] && pass "legacy toolchain: bash 3.2.x" || fail "legacy toolchain: bash 3.2.x" "$(bash --version | head -1)"
+  [[ "$BASH_VERSION" == 3.2.* ]] && pass "legacy toolchain: bash 3.2.x" || fail "legacy toolchain: bash 3.2.x" "running bash $BASH_VERSION"
   [[ "$(python3 --version 2>&1)" == "Python 3.9."* ]] && pass "legacy toolchain: python 3.9.x" || fail "legacy toolchain: python 3.9.x" "$(python3 --version 2>&1)"
 fi
 
