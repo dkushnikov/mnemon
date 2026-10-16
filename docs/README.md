@@ -107,7 +107,7 @@ Each skill runs the installed engine's dispatcher. From the shell, the same and 
 | `mnemon audit --canonical` | Folders whose URLs coincide under canonicalization v1 (read-only, nothing merged) |
 | `mnemon init <name> --vault <path> [--archive <dir>] [--collection <name>] [--search-provider grep\|qmd] [--reader-context <path> \| --reader-context-path <path>] [--charter <path>] [--writer-host <host>] [--default]` | Create an instance and scaffold its vault (never overwrites). `--reader-context` copies a profile into the vault, `--reader-context-path` references one in place; with neither, an existing `_meta/reader-context.md` or `reader-context.md` in the vault is used |
 | `mnemon doctor [--json]` | Check dependencies and instance health |
-| `mnemon config get <key> \| path \| list \| dump` | Inspect configuration |
+| `mnemon config get <key> \| keys \| path \| list \| dump` | Inspect configuration; `keys` prints the one key table (name, type, default) of [capture.md §12](capture.md#12-configuration) that the loader, `bin/lib_config.py` and the dispatcher share |
 | `mnemon release [--dry-run] [--now] [--drain-timeout <s>] [--rollback <ref>]` | Maintainers: lock → drain → fast-forward `main` → `release` → smoke → push; `--rollback` resets the engine under the same lock |
 | `mnemon version` | Engine version, branch, commit and root |
 | `mnemon ingest <inbox-dir> [--dry-run] [--only <id>] [--limit N] [--max-attempts N] [--retry <id>] [--json]` | Capture the `mnemon-envelope/1` files of a directory, one result record per envelope ([inbox.md](inbox.md)) |
