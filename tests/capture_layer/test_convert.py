@@ -448,6 +448,38 @@ class CaptureTextCLI(unittest.TestCase):
         self.assertNotIn("_worker", helptext, "the worker flag is hidden")
         self.assertIn("convert_timeout in seconds (default 120)", helptext)
 
+    def test_bounded_markdown_regexes_are_linear(self):
+        """G26: every regex applied to candidate markdown uses bounded, nesting-free character classes, so a
+        page of 200 KB of `[`, of `](` or of `<a` converts in under 2 s on either interpreter — the
+        old `\\[([^\\]]*)\\]` rescanned to the end of the line from every bracket (quadratic: a 102 KB page of
+        `[` held the vault lock 163 s)."""
+        from capture import check, sanitize
+        shapes = {"[": "[" * 200000, "](": "](" * 100000, "<a": "<a " * 66000}
+        for label, text in shapes.items():
+            raw = ("<html><head><title>Hostile</title></head><body><p>%s</p><p>A paragraph with more than six words after it.</p>"
+                   "</body></html>" % text.replace("<", "&lt;")).encode("utf-8")
+            t0 = time.monotonic()
+            rc, out, report, se = self.run_ct(None, raw_bytes=raw, extra=["--raw-kind", "rendered", "--timeout", "30"])
+            secs = time.monotonic() - t0
+            self.assertEqual(rc, 0, "%s: %s" % (label, se))
+            self.assertLess(secs, 2.0, "%s: %.2f s" % (label, secs))
+            self.assertIn(b"A paragraph with more than six words after it.", out, label)
+            self.assertEqual(report["completeness"], "complete", label)
+        # the pure functions, on the candidate side (a markdown candidate that is all brackets, parens or tags)
+        for label, md in (("[", "[" * 200000), ("](", "](" * 100000), ("<a", "<a " * 66000), ("![", "![" * 100000),
+                          ("[]", "[]" * 100000), ("(", "(" * 200000)):
+            t0 = time.monotonic()
+            check.candidate_text(md)
+            check.markdown_counts(md)
+            sanitize.markdown(md, "page")
+            self.assertLess(time.monotonic() - t0, 2.0, "%s: candidate_text + markdown_counts + sanitize.markdown" % label)
+        # the bounded shapes still match what they must
+        self.assertEqual(check.candidate_text("see [t](u) and ![a](i \"t\") and [r][1] and <https://h/x>\n\n[1]: https://h/y\n").split(),
+                         ["see", "t", "and", "a", "and", "r", "and", "https://h/x"])
+        md, counts = sanitize.markdown("![F](data:image/png;base64,%s)\n\n![H](/_next/image?url=%%2Fa.png&w=1)\n" % ("A" * 300000), "page")
+        self.assertEqual((counts["data_uris"], counts["next_images"]), (1, 1), "a 300 KB base64 figure is still repaired")
+        self.assertNotIn("data:", md)
+
     def test_timeout_supervises_the_converters(self):
         stubs = tmpdir()
         pidfile = os.path.join(stubs, "pandoc.pid")

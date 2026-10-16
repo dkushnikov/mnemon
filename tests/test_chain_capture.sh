@@ -463,11 +463,11 @@ assert_eq "$(nfolders)" "$n0" "...no folder"
 
 # ==================================================================================================
 echo "--- (d3) conversion under a killable owner: convert_timeout holds, the raw is retained, the vault lock is free (G25) ---"
-# three pages whose conversion exceeds a 5 s convert_timeout or cannot be converted at all: 400 000 bytes of
-# `<script ` with no `>` (the stdlib parser is quadratic on that tail on python 3.9), 102 000 bytes of `[`
-# (the markdown link patterns), and a page whose conversion worker hangs in C code (the test hook). Each
-# capture ends within 10 s as timeout or convert, never retryable as a timeout, the raw retained, the lock
-# free for a second writer.
+# pages whose conversion exceeds a 5 s convert_timeout or cannot be converted at all: 400 000 bytes of
+# `<script ` with no `>` (the stdlib parser is quadratic on that tail on python 3.9), a page whose conversion
+# worker hangs in C code (the test hook) — each ends within 10 s as timeout or convert, never retryable as
+# a timeout, the raw retained, the lock free for a second writer — and 102 000 bytes of `[`, which held the
+# lock 163 s before the markdown patterns were bounded (G26) and now simply converts.
 python3 - "$SITE/hostile-script.html" "$SITE/brackets.html" <<'PY'
 import sys
 open(sys.argv[1], "wb").write(b"<script " * 50000)
@@ -476,6 +476,20 @@ PY
 "$MNEMON" init t4 --vault "$VAULT" --archive "$ARCHIVE" --non-interactive >/dev/null 2>&1 || { echo "mnemon init t4 failed"; exit 1; }
 printf 'convert_timeout: 5\nacquire_timeout: 30\n' >> "$XDG_CONFIG_HOME/mnemon/instances/t4.yaml"
 d3_run() {   # <page> <capture id> [env assignments…]: the capture in the background, watched for 10 s
+  local page="$1" cid="$2" pid t0 i
+  shift 2
+  d3_start "$page" "$cid" "$@"
+  cls="$(result error_class)"
+  [[ "$cls" == "timeout" || "$cls" == "convert" ]] && pass "$page: the capture ends as timeout or convert ($cls, exit $rc)" || fail "$page: the capture ends as timeout or convert" "error_class '$cls', exit $rc, status $(result status)"
+  if [[ "$cls" == "timeout" ]]; then
+    assert_eq "$(result retryable) $(rget "$cid" '.stage')" "false convert" "$page: a conversion timeout is not retryable, stage convert"
+    assert_contains "$err" "convert_timeout=5" "$page: the message names convert_timeout"
+  fi
+  assert_eq "$(rget "$cid" '.raw_published')" "true" "$page: the raw is retained (published) for --resume"
+  [[ -f "$ARCHIVE/$(rget "$cid" '.revision').html" ]] && pass "$page: ...the raw file is in the archive" || fail "$page: the raw file is in the archive" "missing"
+  assert_eq "$(nfolders)" "$n0" "$page: no folder"
+}
+d3_start() {   # <page> <capture id> [env assignments…]: the capture in the background, watched for 10 s; the lock afterwards
   local page="$1" cid="$2" pid t0 i
   shift 2
   t0=$(date +%s)
@@ -490,18 +504,14 @@ d3_run() {   # <page> <capture id> [env assignments…]: the capture in the back
   rc=0; wait "$pid" || rc=$?
   out="$(cat "$TEST_TMPDIR/d3.out")"; err="$(cat "$TEST_TMPDIR/d3.err")"
   python3 "$MNEMON_ROOT/bin/vault-lock.py" --vault "$VAULT" -- true && pass "$page: a second writer takes the vault lock afterwards" || fail "$page: a second writer takes the vault lock afterwards" "vault-lock.py exit $?"
-  cls="$(result error_class)"
-  [[ "$cls" == "timeout" || "$cls" == "convert" ]] && pass "$page: the capture ends as timeout or convert ($cls, exit $rc)" || fail "$page: the capture ends as timeout or convert" "error_class '$cls', exit $rc, status $(result status)"
-  if [[ "$cls" == "timeout" ]]; then
-    assert_eq "$(result retryable) $(rget "$cid" '.stage')" "false convert" "$page: a conversion timeout is not retryable, stage convert"
-    assert_contains "$err" "convert_timeout=5" "$page: the message names convert_timeout"
-  fi
-  assert_eq "$(rget "$cid" '.raw_published')" "true" "$page: the raw is retained (published) for --resume"
-  [[ -f "$ARCHIVE/$(rget "$cid" '.revision').html" ]] && pass "$page: ...the raw file is in the archive" || fail "$page: the raw file is in the archive" "missing"
-  assert_eq "$(nfolders)" "$n0" "$page: no folder"
 }
 d3_run hostile-script d3-script
-d3_run brackets d3-brackets
+# the 102 KB page of `[`: with the bounded markdown regexes (G26) its conversion is linear — it publishes
+# (no eligible line: completeness unknown) in seconds instead of holding the lock for minutes
+d3_start brackets d3-brackets
+assert_eq "$rc $(result status) $(result completeness)" "0 extracted unknown" "brackets: the page converts and publishes (G26: the link patterns are linear on a line of brackets)"
+assert_eq "$(nfolders)" "$((n0 + 1))" "brackets: ...one folder"
+rm -rf "$VAULT/Sources/$(result revision)"; n0="$(nfolders)"
 cp "$SITE/article.html" "$SITE/hang.html"       # a page of its own (the article is captured already): the worker hangs on it
 d3_run hang d3-hang MNEMON_TEST_CONVERT_HANG=1
 assert_eq "$(rget d3-hang '.error_class') $(rget d3-hang '.retryable')" "timeout false" "the hung worker: killed by the supervisor (timeout, not retryable)"

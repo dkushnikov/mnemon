@@ -87,25 +87,29 @@ CONTAINER_TAGS = frozenset(("div", "section", "aside", "article", "ol", "ul", "d
 
 _ZW = dict.fromkeys(map(ord, "­​‌‍⁠﻿"), None)
 _TOKEN = re.compile(r"[^\W_]+")
+# Every regex applied to candidate markdown uses bounded, nesting-free character classes (G26): a class
+# that excludes its own delimiters stops at the next one, and a bound caps what one attempt may scan, so a
+# line of 100 000 `[` or `(` costs a bounded number of steps per position — linear, never the rescan to the
+# end of the line from every bracket that held the vault lock for minutes.
 # A link destination: a bare one, or `<…>`, each optionally followed by a quoted title — pandoc writes the
 # page's `title` attribute there (`[3](#S7.T3 "Table 3 ‣ 7.1 … (RQ1)")`), and a title's parentheses must not
 # end the match early or its words leak into the candidate's token sequence (G15, the SIA paper).
-_MD_DEST = r"(?:<[^<>\n]*>|[^()\s]*)(?:\s+(?:\"[^\"\n]*\"|'[^'\n]*'))?\s*"
-_MD_IMAGE = re.compile(r"!\[([^\]\n]*)\]\(" + _MD_DEST + r"\)")
-_MD_LINK = re.compile(r"\[([^\]\n]*)\]\(" + _MD_DEST + r"\)")
-_MD_REFLINK = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")
-_MD_LINKDEF = re.compile(r"^\s*\[[^\]]+\]:\s*\S+.*$", re.MULTILINE)
-_MD_AUTOLINK = re.compile(r"<(https?://[^>\s]+)>")
+_MD_DEST = r"(?:<[^<>\n]{0,4000}>|[^()\s]{0,4000})(?:[ \t]{1,20}(?:\"[^\"\n]{0,2000}\"|'[^'\n]{0,2000}'))?[ \t]{0,20}"
+_MD_IMAGE = re.compile(r"!\[([^\[\]\n]{0,2000})\]\(" + _MD_DEST + r"\)")
+_MD_LINK = re.compile(r"\[([^\[\]\n]{0,2000})\]\(" + _MD_DEST + r"\)")
+_MD_REFLINK = re.compile(r"\[([^\[\]\n]{0,2000})\]\[[^\[\]\n]{0,2000}\]")
+_MD_LINKDEF = re.compile(r"^[ \t]{0,3}\[[^\[\]\n]{1,2000}\]:[ \t]{0,20}\S[^\n]{0,4000}$", re.MULTILINE)
+_MD_AUTOLINK = re.compile(r"<(https?://[^>\s]{1,4000})>")
 # An HTML tag has a tag's shape and never spans lines: `max<sub>i<j</sub>` reads `maxi<j(si − sj)` in the DOM
 # text, and a `<` followed by letters must not swallow everything up to a `>` lines later (G16); the
 # separator after the name is horizontal whitespace, never a newline.
-_MD_HTML_TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9:-]*(?:[^\S\n][^<>\n]*)?/?>")
+_MD_HTML_TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9:-]{0,100}(?:[^\S\n][^<>\n]{0,2000})?/?>")
 _MD_CODE_RUN = re.compile(r"`+")
 # An emphasis, code or strike marker with word characters on both sides (`*emph*asis`, pandoc's rendering
 # of <em>emph</em>asis) is markup inside a word, not a split: the candidate is also indexed with those
 # markers removed. A literal `*` in page text stays a boundary in the plain index, so the DOM text keeps
 # satisfying its own reference.
-_INTRAWORD_MARK = re.compile(r"(?<=[^\W_])[*`~]+(?=[^\W_])")
+_INTRAWORD_MARK = re.compile(r"(?<=[^\W_])[*`~]{1,100}(?=[^\W_])")
 
 
 class Acq(NamedTuple):
@@ -706,14 +710,14 @@ _H_HTML = re.compile(r"<h[1-6]\b", re.IGNORECASE)
 _LI_HTML = re.compile(r"<li\b", re.IGNORECASE)
 _TABLE_HTML = re.compile(r"<table\b", re.IGNORECASE)
 _PRE_HTML = re.compile(r"<pre\b", re.IGNORECASE)
-_A_HTML = re.compile(r"<a\b[^>]*\bhref=", re.IGNORECASE)
+_A_HTML = re.compile(r"<a(?=[\s/>])[^<>]{0,2000}?\bhref=", re.IGNORECASE)
 _IMG_HTML = re.compile(r"<img\b", re.IGNORECASE)
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _H_MD = re.compile(r"^ {0,3}#{1,6}\s")
-_LI_MD = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\S")
-_TABLE_SEP_MD = re.compile(r"^\s*\|?\s*:?-{1,}:?\s*(?:\|\s*:?-{1,}:?\s*)*\|?\s*$")
-_LINK_MD = re.compile(r"(?<!!)\[[^\]]*\]\([^)]+\)|<https?://[^>\s]+>")
-_IMG_MD = re.compile(r"!\[[^\]]*\]\([^)]+\)|\*\[(?:img|inline figure omitted at capture): [^\]]*\]\*")
+_LI_MD = re.compile(r"^[ \t]{0,20}(?:[-*+]|\d{1,9}[.)])[ \t]{1,20}\S")
+_TABLE_SEP_MD = re.compile(r"^[ \t]{0,20}\|?[ \t]{0,20}:?-{1,2000}:?[ \t]{0,20}(?:\|[ \t]{0,20}:?-{1,2000}:?[ \t]{0,20}){0,500}\|?[ \t]{0,20}$")
+_LINK_MD = re.compile(r"(?<!!)\[[^\[\]\n]{0,2000}\]\([^()\s]{1,4000}\)|<https?://[^>\s]{1,4000}>")
+_IMG_MD = re.compile(r"!\[[^\[\]\n]{0,2000}\]\([^()\s]{1,4000}\)|\*\[(?:img|inline figure omitted at capture): [^\[\]\n]{0,2000}\]\*")
 
 
 def markdown_counts(md: str) -> dict:

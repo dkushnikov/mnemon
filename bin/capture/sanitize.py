@@ -40,13 +40,16 @@ class Timeout(Exception):
     """The conversion deadline passed during sanitation (checked between tables)."""
 
 _WS = re.compile(r"\s+")
-_ONLY_SPACE = re.compile(r"^\s*(?:&nbsp;|\s)*$")
+_ONLY_SPACE = re.compile(r"^(?:&nbsp;|\s){0,100000}$")
 
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
-_MD_DATA_IMAGE = re.compile(r"!\[([^\]]*)\]\(\s*<?data:image/[^)]*\)")
-_MD_DATA_LINK = re.compile(r"\[([^\]]*)\]\(\s*<?data:[^)]*\)")
-_MD_NEXT_IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*?/_next/image\?[^)]*\)")
-_MD_NEXT_LINK = re.compile(r"\[([^\]]*)\]\([^)]*?/_next/image\?[^)]*\)")
+# The markdown-level patterns use bounded, nesting-free character classes (G26): the alt text never holds a
+# bracket or a newline, a destination never a parenthesis or whitespace (a base64 figure is one unbroken
+# run, megabytes long — its bound is the raw cap), so a line of 100 000 `[` or `(` is linear.
+_MD_DATA_IMAGE = re.compile(r"!\[([^\[\]\n]{0,2000})\]\([ \t]{0,20}<?data:image/[^()\s]{0,20000000}\)")
+_MD_DATA_LINK = re.compile(r"\[([^\[\]\n]{0,2000})\]\([ \t]{0,20}<?data:[^()\s]{0,20000000}\)")
+_MD_NEXT_IMAGE = re.compile(r"!\[([^\[\]\n]{0,2000})\]\([^()\s]{0,4000}?/_next/image\?[^()\s]{0,4000}\)")
+_MD_NEXT_LINK = re.compile(r"\[([^\[\]\n]{0,2000})\]\([^()\s]{0,4000}?/_next/image\?[^()\s]{0,4000}\)")
 _IOW = re.compile(r"\\iow_now:Ne\s*")
 _TEX_RESIDUE = re.compile(r"^\s*\\[A-Za-z@]+\s*[{\[]|\\(?:newcommand|renewcommand|providecommand|def\\|DeclareMathOperator|"
                           r"RequirePackage|usepackage|IfFileExists|makeatletter|newenvironment|newtheorem|DeclarePairedDelimiter)\b")
