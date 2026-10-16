@@ -1805,8 +1805,11 @@ cap_acquire_site() {
     if [[ ! -f "$plan" ]]; then
       mkdir -p "$(dirname "$plan")"
       # the effective rendering switches govern the mapping as well as the bundle (A12: --no-render
-      # means no rendering anywhere, and implies --no-external)
-      map_args=(map "$URL" --max-pages "${SITE_MAX_PAGES:-40}" --site-timeout "${SITE_TIMEOUT:-900}" --policy "$(cap_policy_json)" --out "$plan.tmp")
+      # means no rendering anywhere, and implies --no-external), and the mapper gets the same
+      # --external settings as fetch-bundle (G12): a JavaScript-shell landing is mapped through the
+      # same chain the bundle will fetch it with
+      map_args=(map "$URL" --max-pages "${SITE_MAX_PAGES:-40}" --site-timeout "${SITE_TIMEOUT:-900}" --policy "$(cap_policy_json)"
+                --external "$(cap_external_json)" --out "$plan.tmp")
       ${NO_RENDER:-false} && map_args+=(--no-render)
       cap_external_off && map_args+=(--no-external)
       "$CAP_SITE_CMD" "${map_args[@]}" >>"$ATTEMPT_DIR/stderr.txt" 2>&1 || rc=$?

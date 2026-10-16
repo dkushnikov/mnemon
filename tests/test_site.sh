@@ -243,6 +243,11 @@ assert_eq "$(ls "$VSTATE/runs/auto-1/attempt-1" | tr '\n' ' ')" "plan.json " "..
 assert_eq "$(rget auto-1 '.input_path') $(rget auto-1 '.request.site') $(rget auto-1 '.request.input_sha256') $(rget auto-1 '.site_plan_sha256')" "$plan_auto auto null $(shasum -a 256 "$plan_auto" | cut -c1-64)" "...input_path = the plan, site bound as \"auto\", input_sha256 null, site_plan_sha256 recorded (A4)"
 assert_eq "$(site_calls map) $(site_calls fetch-bundle)" "1 1" "map ran once, then fetch-bundle"
 assert_contains "$(grep '^map' "$STUB_DIR/site-calls")" "map https://auto.example.com/ --max-pages 40 --site-timeout 900" "...with the instance's cap and deadline"
+# the mapper gets the same --external settings as the bundle fetcher (G12)
+map_ext="$(grep '^map' "$STUB_DIR/site-calls" | head -1 | sed -n 's/.*--external \({[^}]*}\).*/\1/p')"
+bundle_ext="$(grep '^fetch-bundle' "$STUB_DIR/site-calls" | head -1 | sed -n 's/.*--external \({[^}]*}\).*/\1/p')"
+[[ -n "$map_ext" ]] && pass "...and --external ($map_ext)" || fail "map received --external" "$(grep '^map' "$STUB_DIR/site-calls" | head -1)"
+assert_eq "$map_ext" "$bundle_ext" "...the same --external JSON fetch-bundle receives"
 cmp -s "$plan_auto" "$ARCHIVE/$reva.site/plan.json" && pass "the bundle's plan.json is the generated plan" || fail "bundle plan == generated plan" "differs"
 python3 - "$(receipt auto-1)" "$FIX/reports/receipts/request-v2-site-auto.json" <<'PY' && pass "the receipt's key set equals receipts/request-v2-site-auto.json (incl. site_plan_sha256)" || fail "receipt key set == fixture" "differs"
 import json, sys
