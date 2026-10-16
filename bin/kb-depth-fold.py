@@ -53,7 +53,7 @@ def run_probe(url: str, landing_file, context: dict, deadline: proc.Deadline, po
         argv += ["--budget-s", "%.3f" % rem]
     if policy_json:
         argv += ["--policy", policy_json]
-    res = proc.run(argv, timeout=120, deadline=deadline)
+    res = proc.run(argv, timeout=None, deadline=deadline)     # bounded by the remaining budget alone (D11, A9)
     if res.timed_out:
         return {"_error": "probe timed out", "_timeout": True}
     if res.rc == 0:
