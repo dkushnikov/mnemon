@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 import unittest
 
@@ -219,6 +220,179 @@ class RobotsRules(unittest.TestCase):
         self.assertEqual(site.role_for("https://example.com/a/b/c", None, L), "other")
         self.assertEqual(site.role_for("https://example.com/en/x", None, "https://example.com/en/"), "product",
                          "the landing's own locale prefix is not localized")
+        self.assertEqual(site.role_for("https://example.com/en/docs/intro", None, L), "docs", "`en` is exempt from the locale rule")
+        self.assertEqual(site.role_for("https://example.com/en-us/docs/intro", None, L), "docs", "...and `en-*`")
+        self.assertEqual(site.role_for("https://en.example.com/x", None, L), "product")
+        self.assertEqual(site.role_for("https://example.com/de/x", None, L), "localized")
+        self.assertEqual(site.role_for("https://example.com/de/x", None, L, "https://example.com/de/"), "product",
+                         "the landing's locale is read from its final URL too")
+        self.assertEqual(site.role_for("https://example.com/fr/x", None, L, "https://example.com/de/"), "localized")
+
+    def test_robots_rules_match_path_and_query(self):
+        self.assertEqual(site.robots_path("https://example.com/search?q=x"), "/search?q=x")
+        self.assertEqual(site.robots_path("https://example.com/search"), "/search")
+        self.assertEqual(site.robots_path("https://example.com"), "/")
+        r = site.Robots.parse("User-agent: *\nDisallow: /search?\nDisallow: /*?page=\n")
+        self.assertTrue(r.allowed(site.robots_path("https://example.com/search")))
+        self.assertFalse(r.allowed(site.robots_path("https://example.com/search?q=x")))
+        self.assertFalse(r.allowed(site.robots_path("https://example.com/list?page=2")))
+        self.assertTrue(r.allowed(site.robots_path("https://example.com/list?sort=asc")))
+        self.assertEqual(site.robots_origin("https://docs.example.com/guide"), ("https", "docs.example.com", 443))
+        self.assertEqual(site.robots_origin("http://example.com:8080/x"), ("http", "example.com", 8080))
+        self.assertNotEqual(site.robots_origin("https://example.com/"), site.robots_origin("https://docs.example.com/"))
+
+
+class RobotsPerOrigin(unittest.TestCase):
+    """A10 / decision 10: the rules of the origin a page belongs to, fetched on first use, matched against
+    path?query — in the mapper's decisions, in its hop checks and in fetch-bundle's."""
+
+    def setUp(self):
+        self.server = LocalServer()
+        b = self.server.base
+        self.work = tmpdir("mnemon-origin-")
+        self.env = clean_env({"MNEMON_FETCH_URL_REWRITE": "https://docs.example.test=%s/docs-host;https://example.test=%s" % (b, b)})
+        self.env["RENDER_URL_CMD"] = write_stub(self.work, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
+        links = '<a href="/search">s</a> <a href="/search?q=x">q</a> <a href="https://docs.example.test/guide">g</a>'
+        self.server.add("/", page("Landing", "<nav>%s</nav>" % links))
+        self.server.add("/robots.txt", "User-agent: *\nDisallow: /search?\n", content_type="text/plain")
+        self.server.add("/search", page("Search"))
+        self.server.add("/docs-host/robots.txt", "User-agent: *\nDisallow: /\n", content_type="text/plain")
+        self.server.add("/docs-host/guide", page("Guide"))
+
+    def tearDown(self):
+        self.server.close()
+        shutil.rmtree(self.work, ignore_errors=True)
+
+    def plan_path(self):
+        plan = {"schema": "mnemon-site-plan/1", "landing": "https://example.test/", "created": "2026-10-15T12:00:00Z",
+                "discovery": {"sources": [], "robots": {"fetched": True, "status": 200, "groups": ["*"], "rules_applied": ["Disallow: /search?"]}},
+                "hosts": ["example.test", "docs.example.test"], "caps": {"max_pages": 40},
+                "pages": [{"n": 1, "url": "https://example.test/", "canonical_url": "https://example.test/", "role": "landing", "include": True,
+                           "reason": "landing", "title": None, "discovered_by": "landing", "render": None},
+                          {"n": 2, "url": "https://example.test/search", "canonical_url": "https://example.test/search", "role": "product",
+                           "include": True, "reason": "product page", "title": None, "discovered_by": "landing-links", "render": None},
+                          {"n": 3, "url": "https://example.test/search?q=x", "canonical_url": "https://example.test/search?q=x", "role": "product",
+                           "include": True, "reason": "product page", "title": None, "discovered_by": "landing-links", "render": None},
+                          {"n": 4, "url": "https://docs.example.test/guide", "canonical_url": "https://docs.example.test/guide", "role": "docs",
+                           "include": True, "reason": "docs", "title": None, "discovered_by": "landing-links", "render": None}]}
+        path = os.path.join(self.work, "plan.json")
+        with open(path, "w") as fh:
+            json.dump(plan, fh)
+        return path
+
+    def test_fetch_bundle_consults_the_destination_origin(self):
+        out = os.path.join(self.work, "bundle")
+        rc, so, se = run_cli([CS, "fetch-bundle", self.plan_path(), "--out", out, "--report", os.path.join(self.work, "b.json")],
+                             env=self.env, timeout=120)
+        self.assertEqual(rc, 0, se)
+        with open(os.path.join(out, "manifest.json")) as fh:
+            manifest = json.load(fh)
+        by = {p["url"]: p for p in manifest["pages"]}
+        self.assertEqual(by["https://example.test/search"]["disposition"], "captured")
+        self.assertEqual(by["https://example.test/search?q=x"]["disposition"], "fetch-failed", "Disallow: /search? matches the query form")
+        self.assertIn("robots", by["https://example.test/search?q=x"]["error"])
+        self.assertEqual(by["https://docs.example.test/guide"]["disposition"], "fetch-failed", "the docs origin's own robots disallows it")
+        self.assertIn("robots", by["https://docs.example.test/guide"]["error"])
+        paths = [r[1] for r in self.server.requests()]
+        self.assertEqual(paths.count("/docs-host/robots.txt"), 1, "the docs origin's robots.txt was fetched once")
+        self.assertNotIn("/docs-host/guide", paths, "a disallowed destination is never fetched")
+        self.assertNotIn("/search?q=x", paths)
+        self.assertIn("/search", paths)
+
+    def test_map_excludes_by_the_page_origin_and_the_query(self):
+        plan_path = os.path.join(self.work, "mapped.json")
+        rc, so, se = run_cli([CS, "map", "https://example.test/", "--out", plan_path, "--host", "docs.example.test"], env=self.env, timeout=120)
+        self.assertEqual(rc, 0, se)
+        with open(plan_path) as fh:
+            plan = json.load(fh)
+        by = {p["url"]: p for p in plan["pages"]}
+        self.assertEqual((by["https://example.test/search"]["include"], by["https://example.test/search"]["role"]), (True, "product"))
+        self.assertEqual(by["https://example.test/search?q=x"]["reason"], "excluded: robots")
+        self.assertEqual(by["https://docs.example.test/guide"]["reason"], "excluded: robots")
+        self.assertEqual(plan["discovery"]["robots"]["rules_applied"], ["Disallow: /search?"], "the landing's robots stays the plan's summary")
+        paths = [r[1] for r in self.server.requests()]
+        self.assertNotIn("/docs-host/guide", paths)
+        self.assertEqual(paths.count("/docs-host/robots.txt"), 1)
+
+
+class MapCli(unittest.TestCase):
+    def test_map_without_out_prints_the_plan_and_leaves_no_temp_dir(self):
+        server = LocalServer()
+        work = tmpdir("mnemon-mapcli-")
+        try:
+            server.add("/", page("Landing", '<a href="/product">p</a>'))
+            server.add("/product", page("Product"))
+            env = clean_env()
+            env["RENDER_URL_CMD"] = write_stub(work, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
+            before = set(d for d in os.listdir(tempfile.gettempdir()) if d.startswith("mnemon-map-"))
+            rc, so, se = run_cli([CS, "map", server.base + "/", "--json"], env=env, timeout=120)
+            self.assertEqual(rc, 0, se)
+            plan = json.loads(so)
+            self.assertEqual(plan["schema"], "mnemon-site-plan/1")
+            self.assertEqual([p["url"] for p in plan["pages"] if p["include"]], [server.base + "/", server.base + "/product"])
+            after = set(d for d in os.listdir(tempfile.gettempdir()) if d.startswith("mnemon-map-"))
+            self.assertEqual(after - before, set(), "the mapper's work directory is removed on exit")
+        finally:
+            server.close()
+            shutil.rmtree(work, ignore_errors=True)
+
+
+class Aggregate(unittest.TestCase):
+    """Decision 14: text parts (README, llms.txt) and pages without a reference are neutral in the aggregate."""
+
+    def bundle(self, pages):
+        work = tmpdir("mnemon-agg-")
+        manifest_pages, members = [], []
+        for n, (url, role, body) in enumerate(pages, start=1):
+            nn = "%02d" % n
+            data = body.encode("utf-8")
+            fr = {"schema": "mnemon-fetch/1", "method": "direct", "charset": "utf-8", "kind": "page", "metadata": {},
+                  "acquisition": {"outcome": "ok", "kind": None, "evidence": None, "visible_words": 100}}
+            frb = reportmod.canonical_bytes(fr)
+            with open(os.path.join(work, nn + ".html"), "wb") as fh:
+                fh.write(data)
+            with open(os.path.join(work, nn + ".fetch.json"), "wb") as fh:
+                fh.write(frb)
+            manifest_pages.append({"n": n, "url": url, "role": role, "file": nn + ".html", "fetch_report": nn + ".fetch.json",
+                                   "sha256": reportmod.sha256_bytes(data), "bytes": len(data), "disposition": "captured",
+                                   "error_class": None, "error": None, "raw_kind": "response", "http_status": 200})
+        manifest = {"schema": "mnemon-site-bundle/1", "landing": pages[0][0], "created": "2026-10-15T12:00:00Z",
+                    "pages": manifest_pages, "members": members}
+        with open(os.path.join(work, "manifest.json"), "wb") as fh:
+            fh.write(reportmod.canonical_bytes(manifest))
+        return work
+
+    def test_text_parts_are_neutral(self):
+        env = clean_env()
+        old = dict(os.environ)
+        os.environ.update(env)
+        try:
+            work = self.bundle([("https://example.test/", "landing", page("Landing")),
+                                ("https://raw.githubusercontent.com/o/r/HEAD/README.md", "github_readme", "# Repo\n\nA readme with more than six words.\n")])
+            code, report = site.assemble(work, os.path.join(work, "out.md"))
+            self.assertEqual(code, 0)
+            by = {p["role"]: p for p in report["pages"]}
+            self.assertEqual((by["github_readme"]["converter"], by["github_readme"]["completeness"]), ("text", "unknown"))
+            self.assertEqual(report["completeness"], "complete", "an unknown text part does not keep the aggregate from complete")
+            shutil.rmtree(work, ignore_errors=True)
+            work = self.bundle([("https://example.test/", "landing", page("Landing")),
+                                ("https://example.test/p", "product", "<html><head><title>P</title></head><body><p>Short only.</p>"
+                                 "<table><tr><td>a</td></tr></table></body></html>")])
+            code, report = site.assemble(work, os.path.join(work, "out.md"))
+            self.assertEqual(code, 0)
+            self.assertEqual(report["pages"][1]["completeness"], "unknown", "no eligible line: unknown per part")
+            self.assertEqual(report["completeness"], "complete")
+            shutil.rmtree(work, ignore_errors=True)
+            lost = page("Product") + "<table><tr><td>a</td><td>b</td></tr></table>"
+            work = self.bundle([("https://example.test/", "landing", page("Landing")), ("https://example.test/p", "product", lost)])
+            code, report = site.assemble(work, os.path.join(work, "out.md"))
+            self.assertEqual(code, 0)
+            if report["pages"][1]["completeness"] == "partial":
+                self.assertEqual(report["completeness"], "partial", "a judged part that is partial still decides")
+            shutil.rmtree(work, ignore_errors=True)
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
 
 
 class Bundle(SiteBase):

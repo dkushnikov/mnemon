@@ -499,7 +499,8 @@ elif cmd == "site-plan-check":
                 pat = pat[: -len(re.escape("$"))] + "$"
             rules.append((m.group(1).lower(), len(m.group(2)), re.compile(pat)))
     for p in included:
-        path = urlsplit(p["url"]).path or "/"
+        parts = urlsplit(p["url"])
+        path = (parts.path or "/") + ("?" + parts.query if parts.query else "")   # RFC 9309: path?query
         best = None
         for kind, length, rx in rules:
             if rx.match(path) and (best is None or length > best[1] or (length == best[1] and kind == "allow")):

@@ -28,7 +28,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -97,10 +99,11 @@ def cmd_map(args) -> int:
                          render_timeout=number(args.render_timeout, config.get("render_timeout", 90), "--render-timeout"),
                          render_cmd=args.render_cmd, thin_words=int(number(args.thin_words, config.get("thin_words", 60), "--thin-words")),
                          deadline=deadline)
+    work = tempfile.mkdtemp(prefix="mnemon-map-")      # the landing's staging area, whatever --out says
     try:
         plan = site.map_site(args.url, policy, max_pages=int(number(args.max_pages, config.get("site_max_pages", site.DEFAULT_MAX_PAGES), "--max-pages")),
                              includes=args.include or [], excludes=args.exclude or [], deadline=deadline, fetch_opts=opts,
-                             extra_hosts=args.host or [], tmp_dir=os.path.dirname(os.path.abspath(args.out)) if args.out else None)
+                             extra_hosts=args.host or [], tmp_dir=work)
     except Exception as exc:    # an invalid landing URL or a regex error is usage
         from capture import resolve
         import re
@@ -108,6 +111,8 @@ def cmd_map(args) -> int:
             print("capture-site: %s" % exc, file=sys.stderr)
             return 2
         raise
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
     if args.out:
         reportmod.write_report(args.out, plan)
     if args.json or not args.out:

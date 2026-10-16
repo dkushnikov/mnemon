@@ -4,9 +4,11 @@
 shell — the sitemaps named by robots.txt and /sitemap.xml, /llms.txt, a docs table of contents, the linked
 GitHub README) and writes a reviewable plan (`mnemon-site-plan/1`) with a role, an include decision and a
 reason per page; host eligibility is explicit (no public-suffix guessing), robots.txt is honoured per RFC 9309
-(product token `mnemon`, longest match, unreachable = everything disallowed, 4xx = no rules), roles are
-anchored path rules, and the cap keeps pages by role priority. `fetch_bundle` owns the page loop and its
-deadline: every included page through the chain of §3.3 (host and robots eligibility checked per hop), ≥ 1 s
+(product token `mnemon`, longest match over path?query, the rules of each origin a page belongs to —
+fetched on first use — unreachable = everything disallowed, 4xx = no rules), roles are anchored path rules
+(`en` and `en-*` are never `localized`), and the cap keeps pages by role priority. `fetch_bundle` owns the
+page loop and its deadline: every included page through the chain of §3.3 (host and robots eligibility
+checked per hop, against the destination origin's robots), ≥ 1 s
 between requests to one host, `NN.html` + `NN.fetch.json` per page, `plan.json` (a byte copy) and
 `manifest.json` last — the manifest binds every member with its size and hash and carries the acquisition
 dispositions (`captured`, `fetch-failed`, `skipped-timeout`). `verify_bundle` recomputes the manifest hash
@@ -20,6 +22,8 @@ import html as htmlmod
 import json
 import os
 import re
+import shutil
+import tempfile
 import time
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Tuple
@@ -89,27 +93,40 @@ def is_locale_segment(segment: str) -> bool:
     return bool(m) and m.group(1) in LOCALE_LANGS
 
 
-def role_for(url: str, title: Optional[str], landing_url: str) -> str:
-    """The role by anchored path and title rules, in the order of §3.6."""
+def is_localized_segment(segment: str) -> bool:
+    """A locale tag that marks a translated variant: `en` and `en-*` are exempt (an English docs tree under
+    /en/ or /en-us/ is the site's content, not a localization of it)."""
+    s = segment.lower()
+    return is_locale_segment(s) and not (s == "en" or s.startswith("en-"))
+
+
+def role_for(url: str, title: Optional[str], landing_url: str, landing_final: Optional[str] = None) -> str:
+    """The role by anchored path and title rules, in the order of §3.6. The landing's own locale prefix (of
+    the given URL or of its final URL after redirects) is never `localized`."""
     parts = urlsplit(url)
     host = strip_www(parts.hostname or "")
     lhost = strip_www(urlsplit(landing_url).hostname or "")
     path = parts.path or "/"
     segs = [s.lower() for s in _segments(path)]
-    lsegs = [s.lower() for s in _segments(urlsplit(landing_url).path or "/")]
     if len(segs) == 2 and segs[0] in ("jobs", "careers"):
         return "job"
     if len(segs) == 1 and segs[0] in ("jobs", "careers"):
         return "careers"
     if any(s in LEGAL_SEGMENTS for s in segs):
         return "legal"
-    landing_locale = lsegs[0] if lsegs and is_locale_segment(lsegs[0]) else None
+    landing_locales = set()
+    for lu in (landing_url, landing_final):
+        lsegs = [s.lower() for s in _segments(urlsplit(lu).path or "/")] if lu else []
+        if lsegs and is_locale_segment(lsegs[0]):
+            landing_locales.add(lsegs[0])
     for i, s in enumerate(segs):
-        if is_locale_segment(s) and not (i == 0 and s == landing_locale):
+        if is_localized_segment(s) and not (i == 0 and s in landing_locales):
             return "localized"
     sub = host.split(".")[0] if host != lhost else ""
-    if sub and sub != lhost.split(".")[0] and is_locale_segment(sub) and host.endswith(lhost):
+    if sub and sub != lhost.split(".")[0] and is_localized_segment(sub) and host.endswith(lhost):
         return "localized"
+    if segs and is_locale_segment(segs[0]) and (not is_localized_segment(segs[0]) or segs[0] in landing_locales):
+        segs = segs[1:]        # an exempt prefix (/en/, /en-us/, the landing's own locale) is not a path segment of the role
     t = (title or "").strip().lower()
     if any(s in HOWTO_SEGMENTS for s in segs) or any(t.startswith(p) for p in HOWTO_TITLES):
         return "howto"
@@ -227,11 +244,29 @@ def _robots_match(pattern: str, path: str) -> bool:
     return re.match(regex, path) is not None
 
 
-def fetch_robots(policy: policymod.Policy, landing_url: str, deadline: proc.Deadline) -> Robots:
-    parts = urlsplit(landing_url)
-    url = "%s://%s/robots.txt" % (parts.scheme, parts.netloc)
+def robots_path(url: str) -> str:
+    """What the rules are matched against (RFC 9309): the path plus the query when there is one."""
+    parts = urlsplit(url)
+    path = parts.path or "/"
+    return path + "?" + parts.query if parts.query else path
+
+
+def robots_origin(url: str) -> Tuple[str, str, int]:
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
     try:
-        resp = policy.get(url, deadline=deadline)
+        port = parts.port
+    except ValueError:
+        port = None
+    return scheme, (parts.hostname or "").lower(), port or (443 if scheme == "https" else 80)
+
+
+def fetch_robots(policy: policymod.Policy, url: str, deadline: proc.Deadline) -> Robots:
+    """The robots.txt of the origin of `url` (scheme, host, port)."""
+    parts = urlsplit(url)
+    robots_url = "%s://%s/robots.txt" % (parts.scheme, parts.netloc)
+    try:
+        resp = policy.get(robots_url, deadline=deadline)
     except policymod.PolicyError as exc:
         if exc.kind in ("timeout", "connection", "tls", "too-many-redirects"):
             return Robots.unreachable()
@@ -244,6 +279,30 @@ def fetch_robots(policy: policymod.Policy, landing_url: str, deadline: proc.Dead
     r.status = 200
     r.fetched = True
     return r
+
+
+class RobotsCache:
+    """`(scheme, host, port) → Robots`, fetched lazily the first time an origin is consulted (A10: the rules
+    of every origin a site page lands on, not the landing's applied to all); matched against path?query."""
+
+    def __init__(self, policy: policymod.Policy, deadline: proc.Deadline):
+        self.policy = policy
+        self.deadline = deadline
+        self.by_origin: Dict[Tuple[str, str, int], Robots] = {}
+
+    def seed(self, url: str, robots: Robots) -> None:
+        self.by_origin[robots_origin(url)] = robots
+
+    def for_url(self, url: str) -> Robots:
+        key = robots_origin(url)
+        r = self.by_origin.get(key)
+        if r is None:
+            r = fetch_robots(self.policy, url, self.deadline)
+            self.by_origin[key] = r
+        return r
+
+    def allowed(self, url: str) -> bool:
+        return self.for_url(url).allowed(robots_path(url))
 
 
 # --- discovery ---------------------------------------------------------------------------------------------
@@ -328,14 +387,24 @@ class _Candidate:
 def map_site(landing_url: str, policy: policymod.Policy, *, max_pages: int = DEFAULT_MAX_PAGES, includes=(), excludes=(),
              deadline: Optional[proc.Deadline] = None, fetch_opts: Optional[fetch.Options] = None, extra_hosts=(),
              tmp_dir: Optional[str] = None) -> dict:
-    """Discover the same-site pages of a landing and build the plan (`mnemon-site-plan/1`)."""
+    """Discover the same-site pages of a landing and build the plan (`mnemon-site-plan/1`). The landing raw is
+    staged in `tmp_dir` (a private temporary directory allocated and removed here when none is given)."""
+    own_tmp = tmp_dir is None
+    tmp_dir = tmp_dir or tempfile.mkdtemp(prefix="mnemon-map-")
+    try:
+        return _map_site(landing_url, policy, max_pages, includes, excludes, deadline, fetch_opts, extra_hosts, tmp_dir)
+    finally:
+        if own_tmp:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _map_site(landing_url, policy, max_pages, includes, excludes, deadline, fetch_opts, extra_hosts, tmp_dir) -> dict:
     deadline = deadline or proc.Deadline.never()
     landing_url = resolve.canonicalize(landing_url).url
     landing_host = urlsplit(landing_url).hostname or ""
     hosts = [landing_host.lower()] + [h.lower() for h in extra_hosts if h.lower() != landing_host.lower()]
     sources: List[dict] = []
     # the landing through the chain (rendered when it is a JavaScript shell)
-    tmp_dir = tmp_dir or os.path.dirname(os.path.abspath(os.devnull))
     raw_path = os.path.join(tmp_dir, ".mnemon-map-landing-%d.html" % os.getpid())
     opts = fetch_opts or fetch.Options(policy, deadline=deadline)
     opts.deadline = deadline
@@ -353,7 +422,10 @@ def map_site(landing_url: str, policy: policymod.Policy, *, max_pages: int = DEF
                 pass
     landing_title = landing_report.get("metadata", {}).get("title") or check.page_title(landing_html)
     landing_final = landing_report.get("final_url") or landing_url
+    # the landing origin's robots is the plan's summary; every other origin's is consulted on first use
     robots = fetch_robots(policy, landing_url, deadline)
+    robots_cache = RobotsCache(policy, deadline)
+    robots_cache.seed(landing_url, robots)
     candidates: Dict[str, _Candidate] = {}
     order: List[_Candidate] = []
 
@@ -402,7 +474,7 @@ def map_site(landing_url: str, policy: policymod.Policy, *, max_pages: int = DEF
     sources.append({"name": "llms.txt", "yield": n, "note": note})
     # docs table of contents: HelpTOC.json next to the first docs page, and the links of that page
     n, note = 0, None
-    docs_pages = [c for c in order if role_for(c.url, None, landing_url) == "docs"]
+    docs_pages = [c for c in order if role_for(c.url, None, landing_url, landing_final) == "docs" and robots_cache.allowed(c.url)]
     if docs_pages:
         first = docs_pages[0].url
         docs_base = first if first.endswith("/") else first.rsplit("/", 1)[0] + "/"
@@ -459,10 +531,11 @@ def map_site(landing_url: str, policy: policymod.Policy, *, max_pages: int = DEF
         path = urlsplit(c.url).path or "/"
         ext = path.rsplit(".", 1)[-1].lower() if "." in path.rsplit("/", 1)[-1] else ""
         if c.role != "github_readme":
-            c.role = "llms_txt" if c.discovered_by == "llms.txt" else role_for(c.url, c.title, landing_url)
-        if robots.state == "unreachable":
+            c.role = "llms_txt" if c.discovered_by == "llms.txt" else role_for(c.url, c.title, landing_url, landing_final)
+        page_robots = robots_cache.for_url(c.url)
+        if page_robots.state == "unreachable":
             c.include, c.reason = False, "excluded: robots-unreachable"
-        elif not robots.allowed(path):
+        elif not page_robots.allowed(robots_path(c.url)):
             c.include, c.reason = False, "excluded: robots"
         elif ext in NON_HTML_EXT and c.role not in ("github_readme", "llms_txt"):
             c.include, c.reason = False, "excluded: content-type"
@@ -496,7 +569,7 @@ def map_site(landing_url: str, policy: policymod.Policy, *, max_pages: int = DEF
             h = urlsplit(url).hostname or ""
             if not host_eligible(h, landing_host, hosts):
                 return "redirect-off-site"
-            if url != _c.url and not robots.allowed(urlsplit(url).path or "/"):
+            if url != _c.url and not robots_cache.allowed(url):
                 return "robots"
             return None
         try:
@@ -514,7 +587,7 @@ def map_site(landing_url: str, policy: policymod.Policy, *, max_pages: int = DEF
             c.include, c.reason = False, "excluded: content-type"
             continue
         c.title = check.page_title(resp.text())
-        new_role = role_for(c.url, c.title, landing_url)
+        new_role = role_for(c.url, c.title, landing_url, landing_final)
         if new_role != c.role and new_role not in INCLUDED_ROLES and not c.reason.endswith("(--include)"):
             c.role, c.include, c.reason = new_role, False, "excluded: %s" % new_role
             continue
@@ -547,7 +620,7 @@ def fetch_bundle(plan: dict, plan_bytes: bytes, out_dir: str, policy: policymod.
     hosts = list(plan.get("hosts") or [landing_host])
     os.makedirs(out_dir, exist_ok=True)
     policy.min_interval_s = max(policy.min_interval_s, PACE_S)
-    robots = fetch_robots(policy, landing_url, deadline)
+    robots_cache = RobotsCache(policy, deadline)       # every origin's robots, fetched on first use (A10)
     included = [p for p in plan["pages"] if p.get("include")]
     included.sort(key=lambda p: (0 if p.get("role") == "landing" else 1, int(p["n"])))
     pages: List[dict] = []
@@ -586,7 +659,7 @@ def fetch_bundle(plan: dict, plan_bytes: bytes, out_dir: str, policy: policymod.
             h = urlsplit(url).hostname or ""
             if not host_eligible(h, landing_host, hosts):
                 return "redirect-off-site"
-            if (url != _first or not _landing) and not robots.allowed(urlsplit(url).path or "/"):
+            if (url != _first or not _landing) and not robots_cache.allowed(url):
                 return "robots"
             return None
 
@@ -759,9 +832,13 @@ def assemble(directory: str, out_path: str, *, deadline: Optional[proc.Deadline]
     included = len(pages_out)
     captured = sum(1 for p in manifest.get("pages", []) if p.get("disposition") == "captured")
     converted = sum(1 for p in pages_out if p["disposition"] == "converted")
+    # the aggregate (A5, decision 14): every included page converted and every converted page that has a
+    # reference complete; parts without a reference (README, llms.txt, a page with no eligible line) keep
+    # their `unknown` per part and are neutral here
+    judged = [p for p in pages_out if p["disposition"] == "converted" and p["completeness"] not in (None, "unknown")]
     if landing_blocked:
         completeness = "blocked"
-    elif converted == included and all(p["completeness"] == "complete" for p in pages_out if p["disposition"] == "converted"):
+    elif converted == included and all(p["completeness"] == "complete" for p in judged):
         completeness = "complete"
     else:
         completeness = "partial"
