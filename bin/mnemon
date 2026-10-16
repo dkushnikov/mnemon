@@ -30,7 +30,10 @@ Usage: mnemon [--instance <name>] [--config <path>] <command> [args...]
 
 Commands:
   add <gateway options>      Capture a source (knowledge-gateway.sh source-add)
-  status                     Pipeline status for the instance
+  status [--brief [--json] [--budget <s>]]
+                             Pipeline status for the instance; --brief prints one line of the
+                             vault store (counters + the data checks' summary; read-only, the
+                             folder walk stops at --budget seconds, default 10, and says so)
   site map <url> [--max-pages N] [--include <re>]… [--exclude <re>]… [--out <plan.json>] [--json]
                              Discover a site's pages into a reviewable plan for `add --site`
                              (a regex is searched in the page's path plus ?query, e.g. ^/blog/;
@@ -58,8 +61,11 @@ Commands:
                              the vault lock; one result record per envelope (docs/inbox.md)
   fence-probe                Probe the extractor fence of the installed Claude Code and
                              record a pass for its version (needed before extraction)
-  doctor [--instance <name>] [--json]
-                             Health checks: ok|warn|fail <check> — <detail>
+  doctor [--instance <name>] [--json] [--data [--list <check>]]
+                             Health checks: ok|warn|fail <check> — <detail>; --data adds the
+                             19 vault store checks (store/… data/… human/…; docs/specs/
+                             2026-10-16-vault-store.md), --list <check> prints every item of
+                             one of them (<id> <class or reason> <rating> <words>, tab-separated)
   config get <key> | path | list | keys | dump
                              Resolved configuration (keys: the scalar keys and defaults)
   release [--dry-run] [--now] [--drain-timeout <s>] [--rollback <ref>]
@@ -817,15 +823,68 @@ PY
   _check "$status" ingest "$detail"
 }
 
+# data — the vault store checks of docs/specs/2026-10-16-vault-store.md (S3–S5): bin/vault-doctor.py
+# on one read-only snapshot of the vault. Every line is routed through _check so text and JSON stay
+# uniform; in --json the tool's whole mnemon-doctor-data/1 document is embedded as "data". An
+# exception in the tool is one `fail doctor/data — error: …` line — the engine checks are never lost.
+DOCTOR_DATA_JSON=""
+_doctor_data() {
+  local outf errf linesf rc=0 tab=$'\t' status name detail err
+  outf="$(mktemp)"; errf="$(mktemp)"; linesf="$(mktemp)"
+  if $DOCTOR_JSON; then
+    python3 "$BIN_DIR/vault-doctor.py" --json >"$outf" 2>"$errf" || rc=$?
+  else
+    python3 "$BIN_DIR/vault-doctor.py" --tsv >"$outf" 2>"$errf" || rc=$?
+  fi
+  if [[ $rc -ne 0 || ! -s "$outf" ]]; then
+    err="$(tail -c 400 "$errf" | tr '\n\t' '  ' | sed 's/[[:space:]]*$//')"
+    _check fail doctor/data "error: ${err:-vault-doctor.py exited $rc without output}"
+    rm -f "$outf" "$errf" "$linesf"
+    return 0
+  fi
+  if $DOCTOR_JSON; then
+    DOCTOR_DATA_JSON="$(cat "$outf")"
+    if ! python3 - "$outf" >"$linesf" 2>"$errf" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    doc = json.load(fh)
+for c in doc["checks"]:
+    print("%s\t%s\t%s" % (c["status"], c["name"], c["detail"].replace("\t", " ").replace("\n", " ")))
+PY
+    then
+      _check fail doctor/data "error: vault-doctor.py --json printed no readable document ($(tail -c 200 "$errf" | tr '\n' ' '))"
+      DOCTOR_DATA_JSON=""
+      rm -f "$outf" "$errf" "$linesf"
+      return 0
+    fi
+  else
+    mv "$outf" "$linesf"
+  fi
+  while IFS="$tab" read -r status name detail; do
+    [[ -n "$status" && -n "$name" ]] || continue
+    _check "$status" "$name" "$detail"
+  done <"$linesf"
+  rm -f "$outf" "$errf" "$linesf"
+  return 0
+}
+
 cmd_doctor() {
+  local with_data=false list_check=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --instance) [[ $# -lt 2 ]] && usage_error "doctor: --instance requires a value"; _select_instance "$2"; _apply_selectors; shift 2 ;;
       --json)     DOCTOR_JSON=true; shift ;;
+      --data)     with_data=true; shift ;;
+      --list)     [[ $# -lt 2 ]] && usage_error "doctor: --list requires a check name (e.g. thin or data/thin)"; list_check="$2"; with_data=true; shift 2 ;;
       -h|--help)  usage; exit 0 ;;
       *)          usage_error "doctor: unknown option $1" ;;
     esac
   done
+  # --list prints only that list: every item of one data check, tab-separated (read-only)
+  if [[ -n "$list_check" ]]; then
+    _resolve_or_die
+    exec python3 "$BIN_DIR/vault-doctor.py" --list "$list_check"
+  fi
 
   local have_config=false errf warn
   errf="$(mktemp)"
@@ -1038,10 +1097,23 @@ cmd_doctor() {
     _doctor_ingest
   fi
 
+  # the data group (--data): after the engine checks, on the resolved instance
+  if $with_data; then
+    if $have_config; then
+      _doctor_data
+    else
+      _check warn doctor/data "not probed: no configuration"
+    fi
+  fi
+
   local rc=0
   if [[ $DOCTOR_FAILS -gt 0 ]]; then rc=1; fi
   if $DOCTOR_JSON; then
-    printf '{"checks":[%s],"exit":%d}\n' "$DOCTOR_ITEMS" "$rc"
+    if [[ -n "$DOCTOR_DATA_JSON" ]]; then
+      printf '{"checks":[%s],"data":%s,"exit":%d}\n' "$DOCTOR_ITEMS" "$DOCTOR_DATA_JSON" "$rc"
+    else
+      printf '{"checks":[%s],"exit":%d}\n' "$DOCTOR_ITEMS" "$rc"
+    fi
   fi
   exit $rc
 }
@@ -1459,6 +1531,14 @@ case "$cmd" in
             printf 'mnemon fence-probe: bin/fence-probe.sh not present in this engine\n' >&2
             exit 2 ;;
   status)   _reject_post_command_selectors "$@"; _resolve_or_die
+            # --brief: the one line of the vault store (docs/specs/2026-10-16-vault-store.md S4) from
+            # bin/vault-doctor.py — read-only, budgeted (default 10 s), honest when it cannot finish;
+            # --json gives the counters and the checks' summary instead of the line
+            if _has_flag --brief "$@"; then
+              _status_args=()
+              for _sa in "$@"; do [[ "$_sa" == --brief ]] || _status_args+=("$_sa"); done
+              exec python3 "$BIN_DIR/vault-doctor.py" --brief ${_status_args[@]+"${_status_args[@]}"}
+            fi
             exec "$BIN_DIR/knowledge-gateway.sh" status "$@" ;;
   site)     _reject_post_command_selectors "$@"; _resolve_or_die
             # mnemon site map <url> … → capture-site.py map (capture layer §3.6): a reviewable plan,

@@ -498,8 +498,9 @@ Universal reference storage. Sources captured and extracted by AI, synthesis wri
 ## Commands
 
 - `/source-add <URL or title>` — capture a new source
-- `/source-process` — extract unprocessed sources
-- `/knowledge-status` — show pipeline status
+- `/source-search <query>` — search the library
+- `/source-status` — library dashboard
+- `mnemon reindex` — rebuild this index from Sources/
 """
 
     # Atomic: the vault never holds a half-written index.md (D15, §3.5).

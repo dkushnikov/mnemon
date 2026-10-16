@@ -1038,12 +1038,18 @@ case "$ACTION" in
       exit 0
     fi
     total=$(find "$VAULT_PATH/Sources" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-    extracted=$(grep -l '^status: extracted' "$VAULT_PATH/Sources/"*/extract.md 2>/dev/null | wc -l | tr -d ' ') || extracted=0
+    # The one Extracted (vault store S2): folders with extract.md — the processing axis, read by
+    # bin/lib_vault.py as the doctor and `status --brief` read it; the stored `status:` words of
+    # extract.md are a breakdown of that count, never a second counter (#9)
+    vc="$(python3 "$SCRIPT_DIR/lib_vault.py" --vault "$VAULT_PATH" --status-counts 2>/dev/null || true)"
+    _vc() { printf '%s\n' "$vc" | awk -F= -v k="$1" '$1 == k { print $2; exit }'; }
+    extracted="$(_vc extracted)"; extracted="${extracted:-0}"
     # §3.9: superseded = folders named in any published source.md's supersedes: (both forms);
     # chunked = extract.md files with extraction: chunked
     counts="$(cap_py status-counts "$VAULT_PATH/Sources" 2>/dev/null || echo 'superseded=0 chunked=0')"
     echo "Total sources: $total"
     echo "Extracted: $extracted"
+    echo "By status: extracted $(_vc status_extracted | sed 's/^$/0/') · dismissed $(_vc status_dismissed | sed 's/^$/0/') · legacy words $(_vc status_legacy_words | sed 's/^$/0/') · empty $(_vc status_empty | sed 's/^$/0/') · unknown $(_vc status_unknown | sed 's/^$/0/')"
     echo "Superseded: ${counts#superseded=}" | sed 's/ chunked=.*//'
     echo "Chunked: ${counts##*chunked=}"
     echo ""
