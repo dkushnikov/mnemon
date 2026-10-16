@@ -1374,10 +1374,13 @@ cap_fetch_report_file() {   # → prints the path, or nothing
 }
 
 # capture-text.py on a raw (the receipt's fetch report as --fetch-report, the recorded raw kind,
-# the URL's kind): the conversion report goes into the receipt before the source is published.
+# the URL's kind): the conversion report goes into the receipt before the source is published. A
+# failure is `convert`; the report's `retryable` is honoured when it says so (false for `nesting`,
+# a document no parse can finish — G8), else the class table decides (retryable).
 cap_convert_text_of() {   # <raw file> <out file>
   local report="$ATTEMPT_DIR/capture-text.json" fr rk="${RAW_KIND:-response}"
   local -a args
+  FAIL_RETRYABLE=""
   fr="$(cap_fetch_report_file)"
   [[ -n "$fr" && "$(jq -r '.egress // ""' "$fr")" == "external" ]] && rk=external
   case "$rk" in response|rendered|site|external) ;; *) rk=response ;; esac
@@ -1387,6 +1390,7 @@ cap_convert_text_of() {   # <raw file> <out file>
   if ! "$CAP_TEXT_CMD" "${args[@]}" 2>>"$ATTEMPT_DIR/stderr.txt" || [[ ! -s "$2" ]]; then
     [[ -f "$report" ]] && cap_receipt_report text "$report"
     FAIL_CLASS=convert; FAIL_MSG="conversion of $1 produced no text ($(jq -r '.error // ""' "$report" 2>/dev/null || true))"
+    FAIL_RETRYABLE="$(jq -r 'if .retryable == null then "" else (.retryable | tostring) end' "$report" 2>/dev/null || true)"
     return 1
   fi
   cap_receipt_report text "$report"

@@ -8,6 +8,7 @@ import shutil
 import sys
 import time
 import unittest
+from unittest import mock
 
 from _helpers import BIN, HTML_FIX, assert_same_keys, clean_env, expected_shapes, pid_alive, read_fixture, read_json, \
     run_cli, tmpdir, wait_gone, write_stub
@@ -282,6 +283,59 @@ class CaptureTextCLI(unittest.TestCase):
         self.assertIn("café".encode("utf-8"), text)
         self.assertEqual(report["acquisition"], "ok")
         self.assertTrue(report["method"].startswith("direct+"))
+
+    def test_deep_nesting_yields_a_report_not_a_traceback(self):
+        """G8: 20 000 nested <div> and 6 000 never-closed <table><tr><td> convert into a report within 5 s —
+        the walks are iterative and the tree is depth-capped; the external converters run under --timeout,
+        so a tool that chokes on the shape is skipped, never waited for."""
+        deep_divs = ("<html><head><title>Deep</title></head><body>" + "<div>" * 20000
+                     + "<p>A paragraph nested twenty thousand levels deep with more than six words.</p>"
+                     + "</div>" * 20000 + "</body></html>")
+        cells = ("<html><head><title>Cells</title></head><body>" + "<table><tr><td>" * 6000
+                 + "A cell nested six thousand tables deep with more than six words in it." + "</body></html>")
+        for label, raw in (("divs", deep_divs), ("cells", cells)):
+            t0 = time.monotonic()
+            rc, text, report, se = self.run_ct(None, raw_bytes=raw.encode("utf-8"), extra=["--raw-kind", "rendered", "--timeout", "2"])
+            secs = time.monotonic() - t0
+            self.assertLess(secs, 5.0, "%s: %.2f s" % (label, secs))
+            self.assertNotIn("Traceback", se, label)
+            self.assertIsNotNone(report, label)
+            self.assertEqual(rc, 0, "%s: %s" % (label, se))
+            self.assertIn(b"more than six words", text, label)
+            self.assertIsNone(report["retryable"], label)
+        root = convert.parse("<div>" * 20000 + "<p>deep</p>" + "</div>" * 20000)
+        depth, n = 0, root
+        while n.children and not n.children[0].is_text:
+            depth += 1
+            n = n.children[0]
+        self.assertLessEqual(depth, convert.MAX_DEPTH + 1, "the builder caps the tree's depth")
+        self.assertIn("deep", convert.dom_text(root), "...and keeps the text of the flattened subtree")
+
+    def test_recursion_error_is_a_permanent_nesting_failure(self):
+        """A RecursionError never escapes convert(): it is `convert` / `nesting`, retryable false (G8)."""
+        raw = read_fixture("cookie.html", binary=True)
+        with mock.patch.object(convert, "content_subtree", side_effect=RecursionError("deep")):
+            with self.assertRaises(convert.ConvertError) as ctx:
+                convert.convert(raw, "https://example.com/c", "rendered", "page", None)
+        self.assertEqual((ctx.exception.error_class, str(ctx.exception), ctx.exception.retryable), ("convert", "nesting", False))
+        # the CLI on a JSON-LD document nested past the interpreter's limit: python 3.9's json raises
+        # RecursionError, which is the nesting report (exit 1, no traceback); a newer json decodes the
+        # document iteratively and the page converts — either way a report, never a traceback
+        raw = ('<html><head><title>Ld</title><script type="application/ld+json">' + "[" * 100000 + "]" * 100000
+               + '</script></head><body><p>Body text with more than six words in it.</p></body></html>').encode("utf-8")
+        t0 = time.monotonic()
+        rc, text, report, se = self.run_ct(None, raw_bytes=raw, extra=["--raw-kind", "rendered", "--timeout", "2"])
+        self.assertLess(time.monotonic() - t0, 5.0)
+        self.assertNotIn("Traceback", se)
+        self.assertIn(rc, (0, 1), se)
+        if rc == 1:
+            self.assertEqual((report["error_class"], report["error"], report["retryable"]), ("convert", "nesting", False))
+            self.assertIsNone(text)
+            self.assertIn("nesting", se)
+        else:
+            self.assertIsNone(report["retryable"])
+        if sys.version_info[:2] == (3, 9):
+            self.assertEqual(rc, 1, "on the legacy interpreter json.loads raises RecursionError: the nesting report")
 
     def test_timeout_supervises_the_converters(self):
         stubs = tmpdir()

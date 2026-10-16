@@ -12,6 +12,7 @@
  },
  "error_class": null,
  "error": null,
+ "retryable": null,
  "converter": "pandoc",
  "acquisition": "ok",
  "candidates": [

@@ -1118,6 +1118,31 @@ assert_contains "$(head -1 "$STUB_DIR/text-calls")" "--raw-kind response --kind 
 assert_eq "$(jq -c '.capture_report.text == input' "$(receipt fx-text)" "$FIX/reports/text.json")" "true" "...the receipt holds the report verbatim"
 assert_eq "$(rget fx-text '.published_candidates | length')" "1" "...and the eligible dated candidates"
 
+# the gateway honours the conversion report's `retryable` (G8): a converter reporting a permanent
+# failure (`nesting` — a document no parse can finish) fails the capture as convert / retryable false
+cat > "$STUBS/capture-text-nesting.py" <<STUB
+#!/usr/bin/env bash
+# capture-text.py stub: the nesting failure of G8 — the /2 report with retryable false, exit 1, no text
+report=""; prev=""
+for a in "\$@"; do case "\$prev" in --report) report="\$a" ;; esac; prev="\$a"; done
+printf '%s\\n' "\$*" >> "$STUB_DIR/text-calls"
+python3 - "\$report" "$FIX/reports/text.json" <<'PY'
+import json, sys
+rep = json.load(open(sys.argv[2]))
+rep.update({"method": None, "bytes": 0, "words": 0, "completeness": "unknown", "tool": None, "converter": None,
+            "error_class": "convert", "error": "nesting", "retryable": False})
+json.dump(rep, open(sys.argv[1], "w"))
+PY
+echo "capture-text: convert: nesting" >&2
+exit 1
+STUB
+chmod +x "$STUBS/capture-text-nesting.py"
+stub_reset
+MNEMON_CAPTURE_TEXT_CMD="$STUBS/capture-text-nesting.py" run_gw --url "https://example.com/nesting" --capture-id nest-1
+assert_eq "$rc $(result status) $(result error_class) $(result retryable)" "1 failed convert false" "a conversion report with retryable false → failed / convert / retryable false (the gateway honours the report)"
+assert_eq "$(rget nest-1 '.state + " " + .error_class + " " + (.retryable|tostring) + " " + (.raw_published|tostring) + " " + .capture_report.text.error')" "failed convert false true nesting" "...the receipt: failed, convert, retryable false, the raw published (retained), the report's error nesting"
+assert_eq "$(result revision)" "" "...nothing published"
+
 # ---------------------------------------------------------------------------------------------
 echo "--- p2.3 published: gating (§7.8, A12) ---"
 STUB_FETCH_HTML_META='<meta property="article:published_time" content="2026-09-01T10:00:00Z">' run_gw --url "https://example.com/dated-article" --capture-id pub-1

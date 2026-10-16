@@ -49,9 +49,10 @@ DATED_TYPES = ("Article", "BlogPosting", "NewsArticle", "ScholarlyArticle")
 
 
 class ConvertError(Exception):
-    def __init__(self, error_class: str, message: str):
+    def __init__(self, error_class: str, message: str, retryable: bool = True):
         super().__init__(message)
         self.error_class = error_class
+        self.retryable = retryable      # false for `nesting`: a document no walk can finish never converts
 
 
 class Result(NamedTuple):
@@ -126,6 +127,13 @@ def decode(raw: bytes, charset_hint: Optional[str] = None) -> Tuple[str, str]:
 
 
 # --- a small DOM -------------------------------------------------------------------------------------------
+# Every walk over the tree is iterative (an explicit stack, never recursion), and the builder caps the
+# depth of the tree at MAX_DEPTH: elements opened deeper than that are flattened into the capped node
+# as a run of siblings and text. So 20 000 nested <div> or 6 000 never-closed <table><tr><td> cost one
+# pass and no walk can raise RecursionError (G8).
+
+MAX_DEPTH = 2000
+
 
 class Node:
     __slots__ = ("tag", "attrs", "children", "text")
@@ -144,15 +152,26 @@ class Node:
         return self.attrs.get(name) or ""
 
     def find(self, pred):
-        if not self.is_text and pred(self):
-            return self
-        for c in self.children:
-            if c.is_text:
+        """The first element in document order for which pred holds (iterative, depth-first)."""
+        stack = [self]
+        while stack:
+            n = stack.pop()
+            if n.is_text:
                 continue
-            found = c.find(pred)
-            if found is not None:
-                return found
+            if pred(n):
+                return n
+            stack.extend(reversed(n.children))
         return None
+
+    def elements(self):
+        """Every element of the subtree in document order, this node included (iterative)."""
+        stack = [self]
+        while stack:
+            n = stack.pop()
+            if n.is_text:
+                continue
+            yield n
+            stack.extend(reversed(n.children))
 
 
 _CLOSE_ON_OPEN = {
@@ -171,6 +190,7 @@ class _Builder(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.root = Node("#root")
         self.stack = [self.root]
+        self.overflow = 0       # elements opened past MAX_DEPTH, flattened into the capped node
 
     def _close_until(self, tags):
         for i in range(len(self.stack) - 1, 0, -1):
@@ -183,6 +203,12 @@ class _Builder(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
+        if self.overflow or len(self.stack) > MAX_DEPTH:
+            # past the cap: the element becomes a flat child of the capped node, its content too
+            self.stack[-1].children.append(Node(tag, {k.lower(): (v if v is not None else "") for k, v in attrs}))
+            if tag not in VOID:
+                self.overflow += 1
+            return
         if tag in _CLOSE_ON_OPEN:
             self._close_until(_CLOSE_ON_OPEN[tag])
         elif tag in _P_CLOSERS and self.stack[-1].tag == "p":
@@ -194,6 +220,9 @@ class _Builder(HTMLParser):
 
     def handle_endtag(self, tag):
         tag = tag.lower()
+        if self.overflow:
+            self.overflow -= 1
+            return
         for i in range(len(self.stack) - 1, 0, -1):
             if self.stack[i].tag == tag:
                 del self.stack[i:]
@@ -219,25 +248,26 @@ def to_html(node: Node, for_pandoc: bool = False) -> str:
     `<main>` when one exists and drops `<header>`) and attributes bare `<pre>` elements so pandoc fences them
     — the same content, so the candidate can keep what the fetch got and the fence rules apply."""
     parts: List[str] = []
-
-    def walk(n: Node):
+    stack = [(node, False)]                 # (node, leaving)
+    while stack:
+        n, leaving = stack.pop()
         if n.is_text:
             parts.append(htmlmod.escape(n.text, quote=False))
-            return
+            continue
         tag = n.tag
         if for_pandoc and tag in PANDOC_AS_DIV:
             tag = "div"
+        if leaving:
+            if n.tag != "#root" and n.tag not in VOID:
+                parts.append("</%s>" % tag)
+            continue
         if n.tag != "#root":
             attrs = "".join(' %s="%s"' % (k, htmlmod.escape(v, quote=True)) for k, v in n.attrs.items())
             if for_pandoc and tag == "pre" and not any(k in ("id", "class") or k.startswith("data-") for k in n.attrs):
                 attrs += ' data-mnemon="pre"'      # pandoc fences an attributed <pre>; it indents a bare one
             parts.append("<%s%s>" % (tag, attrs))
-        for c in n.children:
-            walk(c)
-        if n.tag != "#root" and n.tag not in VOID:
-            parts.append("</%s>" % tag)
-
-    walk(node)
+        stack.append((n, True))
+        stack.extend((c, False) for c in reversed(n.children))
     return "".join(parts)
 
 
@@ -248,15 +278,13 @@ def normalize_scalar(value: str, limit: int) -> str:
 
 def node_text(node: Node) -> str:
     parts: List[str] = []
-
-    def walk(n):
+    stack = [node]
+    while stack:
+        n = stack.pop()
         if n.is_text:
             parts.append(n.text)
         else:
-            for c in n.children:
-                walk(c)
-
-    walk(node)
+            stack.extend(reversed(n.children))
     return re.sub(r"\s+", " ", "".join(parts)).strip()
 
 
@@ -287,7 +315,9 @@ def content_subtree(root: Node, kind: str) -> Node:
     if sub is None:
         sub = root
 
-    def prune(n: Node, in_code: bool):
+    stack = [(sub, False)]                  # (node, inside <pre>/<code>)
+    while stack:
+        n, in_code = stack.pop()
         kept = []
         for c in n.children:
             if c.is_text:
@@ -298,11 +328,9 @@ def content_subtree(root: Node, kind: str) -> Node:
             code = in_code or c.tag in ("pre", "code")
             if not code and (_is_container(c, check.COOKIE_CONTAINER) or _is_container(c, check.COMMENTS_CONTAINER)):
                 continue
-            prune(c, code)
             kept.append(c)
+            stack.append((c, code))
         n.children = kept
-
-    prune(sub, False)
     return sub
 
 
@@ -335,7 +363,9 @@ def dom_text(node: Node, reference: bool = False) -> str:
         elif text:
             lines.append(text)
 
-    def walk(n: Node, in_pre: bool):
+    stack = [(node, False, False)]          # (node, inside <pre>, leaving)
+    while stack:
+        n, in_pre, leaving = stack.pop()
         if n.is_text:
             if in_pre and "\n" in n.text:
                 pieces = n.text.split("\n")
@@ -345,19 +375,19 @@ def dom_text(node: Node, reference: bool = False) -> str:
                     buf.append(piece)
             else:
                 buf.append(n.text)
-            return
+            continue
         block = n.tag in BLOCK
+        if leaving:
+            if block:
+                flush()
+            continue
         if block:
             flush()
-        heading = n.tag in HEADINGS_PREFIXED
-        if heading:
+        if n.tag in HEADINGS_PREFIXED:
             state["heading"] = True
-        for c in n.children:
-            walk(c, in_pre or n.tag == "pre")
-        if block:
-            flush()
-
-    walk(node, False)
+        stack.append((n, in_pre, True))
+        child_pre = in_pre or n.tag == "pre"
+        stack.extend((c, child_pre, False) for c in reversed(n.children))
     flush()
     return "\n".join(lines)
 
@@ -367,17 +397,11 @@ def dom_text(node: Node, reference: bool = False) -> str:
 def _meta_values(root: Node, *names) -> List[str]:
     wanted = set(n.lower() for n in names)
     out = []
-
-    def walk(n):
-        if not n.is_text:
-            if n.tag == "meta":
-                key = (n.attr("name") or n.attr("property") or n.attr("itemprop")).lower()
-                if key in wanted and n.attr("content").strip():
-                    out.append(n.attr("content").strip())
-            for c in n.children:
-                walk(c)
-
-    walk(root)
+    for n in root.elements():
+        if n.tag == "meta":
+            key = (n.attr("name") or n.attr("property") or n.attr("itemprop")).lower()
+            if key in wanted and n.attr("content").strip():
+                out.append(n.attr("content").strip())
     return out
 
 
@@ -392,43 +416,37 @@ def normalize_date(value: str) -> str:
     return value
 
 
-def _jsonld_dates(root: Node) -> List[dict]:
-    out = []
-
-    def nodes(obj):
+def _jsonld_objects(data):
+    """Every JSON object of a parsed JSON-LD document, outermost first (iterative)."""
+    stack = [data]
+    while stack:
+        obj = stack.pop()
         if isinstance(obj, dict):
             yield obj
-            for v in obj.values():
-                for n in nodes(v):
-                    yield n
+            stack.extend(reversed(list(obj.values())))
         elif isinstance(obj, list):
-            for v in obj:
-                for n in nodes(v):
-                    yield n
+            stack.extend(reversed(obj))
 
-    def walk(n):
-        if n.is_text:
-            return
-        if n.tag == "script" and "ld+json" in n.attr("type").lower():
-            try:
-                data = json.loads("".join(c.text for c in n.children if c.is_text))
-            except ValueError:
-                return
-            for obj in nodes(data):
-                types = obj.get("@type")
-                if isinstance(types, str):
-                    types = [types]
-                if not isinstance(types, list):
-                    continue
-                for t in types:
-                    if t in DATED_TYPES and isinstance(obj.get("datePublished"), str):
-                        out.append({"value": normalize_date(obj["datePublished"]), "source": "jsonld:%s" % t})
-                        break
-            return
-        for c in n.children:
-            walk(c)
 
-    walk(root)
+def _jsonld_dates(root: Node) -> List[dict]:
+    out = []
+    for n in root.elements():
+        if n.tag != "script" or "ld+json" not in n.attr("type").lower():
+            continue
+        try:
+            data = json.loads("".join(c.text for c in n.children if c.is_text))
+        except ValueError:
+            continue
+        for obj in _jsonld_objects(data):
+            types = obj.get("@type")
+            if isinstance(types, str):
+                types = [types]
+            if not isinstance(types, list):
+                continue
+            for t in types:
+                if t in DATED_TYPES and isinstance(obj.get("datePublished"), str):
+                    out.append({"value": normalize_date(obj["datePublished"]), "source": "jsonld:%s" % t})
+                    break
     return out
 
 
@@ -510,7 +528,7 @@ def empty_report(url: str) -> dict:
     """Every key of mnemon-capture-text/2 with its null shape."""
     return {
         "schema": "mnemon-capture-text/2", "url": url, "method": None, "bytes": 0, "words": 0, "title": None,
-        "completeness": "unknown", "tool": None, "error_class": None, "error": None, "converter": None,
+        "completeness": "unknown", "tool": None, "error_class": None, "error": None, "retryable": None, "converter": None,
         "acquisition": "unknown", "candidates": [], "reference_count": 0, "eligible_count": 0, "missing_count": 0,
         "glued_count": 0, "headings_missing_count": 0, "missing_examples": [],
         "inventory": {k: {"html": 0, "md": 0} for k in ("headings", "list_items", "tables", "code_blocks", "links", "images")},
@@ -544,13 +562,18 @@ def convert(raw: bytes, url: str, raw_kind: str = "response", kind: str = "page"
         sanitized, html_repairs = sanitize.html(text, kind, deadline=deadline)
     except sanitize.Timeout as exc:
         raise ConvertError("timeout", str(exc))
-    root = parse(sanitized)
-    title = find_title(root) or (meta_in.get("title") if isinstance(meta_in.get("title"), str) else None)
-    page_meta = page_metadata(root)
-    subtree = content_subtree(root, kind)
-    subtree_html = to_html(subtree)
-    reference = "\n".join(sanitize.reference_lines(dom_text(subtree, reference=True).split("\n"), kind))
-    dom_candidate = dom_text(subtree)
+    try:
+        root = parse(sanitized)
+        title = find_title(root) or (meta_in.get("title") if isinstance(meta_in.get("title"), str) else None)
+        page_meta = page_metadata(root)
+        subtree = content_subtree(root, kind)
+        subtree_html = to_html(subtree)
+        reference = "\n".join(sanitize.reference_lines(dom_text(subtree, reference=True).split("\n"), kind))
+        dom_candidate = dom_text(subtree)
+    except RecursionError:
+        # the walks are iterative and the tree is depth-capped; what is left is a JSON-LD document nested
+        # past the interpreter's limit — a page no parse can finish, permanent (G8)
+        raise ConvertError("convert", "nesting", retryable=False)
     acq = None
     if acq_in.get("outcome"):
         acq = check.Acq(acq_in.get("outcome"), acq_in.get("kind"), acq_in.get("evidence"), int(acq_in.get("visible_words") or 0), None)

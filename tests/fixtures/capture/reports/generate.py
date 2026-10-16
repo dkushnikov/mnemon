@@ -140,6 +140,7 @@ TEXT = {
     "tool": {"name": "pandoc", "version": "pandoc 3.9.0.2"},
     "error_class": None,
     "error": None,
+    "retryable": None,
     "converter": "pandoc",
     "acquisition": "ok",
     "candidates": [

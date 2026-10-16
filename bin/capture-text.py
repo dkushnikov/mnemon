@@ -64,11 +64,11 @@ def main() -> int:
             with open(args.rendered, "rb") as fh:
                 text = fh.read()
         except OSError as exc:
-            rep["error_class"], rep["error"] = "convert", "cannot read rendered text: %s" % exc.strerror
+            rep["error_class"], rep["error"], rep["retryable"] = "convert", "cannot read rendered text: %s" % exc.strerror, True
             reportmod.write_report(args.report, rep)
             return 1
         if not text.strip():
-            rep["error_class"], rep["error"] = "convert", "rendered text is empty"
+            rep["error_class"], rep["error"], rep["retryable"] = "convert", "rendered text is empty", True
             reportmod.write_report(args.report, rep)
             print("capture-text: convert failed for %s: %s" % (args.url, rep["error"]), file=sys.stderr)
             return 1
@@ -83,19 +83,25 @@ def main() -> int:
         with open(args.raw, "rb") as fh:
             raw = fh.read()
     except OSError as exc:
-        rep["error_class"], rep["error"] = "convert", "cannot read raw: %s" % exc.strerror
+        rep["error_class"], rep["error"], rep["retryable"] = "convert", "cannot read raw: %s" % exc.strerror, True
         reportmod.write_report(args.report, rep)
         return 1
     kind = args.kind or (fetch_report or {}).get("kind") or "page"
     try:
         result = convert.convert(raw, args.url, args.raw_kind, kind, fetch_report, deadline=deadline)
     except convert.ConvertError as exc:
-        rep["error_class"], rep["error"] = exc.error_class, str(exc)
+        rep["error_class"], rep["error"], rep["retryable"] = exc.error_class, str(exc), exc.retryable
         reportmod.write_report(args.report, rep)
         print("capture-text: %s for %s: %s" % (exc.error_class, args.url, exc), file=sys.stderr)
         return 124 if exc.error_class == "timeout" else 1
+    except RecursionError:
+        # the belt to convert()'s guard (G8): a report, never a traceback; permanent
+        rep["error_class"], rep["error"], rep["retryable"] = "convert", "nesting", False
+        reportmod.write_report(args.report, rep)
+        print("capture-text: convert for %s: nesting" % args.url, file=sys.stderr)
+        return 1
     if not result.text.strip():
-        rep["error_class"], rep["error"] = "convert", "empty conversion output"
+        rep["error_class"], rep["error"], rep["retryable"] = "convert", "empty conversion output", True
         reportmod.write_report(args.report, rep)
         print("capture-text: convert failed for %s: empty conversion output" % args.url, file=sys.stderr)
         return 1
