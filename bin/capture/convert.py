@@ -10,8 +10,10 @@ require word boundaries or accept the page's own joined form, nothing else dropp
 order — `defuddle` on the sanitized HTML (skipped for rendered, site and external raws and discarded on
 mojibake), `pandoc` on the same subtree (`-f html -t gfm-raw_html-tex_math_dollars --wrap=none`), the DOM text with the
 page's own word boundaries — each through `sanitize.markdown` and `check.conversion` until one passes;
-otherwise the DOM text, which satisfies the reference by construction. The inventory counts the same
-subtree. Stdlib only, python 3.9.
+otherwise the DOM text, which satisfies the reference by construction — and when it does not (a check
+defect), it is still published, as `partial` with the counts of its own check and the note `dom-text failed
+its own check` (G17); the conversion fails only when the reference is actually empty (no text at all). The
+inventory counts the same subtree. Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
@@ -49,10 +51,11 @@ DATED_TYPES = ("Article", "BlogPosting", "NewsArticle", "ScholarlyArticle")
 
 
 class ConvertError(Exception):
-    def __init__(self, error_class: str, message: str, retryable: bool = True):
+    def __init__(self, error_class: str, message: str, retryable: bool = True, candidates=None):
         super().__init__(message)
         self.error_class = error_class
         self.retryable = retryable      # false for `nesting`: a document no walk can finish never converts
+        self.candidates = list(candidates or [])    # what was tried before the failure (the failure report carries it)
 
 
 class Result(NamedTuple):
@@ -585,16 +588,17 @@ def convert(raw: bytes, url: str, raw_kind: str = "response", kind: str = "page"
     chosen: Optional[Tuple[str, str, dict, check.Conv]] = None
 
     def consider(name: str, md: Optional[str], note: Optional[str]):
+        """Judge one candidate; (entry, cleaned, md_repairs, conv) — the last three None when it produced
+        nothing to judge."""
         nonlocal chosen
         entry = {"converter": name, "missing_count": None, "glued_count": None, "headings_missing_count": None,
                  "chosen": False, "note": note}
+        candidates.append(entry)
         if md is None:
-            candidates.append(entry)
-            return
+            return entry, None, None, None
         if name == "defuddle" and MOJIBAKE.search(md) and not MOJIBAKE.search(sanitized):
             entry["note"] = "discarded: mojibake"
-            candidates.append(entry)
-            return
+            return entry, None, None, None
         cleaned, md_repairs = sanitize.markdown(md, kind)
         # the DOM text is plain text: compared as it is, never through the markdown link rewrites (G16)
         conv = check.conversion(cleaned, reference, title, markdown=(name != "dom-text"))
@@ -605,7 +609,7 @@ def convert(raw: bytes, url: str, raw_kind: str = "response", kind: str = "page"
             chosen = (name, cleaned, md_repairs, conv)
         elif chosen is None and entry["note"] is None and not cleaned.strip():
             entry["note"] = "empty after sanitation"
-        candidates.append(entry)
+        return entry, cleaned, md_repairs, conv
 
     if raw_kind in ("rendered", "site", "external"):
         candidates.append({"converter": "defuddle", "missing_count": None, "glued_count": None,
@@ -617,9 +621,18 @@ def convert(raw: bytes, url: str, raw_kind: str = "response", kind: str = "page"
         md, note = pandoc_subtree(to_html(subtree, for_pandoc=True), deadline=deadline)
         consider("pandoc", md, note)
     if chosen is None:
-        consider("dom-text", dom_candidate, None)
+        entry, cleaned, md_repairs, conv = consider("dom-text", dom_candidate, None)
+        if chosen is None and cleaned is not None and cleaned.strip():
+            # D7: "otherwise the DOM text" — the fallback of last resort, never a failure: when even the DOM
+            # text fails the check (a check defect, a projection the check cannot follow), it is published
+            # as partial with the counts and examples of its own check, so the defect shows instead of a
+            # lost capture (G17)
+            entry["chosen"] = True
+            entry["note"] = "dom-text failed its own check"
+            chosen = ("dom-text", cleaned, md_repairs, conv)
     if chosen is None:
-        raise ConvertError("convert", "no candidate produced text (reference is empty)")
+        # the reference is actually empty: no eligible line and no text at all (every candidate recorded)
+        raise ConvertError("convert", "no candidate produced text (reference is empty)", candidates=candidates)
     name, body, md_repairs, conv = chosen
     if not body.endswith("\n"):
         body += "\n"

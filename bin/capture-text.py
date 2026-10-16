@@ -91,6 +91,8 @@ def main() -> int:
         result = convert.convert(raw, args.url, args.raw_kind, kind, fetch_report, deadline=deadline)
     except convert.ConvertError as exc:
         rep["error_class"], rep["error"], rep["retryable"] = exc.error_class, str(exc), exc.retryable
+        if exc.candidates:
+            rep["candidates"] = exc.candidates      # what was tried before the failure (G17)
         reportmod.write_report(args.report, rep)
         print("capture-text: %s for %s: %s" % (exc.error_class, args.url, exc), file=sys.stderr)
         return 124 if exc.error_class == "timeout" else 1

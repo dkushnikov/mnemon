@@ -156,6 +156,31 @@ class FixtureOutcomes(unittest.TestCase):
             self.assertEqual(r["inventory"]["tables"], {"html": 1, "md": 1}, "the equation table survives")
         self.assertEqual(r["completeness"], "complete")
 
+    def test_dom_text_is_the_fallback_of_last_resort_never_a_failure(self):
+        """G17: when no candidate passes the check — the DOM text included — the DOM text is published as
+        partial with the counts and examples of its own check and the note `dom-text failed its own check`;
+        the "reference is empty" error is raised only when there is no text at all, with the candidates
+        recorded."""
+        from capture import check
+        raw = read_fixture("cookie.html", binary=True)
+        failing = check.Conv(["a line the check cannot find in any candidate"], [], ["Heading"], 12, 5)
+        with mock.patch.object(check, "conversion", return_value=failing):
+            result = convert.convert(raw, "https://example.com/c", "rendered", "page", None)
+        r = result.report
+        self.assertEqual((r["converter"], r["completeness"]), ("dom-text", "partial"))
+        self.assertEqual((r["missing_count"], r["glued_count"], r["headings_missing_count"]), (1, 0, 1))
+        self.assertEqual(r["missing_examples"], ["a line the check cannot find in any candidate", "Heading"])
+        dom = [c for c in r["candidates"] if c["converter"] == "dom-text"][0]
+        self.assertEqual((dom["chosen"], dom["note"], dom["missing_count"]), (True, "dom-text failed its own check", 1))
+        self.assertFalse(any(c["chosen"] for c in r["candidates"] if c["converter"] != "dom-text"))
+        self.assertIn("The article text is the only content", result.text)
+        empty = b"<html><head><title>Empty</title></head><body><nav>menu only</nav></body></html>"
+        with self.assertRaises(convert.ConvertError) as ctx:
+            convert.convert(empty, "https://example.com/e", "rendered", "page", None)
+        self.assertEqual((ctx.exception.error_class, str(ctx.exception)), ("convert", "no candidate produced text (reference is empty)"))
+        self.assertEqual([c["converter"] for c in ctx.exception.candidates], ["defuddle", "pandoc", "dom-text"])
+        self.assertEqual(ctx.exception.candidates[-1]["note"], "empty after sanitation")
+
     def test_rendered_site_external_raws_never_run_defuddle(self):
         raw = read_fixture("cookie.html", binary=True)
         for raw_kind in ("rendered", "site", "external"):
@@ -310,6 +335,8 @@ class CaptureTextCLI(unittest.TestCase):
         self.assertIsNone(text)
         self.assertEqual(report["error_class"], "convert")
         self.assertIn("convert", se)
+        self.assertEqual([c["converter"] for c in report["candidates"]], ["defuddle", "pandoc", "dom-text"],
+                         "the failure report records what was tried (G17)")
 
     def test_invalid_bytes_and_fetch_report_charset(self):
         raw = "<html><body><p>Un caf\xe9 avec plus de six mots dedans pour le test.</p></body></html>".encode("windows-1252")
