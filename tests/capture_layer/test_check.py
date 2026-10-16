@@ -94,6 +94,25 @@ class ConversionCheck(unittest.TestCase):
         conv = C.conversion(cand, ref, None)
         self.assertTrue(conv.passed, conv)
 
+    def test_soft_boundaries_accept_the_joined_form_but_not_glued_whitespace(self):
+        soft = C.SOFT
+        ref = ("T%she quick brown fox jumps over the lazy dog today\n"
+               "See the Deploy%sment guide for more than six words here\n" % (soft, soft))
+        pandoc_like = "The quick brown fox jumps over the lazy dog today\n\nSee the Deployment guide for more than six words here\n"
+        self.assertTrue(C.conversion(pandoc_like, ref, None).passed, "a drop cap and an in-word anchor pass in the joined form")
+        spaced_like = "T he quick brown fox jumps over the lazy dog today\n\nSee the Deploy ment guide for more than six words here\n"
+        self.assertTrue(C.conversion(spaced_like, ref, None).passed, "...and in the spaced form")
+        glued_ref = "Deploy the company brain across every team today\n"
+        conv = C.conversion("Deploythecompanybrainacrosseveryteamtoday\n", glued_ref, None)
+        self.assertEqual(len(conv.glued), 1, "per-word spans separated by real whitespace stay glued when joined")
+        conv = C.conversion("nothing relevant at all in here\n", ref, None)
+        self.assertEqual(conv.missing, ["The quick brown fox jumps over the lazy dog today",
+                                        "See the Deployment guide for more than six words here"],
+                         "examples and counts show the page's own boundaries, never the marker")
+        self.assertNotIn(soft, "".join(C.missing_examples(conv)))
+        self.assertEqual(C.token_forms("a%sb c" % soft), [["a", "b", "c"], ["ab", "c"]])
+        self.assertEqual(C.token_forms("a b c"), [["a", "b", "c"]])
+
     def test_links_in_candidates_do_not_break_sequences(self):
         ref = "Read the docs for more information about this feature\n"
         cand = "Read [the docs](https://example.com/docs/x) for more *information* about this feature\n"

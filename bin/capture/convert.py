@@ -4,12 +4,14 @@ subtree (spec §3.5, D7, D8).
 Order of work: decode (BOM → `<meta charset>` → the fetch report's charset → UTF-8; invalid → `invalid-utf8`)
 → `sanitize.html` → the content subtree (`<article class="ltx_document">` for arXiv, else `<body>`, with
 `<head>`, scripts, styles, `<noscript>`, `<template>`, `<nav>`, `<footer>`, forms, cookie/consent containers
-and reader-comment sections removed, `<header>` kept) → the reference = `dom_text(subtree)` (block elements
-break lines, h1–h3 carry `## `, inline elements are separated by a space, nothing else dropped) → the
-candidates in order — `defuddle` on the sanitized HTML (skipped for rendered, site and external raws and
-discarded on mojibake), `pandoc` on the same subtree (`-f html -t gfm-raw_html --wrap=none`), the DOM text —
-each through `sanitize.markdown` and `check.conversion` until one passes; otherwise the DOM text, which
-satisfies the reference by construction. The inventory counts the same subtree. Stdlib only, python 3.9.
+and reader-comment sections removed, `<header>` kept) → the reference = `dom_text(subtree, reference=True)`
+(block elements break lines, h1–h3 carry `## `, whitespace-free inline boundaries marked so the check can
+require word boundaries or accept the page's own joined form, nothing else dropped) → the candidates in
+order — `defuddle` on the sanitized HTML (skipped for rendered, site and external raws and discarded on
+mojibake), `pandoc` on the same subtree (`-f html -t gfm-raw_html --wrap=none`), the DOM text with the
+page's own word boundaries — each through `sanitize.markdown` and `check.conversion` until one passes;
+otherwise the DOM text, which satisfies the reference by construction. The inventory counts the same
+subtree. Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
@@ -267,14 +269,27 @@ def content_subtree(root: Node, kind: str) -> Node:
     return sub
 
 
-def dom_text(node: Node) -> str:
-    """Block elements break lines, h1–h3 carry `## `, inline elements are separated by a space."""
+SOFT = check.SOFT
+
+
+def dom_text(node: Node, reference: bool = False) -> str:
+    """Block elements break lines, h1–h3 carry `## `. The published text keeps the page's own word boundaries:
+    a space stands at an inline boundary only when the HTML carries whitespace there. The *reference*
+    projection (`reference=True`) marks every whitespace-free inline boundary with `check.SOFT` instead, so
+    the check can require the spaced token sequence or accept the joined one (a drop cap `T`+`he`, an anchor
+    inside a word) while per-word spans separated by real whitespace still read as glued when a converter
+    joins them."""
     lines: List[str] = []
     buf: List[str] = []
     state = {"heading": False}
 
     def flush():
-        text = re.sub(r"\s+", " ", " ".join(buf)).strip()
+        if reference:
+            text = re.sub(r"\s+", " ", SOFT.join(buf))
+            text = re.sub(r"[ ⁣]*⁣[ ⁣]*", lambda m: " " if " " in m.group(0) else SOFT, text)
+            text = text.strip(" " + SOFT)
+        else:
+            text = re.sub(r"\s+", " ", "".join(buf)).strip()
         del buf[:]
         if state["heading"]:
             state["heading"] = False
@@ -494,8 +509,8 @@ def convert(raw: bytes, url: str, raw_kind: str = "response", kind: str = "page"
     page_meta = page_metadata(root)
     subtree = content_subtree(root, kind)
     subtree_html = to_html(subtree)
-    reference = "\n".join(sanitize.reference_lines(dom_text(subtree).split("\n"), kind))
-    dom_candidate = reference
+    reference = "\n".join(sanitize.reference_lines(dom_text(subtree, reference=True).split("\n"), kind))
+    dom_candidate = dom_text(subtree)
     acq = None
     if acq_in.get("outcome"):
         acq = check.Acq(acq_in.get("outcome"), acq_in.get("kind"), acq_in.get("evidence"), int(acq_in.get("visible_words") or 0), None)

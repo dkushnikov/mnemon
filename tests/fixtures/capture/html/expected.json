@@ -206,13 +206,15 @@
   "kind": "page",
   "title": "Per-word Spans",
   "defuddle": "glued.defuddle.md",
-  "converter": "dom-text",
+  "converter": "pandoc",
   "completeness": "complete",
   "defuddle_glued_min": 1,
   "present": [
    "Deploy the company brain across every team today"
   ],
-  "pandoc_glued_min": 1
+  "absent": [
+   "Deploythecompanybrain"
+  ]
  },
  "discussion.html": {
   "kind": "page",
@@ -235,6 +237,23 @@
    "# configure the client before use in every environment",
    "# the second comment names the hljs class family explicitly",
    "echo done"
+  ]
+ },
+ "dropcap.html": {
+  "kind": "page",
+  "title": "Drop Cap and In-word Anchor",
+  "converter": "pandoc",
+  "completeness": "complete",
+  "eligible_min": 3,
+  "present": [
+   "The quick brown fox jumps over the lazy dog in this magazine paragraph.",
+   "ment guide for more than six words",
+   "asis split across inline markup"
+  ],
+  "absent": [
+   "T he quick",
+   "Deploy ment",
+   "emph asis"
   ]
  }
 }

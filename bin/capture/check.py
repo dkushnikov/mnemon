@@ -6,7 +6,8 @@
 chain decides from it. `conversion` compares a sanitized candidate with the reference projected from the
 same raw bytes: a reference line is present when its *key* (NFKC, casefold, soft hyphens and zero-width
 characters removed, every alphanumeric character of any script kept) is a substring of the candidate's key
-**and** its word sequence occurs as a contiguous token sequence in the candidate's tokens — a key match
+**and** its word sequence occurs as a contiguous token sequence in the candidate's tokens — in the spaced
+form, or with the boundaries the page itself writes without whitespace (`SOFT`) joined — a key match
 without the token match is a *glued* line. Both checks are pure functions over strings; nothing here touches
 the network or the vault. Stdlib only, python 3.9.
 """
@@ -20,6 +21,10 @@ from typing import Dict, List, NamedTuple, Optional
 
 WALL_MAX_WORDS = 200
 JS_SHELL_MAX_WORDS = 30
+# The reference projection marks a whitespace-free inline boundary (a drop cap `T`+`he`, an anchor inside a
+# word) with this invisible separator: the token check then accepts a candidate holding either the spaced
+# sequence or the sequence with those boundary tokens joined. It is not alphanumeric, so keys ignore it.
+SOFT = "⁣"
 THIN_WORDS_DEFAULT = 60
 CHROME_MAX_WORDS = 12
 MISSING_EXAMPLE_CHARS = 120
@@ -315,8 +320,24 @@ def reference_lines(reference: str) -> List[str]:
     return [ln.strip() for ln in reference.split("\n") if ln.strip()]
 
 
+def token_forms(line: str) -> List[List[str]]:
+    """The token sequences a reference line may be present as: the spaced one (every boundary a space) and,
+    when the line carries SOFT boundaries, the one with those boundary tokens joined."""
+    spaced = tokens(line.replace(SOFT, " "))
+    if SOFT not in line:
+        return [spaced]
+    joined = tokens(line.replace(SOFT, ""))
+    return [spaced, joined] if joined != spaced else [spaced]
+
+
+def plain(line: str) -> str:
+    """A reference line for display: the page's own word boundaries (SOFT boundaries joined)."""
+    return line.replace(SOFT, "")
+
+
 def conversion(candidate_md: str, reference: str, title: Optional[str]) -> Conv:
-    """Every eligible reference line and every h1–h3 heading must be present (key + contiguous tokens)."""
+    """Every eligible reference line and every h1–h3 heading must be present (key + contiguous tokens, in
+    the spaced form or with the SOFT boundaries joined)."""
     lines = reference_lines(reference)
     text = candidate_text(candidate_md)
     cand_key = line_key(text)
@@ -332,12 +353,12 @@ def conversion(candidate_md: str, reference: str, title: Optional[str]) -> Conv:
         body = line[3:] if cls == "heading" else line
         key = line_key(body)
         if key not in cand_key:
-            (headings_missing if cls == "heading" else missing).append(body)
+            (headings_missing if cls == "heading" else missing).append(plain(body))
             continue
         if cls == "spaceless":
             continue
-        if not index.contains(tokens(body)):
-            (headings_missing if cls == "heading" else glued).append(body)
+        if not any(index.contains(form) for form in token_forms(body)):
+            (headings_missing if cls == "heading" else glued).append(plain(body))
     return Conv(missing, glued, headings_missing, len(lines), eligible)
 
 

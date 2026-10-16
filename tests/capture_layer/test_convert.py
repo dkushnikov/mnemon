@@ -156,7 +156,16 @@ class FixtureOutcomes(unittest.TestCase):
         root = convert.parse("<html><body><h1>Title here</h1><p>Deploy<span>the</span>company brain</p>"
                              "<pre>a\n  b</pre><ul><li>one</li><li>two</li></ul><p>x<br>y</p><h4>small</h4></body></html>")
         sub = convert.content_subtree(root, "page")
-        self.assertEqual(convert.dom_text(sub), "## Title here\nDeploy the company brain\na\nb\none\ntwo\nx\ny\nsmall")
+        self.assertEqual(convert.dom_text(sub), "## Title here\nDeploythecompany brain\na\nb\none\ntwo\nx\ny\nsmall",
+                         "the published text keeps the page's own word boundaries")
+        soft = convert.SOFT
+        self.assertEqual(convert.dom_text(sub, reference=True),
+                         "## Title here\nDeploy%sthe%scompany brain\na\nb\none\ntwo\nx\ny\nsmall" % (soft, soft),
+                         "the reference marks whitespace-free inline boundaries")
+        spaced = convert.parse("<p><span>Deploy</span> <span>the</span> <span>brain</span></p><p>a <b>b</b> c<i>d</i></p>")
+        self.assertEqual(convert.dom_text(spaced, reference=True), "Deploy the brain\na b c%sd" % soft,
+                         "real whitespace stays a space; a SOFT next to whitespace is just whitespace")
+        self.assertEqual(convert.dom_text(spaced), "Deploy the brain\na b cd")
 
     def test_subtree_removals_and_arxiv_root(self):
         root = convert.parse("<html><head><title>t</title></head><body><nav>n</nav><header>h</header><form>f</form>"
