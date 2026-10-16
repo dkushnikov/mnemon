@@ -167,12 +167,18 @@ class MarkdownLevel(unittest.TestCase):
         self.assertEqual((counts["data_uris"], counts["data_links"]), (1, 2))
 
     def test_next_images_outside_fences_only(self):
-        md = "![Hero](/_next/image?url=%2Fhero.png&w=3840&q=75)\n\n```\n![x](/_next/image?url=y)\n```\n\n![Other](https://h/_next/image?url=z)\n"
+        md = ("![Hero](/_next/image?url=%2Fhero.png&w=3840&q=75)\n\n```\n![x](/_next/image?url=y)\n```\n\n"
+              "![Other](https://h/_next/image?url=z)\n\n"
+              "[![Ali profile](https://vidiq.example/_next/image/?url=%2Fimg%2FALI.png&w=128&q=75)](https://vidiq.example/_next/image/?url=%2Fimg%2FALI.png&w=128)\n")
         out, counts = sanitize.markdown(md, "page")
         self.assertIn("*[img: Hero]*", out)
         self.assertIn("*[img: Other]*", out)
         self.assertIn("![x](/_next/image?url=y)", out)
-        self.assertEqual(counts["next_images"], 2)
+        # the `/_next/image/?url=` form (a slash before the query) of some deployments, as image and as link
+        self.assertIn("*[img: Ali profile]*", out)
+        self.assertNotIn("_next/image", out.replace("![x](/_next/image?url=y)", ""))
+        self.assertNotIn("*[img: *[img:", out)
+        self.assertEqual(counts["next_images"], 4)   # three images and the link wrapper around the third
 
     def test_iow_residue_becomes_a_text_fence(self):
         md = "Intro paragraph.\n\n\\iow_now:Ne line one \\iow_now:Ne line two \\iow_now:Ne line three\n\nAfter.\n"

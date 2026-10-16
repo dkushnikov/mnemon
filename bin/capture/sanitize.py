@@ -11,7 +11,7 @@ anchor with real text is unwrapped to its text); merged-cell tables are rewritte
 is left as it is and counted `tables_unrepaired`, and the conversion deadline is checked between tables.
 Markdown level (`markdown`), after conversion and fence-aware (nothing inside ``` or ~~~ fences is touched):
 `![alt](data:image/…)` → `*[inline figure omitted at capture: alt]*`, remaining `data:` links dropped,
-`_next/image?url=…` → `*[img: alt]*`, `\\iow_now:Ne` residue → line breaks inside a `~~~~text` fence,
+`_next/image?url=…` (also `_next/image/?url=…`) → `*[img: alt]*`, `\\iow_now:Ne` residue → line breaks inside a `~~~~text` fence,
 LaTeXML macro residue before the title dropped (arXiv only; LaTeX3 `\\tl_set:Ne…` lines included), reader-comment sections cut, runs of blank lines
 collapsed; a `[TABLE]` pandoc still emits stays and is counted as `tables_unrepaired`. Both levels are
 idempotent: a second pass changes nothing.
@@ -48,8 +48,9 @@ _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 # run, megabytes long — its bound is the raw cap), so a line of 100 000 `[` or `(` is linear.
 _MD_DATA_IMAGE = re.compile(r"!\[([^\[\]\n]{0,2000})\]\([ \t]{0,20}<?data:image/[^()\s]{0,20000000}\)")
 _MD_DATA_LINK = re.compile(r"\[([^\[\]\n]{0,2000})\]\([ \t]{0,20}<?data:[^()\s]{0,20000000}\)")
-_MD_NEXT_IMAGE = re.compile(r"!\[([^\[\]\n]{0,2000})\]\([^()\s]{0,4000}?/_next/image\?[^()\s]{0,4000}\)")
-_MD_NEXT_LINK = re.compile(r"\[([^\[\]\n]{0,2000})\]\([^()\s]{0,4000}?/_next/image\?[^()\s]{0,4000}\)")
+_MD_NEXT_IMAGE = re.compile(r"!\[([^\[\]\n]{0,2000})\]\([^()\s]{0,4000}?/_next/image/?\?[^()\s]{0,4000}\)")
+# a link whose target is a Next.js image: its text may already be the image placeholder `*[img: …]*`
+_MD_NEXT_LINK = re.compile(r"\[((?:[^\[\]\n]|\*\[img: [^\[\]\n]{0,2000}\]\*){0,2000})\]\([^()\s]{0,4000}?/_next/image/?\?[^()\s]{0,4000}\)")
 _IOW = re.compile(r"\\iow_now:Ne\s*")
 # macro residue before the title: a command opening a group, the preamble macros, and LaTeX3 residue — the
 # `ltx_ERROR` span of an undefined expl3 macro, a backslash command with `_` and `:` in its name
@@ -402,7 +403,8 @@ def markdown(md: str, kind: str = "page") -> Tuple[str, dict]:
         text = _MD_DATA_LINK.sub(_data_link_repl(counts), text)
         text, n = _MD_NEXT_IMAGE.subn(lambda m: "*[img: %s]*" % m.group(1).strip(), text)
         counts["next_images"] += n
-        text, n = _MD_NEXT_LINK.subn(lambda m: "*[img: %s]*" % m.group(1).strip(), text)
+        # a link around an already reduced image keeps the one placeholder (no nested `*[img: *[img: …]*]*`)
+        text, n = _MD_NEXT_LINK.subn(lambda m: m.group(1).strip() if m.group(1).strip().startswith("*[img: ") else "*[img: %s]*" % m.group(1).strip(), text)
         counts["next_images"] += n
         paragraphs = []
         for para in text.split("\n\n"):
