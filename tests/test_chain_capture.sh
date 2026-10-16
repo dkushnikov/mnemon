@@ -436,6 +436,32 @@ assert_eq "$(rget d1 '.capture_report.fetch.stages | length')" "1" "...never esc
 assert_eq "$(ls "$ARCHIVE" | grep -c "$(rget d1 '.revision')" || true)" "0" "...nothing archived"
 
 # ==================================================================================================
+echo "--- (d2) a hostile page: the classification is linear, acquire_timeout holds, the vault lock is free (G1, D11) ---"
+# 400 000 bytes of <script> elements none of which is closed: the regex classification of the first
+# release rescanned the body from every one of them (quadratic) and held the vault lock for minutes
+python3 - "$SITE/hostile.html" <<'PY'
+import sys
+open(sys.argv[1], "wb").write((b"<script>" + b"a" * 8) * 25000)
+PY
+"$MNEMON" init t3 --vault "$VAULT" --archive "$ARCHIVE" --non-interactive >/dev/null 2>&1 || { echo "mnemon init t3 failed"; exit 1; }
+printf 'acquire_timeout: 5\n' >> "$XDG_CONFIG_HOME/mnemon/instances/t3.yaml"
+t0=$(date +%s)
+STUB_RENDER=fail "$MNEMON" --instance t3 add --url "$BASE/hostile" --capture-id d2 >"$TEST_TMPDIR/d2.out" 2>"$TEST_TMPDIR/d2.err" &
+D2_PID=$!
+i=0; while kill -0 "$D2_PID" 2>/dev/null && [[ $i -lt 200 ]]; do sleep 0.05; i=$((i + 1)); done
+if kill -0 "$D2_PID" 2>/dev/null; then
+  fail "the hostile capture finishes within 10 s" "still running after $(( $(date +%s) - t0 )) s"; kill "$D2_PID" 2>/dev/null || true
+else
+  pass "the hostile capture finishes within 10 s ($(( $(date +%s) - t0 )) s)"
+fi
+rc=0; wait "$D2_PID" || rc=$?
+out="$(cat "$TEST_TMPDIR/d2.out")"
+python3 "$MNEMON_ROOT/bin/vault-lock.py" --vault "$VAULT" -- true && pass "a second writer takes the vault lock afterwards" || fail "a second writer takes the vault lock afterwards" "vault-lock.py exit $?"
+assert_eq "$rc $(result error_class)" "3 environment" "...the page is a JavaScript shell the renderer could not render: exit 3 environment"
+assert_eq "$(rget d2 '.capture_report.fetch.acquisition.kind + " " + (.capture_report.fetch.acquisition.visible_words|tostring)')" "js-shell 0" "...classified js-shell with zero visible words (the unclosed <script> swallows the rest)"
+assert_eq "$(nfolders)" "$n0" "...no folder"
+
+# ==================================================================================================
 echo "--- (e) a JavaScript shell: environment without a renderer; the external fetcher when allowed ---"
 STUB_RENDER=fail run "$MNEMON" --instance t add --url "$BASE/spa" --capture-id e1
 assert_eq "$rc $(result error_class) $(result retryable)" "3 environment true" "a JavaScript shell with a failing renderer and external_fetch off → exit 3 environment (retryable)"

@@ -38,9 +38,6 @@ AUDIO_EXT = {"audio/mpeg": "mp3", "audio/mp4": "m4a", "audio/x-m4a": "m4a", "aud
              "audio/x-ogg": "ogg", "audio/ogg": "ogg", "audio/flac": "flac", "audio/x-flac": "flac", "audio/aac": "aac",
              "video/mp4": "mp4", "video/webm": "webm", "audio/webm": "webm"}
 KNOWN_AUDIO_EXTS = frozenset(AUDIO_EXT.values())
-_META = re.compile(r"<meta\b[^>]*>", re.IGNORECASE)
-_ATTR = re.compile(r"([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))")
-_CANONICAL = re.compile(r"<link\b[^>]*\brel=[\"']?canonical[\"']?[^>]*>", re.IGNORECASE)
 _ABS_VERSION = re.compile(r"/abs/[^\"'\s<>]*?v(\d+)\b")
 
 
@@ -88,24 +85,37 @@ def renderer_command(explicit: Optional[str] = None) -> str:
 
 
 # --- small HTML helpers (metadata only; the converter owns the real parsing) -------------------------------
+# Both walk the document with the bounded find loops of `check` (G1): a `<meta` or `<link` with no `>`
+# after it ends the walk instead of making every later tag rescan to the end.
 
 def _meta_map(html: str) -> Dict[str, List[str]]:
     out: Dict[str, List[str]] = {}
-    for m in _META.finditer(html):
-        attrs = {k.lower(): (v1 or v2 or v3 or "") for k, v1, v2, v3 in _ATTR.findall(m.group(0))}
+    low = check.ascii_lower(html)
+    pos = 0
+    while True:
+        lt, gt = check.find_start_tag(low, "meta", pos)
+        if lt < 0:
+            return out
+        attrs = check.tag_attrs(html[lt + 5:gt])
         key = (attrs.get("name") or attrs.get("property") or "").lower()
-        if key and attrs.get("content"):
-            out.setdefault(key, []).append(attrs["content"].strip())
-    return out
+        content = (attrs.get("content") or "").strip()
+        if key and content:
+            out.setdefault(key, []).append(content)
+        pos = gt + 1
 
 
 def _declared_canonical(html: str) -> Optional[str]:
-    m = _CANONICAL.search(html)
-    if not m:
-        return None
-    attrs = {k.lower(): (v1 or v2 or v3 or "") for k, v1, v2, v3 in _ATTR.findall(m.group(0))}
-    href = (attrs.get("href") or "").strip()
-    return href or None
+    low = check.ascii_lower(html)
+    pos = 0
+    while True:
+        lt, gt = check.find_start_tag(low, "link", pos)
+        if lt < 0:
+            return None
+        attrs = check.tag_attrs(html[lt + 5:gt])
+        if "canonical" in attrs.get("rel", "").lower().split():
+            href = attrs.get("href", "").strip()
+            return href or None
+        pos = gt + 1
 
 
 def _unescape(s: str) -> str:

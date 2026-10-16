@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sys
+import time
 import unittest
 
 from _helpers import BIN, HTML_FIX, assert_same_keys, clean_env, expected_shapes, pid_alive, read_fixture, read_json, \
@@ -127,6 +128,14 @@ class FixtureOutcomes(unittest.TestCase):
             r = convert.convert(raw, "https://example.com/d", "response", "page", None).report
         self.assertEqual(r["candidates"][0]["note"], "discarded: mojibake")
         self.assertNotEqual(r["converter"], "defuddle")
+
+    def test_meta_charset_is_a_bounded_scan(self):
+        self.assertEqual(convert.meta_charset(b'<html><META http-equiv="x" CHARSET = "Windows-1252"><p>x</p>'), "windows-1252")
+        self.assertEqual(convert.meta_charset(b'<meta name="viewport" content="w"><meta charset=utf-8>'), "utf-8")
+        self.assertIsNone(convert.meta_charset(b"<metal charset=x>"))
+        t0 = time.monotonic()
+        self.assertIsNone(convert.meta_charset(b"<meta " * 100000), "a <meta that never ends ends the search")
+        self.assertLess(time.monotonic() - t0, 1.0)
 
     def test_fetch_report_charset_used_when_bytes_declare_none(self):
         raw = ("<html><head><title>Caf\xe9</title></head><body><p>Un caf\xe9 avec plus de six mots dedans "

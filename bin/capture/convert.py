@@ -41,7 +41,8 @@ REMOVE_TAGS = frozenset(("head", "script", "style", "noscript", "template", "nav
                          "canvas", "object"))
 HEADINGS_PREFIXED = frozenset(("h1", "h2", "h3"))
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
-_META_CHARSET = re.compile(rb"<meta\b[^>]*\bcharset\s*=\s*[\"']?\s*([A-Za-z0-9_\-:.]+)", re.IGNORECASE)
+_CHARSET_VALUE = re.compile(rb"[\"']?\s*([A-Za-z0-9_\-:.]+)")
+_META_HEAD_BYTES = 65536
 _DATE_SLASH = re.compile(r"^(\d{4})/(\d{1,2})/(\d{1,2})$")
 _DATE_ISO = re.compile(r"^(\d{4}-\d{2}-\d{2})")
 DATED_TYPES = ("Article", "BlogPosting", "NewsArticle", "ScholarlyArticle")
@@ -60,6 +61,42 @@ class Result(NamedTuple):
 
 # --- decoding ----------------------------------------------------------------------------------------------
 
+def meta_charset(raw: bytes) -> Optional[str]:
+    """The `charset=` of the first `<meta …>` tag naming one, from the first 64 KB of the raw: a bounded find
+    loop over the bytes (a `<meta` with no `>` after it ends the search), never a `[^>]*` regex (G1)."""
+    head = raw[:_META_HEAD_BYTES]
+    low = head.lower()
+    pos = 0
+    while True:
+        lt = low.find(b"<meta", pos)
+        if lt < 0:
+            return None
+        after = low[lt + 5:lt + 6]
+        if after and after not in b" \t\n\r\f/>":
+            pos = lt + 1
+            continue
+        gt = low.find(b">", lt + 5)
+        if gt < 0:
+            return None
+        tag = low[lt + 5:gt]
+        k = tag.find(b"charset")
+        while k >= 0:
+            before = tag[k - 1:k]
+            if k == 0 or not (before.isalnum() or before == b"_"):
+                j = k + 7
+                while j < len(tag) and tag[j:j + 1] in b" \t\n\r\f":
+                    j += 1
+                if tag[j:j + 1] == b"=":
+                    j += 1
+                    while j < len(tag) and tag[j:j + 1] in b" \t\n\r\f":
+                        j += 1
+                    m = _CHARSET_VALUE.match(tag, j)
+                    if m:
+                        return m.group(1).decode("ascii", "replace").lower()
+            k = tag.find(b"charset", k + 1)
+        pos = gt + 1
+
+
 def decode(raw: bytes, charset_hint: Optional[str] = None) -> Tuple[str, str]:
     """BOM → <meta charset> → the hint → UTF-8; strict; (text, charset). Raises ConvertError(invalid-utf8)."""
     if raw.startswith(codecs.BOM_UTF8):
@@ -68,9 +105,9 @@ def decode(raw: bytes, charset_hint: Optional[str] = None) -> Tuple[str, str]:
         order = [("utf-16", raw)]
     else:
         order = []
-        m = _META_CHARSET.search(raw[:65536])
-        if m:
-            order.append((m.group(1).decode("ascii", "replace").lower(), raw))
+        declared = meta_charset(raw)
+        if declared:
+            order.append((declared, raw))
         if charset_hint:
             order.append((charset_hint.lower(), raw))
         order.append(("utf-8", raw))

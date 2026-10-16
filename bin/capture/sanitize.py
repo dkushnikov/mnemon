@@ -11,16 +11,21 @@ Markdown level (`markdown`), after conversion and fence-aware (nothing inside ``
 `_next/image?url=…` → `*[img: alt]*`, `\\iow_now:Ne` residue → line breaks inside a `~~~~text` fence,
 LaTeXML macro residue before the title dropped (arXiv only), reader-comment sections cut, runs of blank lines
 collapsed; a `[TABLE]` pandoc still emits stays and is counted as `tables_unrepaired`. Both levels are
-idempotent: a second pass changes nothing. Stdlib only, python 3.9.
+idempotent: a second pass changes nothing.
+
+The HTML level never runs a `.*?` regex over the document: every element it rewrites is found by the
+bounded find loops of `check` (`elements`, `find_start_tag`, `find_end_tag`), so an `<svg`, `<table` or
+`<a href="data:…">` that is never closed leaves the rest of the document as it is at a linear cost (G1).
+Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
 import html as htmlmod
 import re
-from typing import List, Tuple
+from typing import Callable, List, Tuple
 
 from . import lib_table
-from .check import COMMENTS
+from .check import COMMENTS, ascii_lower, elements, find_end_tag, find_start_tag, strip_tags, tag_attrs, tag_name
 
 HTML_KEYS = ("svg_diagrams", "svg_icons", "latexml_listings", "data_links", "tables_rewritten", "tables_unrepaired")
 MD_KEYS = ("data_uris", "data_links", "next_images", "tcolorbox_residue", "residue_lines", "comment_sections",
@@ -30,17 +35,8 @@ MD_KEYS = ("data_uris", "data_links", "next_images", "tcolorbox_residue", "resid
 class Timeout(Exception):
     """The conversion deadline passed during sanitation (checked between tables)."""
 
-_SVG = re.compile(r"<svg\b[^>]*>.*?</svg\s*>", re.IGNORECASE | re.DOTALL)
-_SVG_TEXT = re.compile(r"<text\b[^>]*>(.*?)</text\s*>", re.IGNORECASE | re.DOTALL)
-_TAG = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
-_LISTING_LINE = re.compile(r"<div\b[^>]*\bclass=[\"'][^\"']*\bltx_listingline\b[^\"']*[\"'][^>]*>(.*?)</div>",
-                           re.IGNORECASE | re.DOTALL)
-_LISTING_RUN = re.compile(r"(?:<div\b[^>]*\bclass=[\"'][^\"']*\bltx_listingline\b[^\"']*[\"'][^>]*>.*?</div>\s*)+",
-                          re.IGNORECASE | re.DOTALL)
-_LST_SPACE = re.compile(r"<span\b[^>]*\bltx_lst_space\b[^>]*>\s*(?:&nbsp;|\s)*</span>", re.IGNORECASE | re.DOTALL)
-_DATA_LINK = re.compile(r"<a\b[^>]*\bhref=[\"']data:[^\"']*[\"'][^>]*>(.*?)</a\s*>", re.IGNORECASE | re.DOTALL)
-_TABLE = re.compile(r"<table\b.*?</table\s*>", re.IGNORECASE | re.DOTALL)
+_ONLY_SPACE = re.compile(r"^\s*(?:&nbsp;|\s)*$")
 
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 _MD_DATA_IMAGE = re.compile(r"!\[([^\]]*)\]\(\s*<?data:image/[^)]*\)")
@@ -61,11 +57,28 @@ def _counts(keys) -> dict:
 
 # --- HTML level --------------------------------------------------------------------------------------------
 
+def _sub_elements(text: str, name: str, repl: Callable[[str, str], str]) -> str:
+    """Every complete `<name …>…</name>` element replaced by `repl(block, inner)` — a bounded find loop
+    over the ASCII-lowered document, never a `.*?` regex; an unclosed element and what follows it stay."""
+    low = ascii_lower(text)
+    out: List[str] = []
+    pos = 0
+    for lt, gt, elt, egt in elements(low, name):
+        out.append(text[pos:lt])
+        out.append(repl(text[lt:egt + 1], text[gt + 1:elt]))
+        pos = egt + 1
+    if not out:
+        return text
+    out.append(text[pos:])
+    return "".join(out)
+
+
 def _svg_repl(counts):
-    def repl(m):
+    def repl(block: str, inner: str) -> str:
         labels = []
-        for t in _SVG_TEXT.finditer(m.group(0)):
-            label = _WS.sub(" ", htmlmod.unescape(_TAG.sub(" ", t.group(1)))).strip()
+        low = ascii_lower(inner)
+        for lt, gt, elt, egt in elements(low, "text"):
+            label = _WS.sub(" ", htmlmod.unescape(strip_tags(inner[gt + 1:elt]))).strip()
             if label and label not in labels:
                 labels.append(label)
         if labels:
@@ -76,40 +89,129 @@ def _svg_repl(counts):
     return repl
 
 
-def _listing_repl(counts):
-    def repl(m):
-        lines = []
-        for line in _LISTING_LINE.finditer(m.group(0)):
-            inner = _LST_SPACE.sub(" ", line.group(1))
-            inner = re.sub(r"<br\s*/?>", "\n", inner, flags=re.IGNORECASE)
-            text = _TAG.sub("", inner)
-            text = text.replace("&nbsp;", " ").replace("\xa0", " ")
-            lines.append(text.rstrip())
+def _class_token(inner: str, token: str) -> bool:
+    return token in tag_attrs(inner).get("class", "").split()
+
+
+def _listing_line_text(inner: str) -> str:
+    """One LaTeXML listing line: an `ltx_lst_space` span holding only whitespace or `&nbsp;` becomes a space,
+    `<br>` a line break, every other tag is dropped, `&nbsp;` is a space."""
+    low = ascii_lower(inner)
+    out: List[str] = []
+    pos, n = 0, len(inner)
+    spans_end = True            # False once a space span proved unclosed: no later one can be closed either
+    while True:
+        lt = low.find("<", pos)
+        if lt < 0:
+            out.append(inner[pos:])
+            break
+        gt = low.find(">", lt + 1)
+        if gt < 0:
+            out.append(inner[pos:])
+            break
+        out.append(inner[pos:lt])
+        name = tag_name(low, lt, gt)
+        if name == "br":
+            out.append("\n")
+        elif name == "span" and spans_end and _class_token(inner[lt + 5:gt], "ltx_lst_space"):
+            elt, egt = find_end_tag(low, "span", gt + 1)
+            if elt < 0:
+                spans_end = False
+            elif _ONLY_SPACE.match(inner[gt + 1:elt]):
+                out.append(" ")
+                pos = egt + 1
+                continue
+        pos = gt + 1
+    return "".join(out).replace("&nbsp;", " ").replace("\xa0", " ")
+
+
+def _sub_listing_runs(text: str, counts) -> str:
+    """Runs of consecutive `div.ltx_listingline` elements (whitespace between and after them included)
+    become one `<pre><code>` block each."""
+    low = ascii_lower(text)
+    out: List[str] = []
+    pos = 0
+    n = len(text)
+    i = 0
+    while True:
+        lt, gt = find_start_tag(low, "div", i)
+        if lt < 0:
+            break
+        if not _class_token(text[lt + 4:gt], "ltx_listingline"):
+            i = gt + 1
+            continue
+        lines: List[str] = []
+        run_end = gt + 1
+        cur_gt = gt
+        unclosed = False
+        while True:
+            elt, egt = find_end_tag(low, "div", cur_gt + 1)
+            if elt < 0:
+                unclosed = True
+                break
+            lines.append(_listing_line_text(text[cur_gt + 1:elt]).rstrip())
+            k = egt + 1
+            while k < n and text[k].isspace():
+                k += 1
+            run_end = k
+            nlt, ngt = find_start_tag(low, "div", k)
+            if nlt == k and _class_token(text[nlt + 4:ngt], "ltx_listingline"):
+                cur_gt = ngt
+                continue
+            break
+        if not lines:               # the first line is never closed, so no later one can be: the pass ends
+            break
         counts["latexml_listings"] += 1
-        return "<pre><code>%s</code></pre>\n" % "\n".join(lines)
-    return repl
+        out.append(text[pos:lt])
+        out.append("<pre><code>%s</code></pre>\n" % "\n".join(lines))
+        pos = run_end
+        i = run_end
+        if unclosed:                # a later line of the run is never closed: nothing after it can be
+            break
+    if not out:
+        return text
+    out.append(text[pos:])
+    return "".join(out)
 
 
-def _data_link_html_repl(counts):
+def _sub_data_links(text: str, counts) -> str:
     """A `data:` anchor is removed when its text has no word characters (a download button); otherwise it
     is unwrapped to its content, so the text it carried stays in the reference and in every candidate."""
-    def repl(m):
+    low = ascii_lower(text)
+    out: List[str] = []
+    pos = 0
+    i = 0
+    while True:
+        lt, gt = find_start_tag(low, "a", i)
+        if lt < 0:
+            break
+        if not tag_attrs(text[lt + 2:gt]).get("href", "").startswith("data:"):
+            i = gt + 1
+            continue
+        elt, egt = find_end_tag(low, "a", gt + 1)
+        if elt < 0:
+            break
+        inner = text[gt + 1:elt]
         counts["data_links"] += 1
-        inner = m.group(1)
-        text = htmlmod.unescape(_TAG.sub(" ", inner))
-        return inner if _WORDISH.search(text) else ""
-    return repl
+        out.append(text[pos:lt])
+        out.append(inner if _WORDISH.search(htmlmod.unescape(strip_tags(inner))) else "")
+        pos = egt + 1
+        i = egt + 1
+    if not out:
+        return text
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def _table_repl(counts, deadline=None):
-    def repl(m):
+    def repl(block: str, inner: str) -> str:
         if deadline is not None and deadline.expired():
             raise Timeout("the conversion deadline passed while rewriting tables")
         try:
-            rewritten, changed = lib_table.expand_table(m.group(0))
+            rewritten, changed = lib_table.expand_table(block)
         except lib_table.TooLarge:
             counts["tables_unrepaired"] += 1
-            return m.group(0)
+            return block
         if changed:
             counts["tables_rewritten"] += 1
         return rewritten
@@ -120,10 +222,10 @@ def html(raw_html: str, kind: str = "page", deadline=None) -> Tuple[str, dict]:
     """The HTML-level repairs; (sanitized html, counts). `deadline` (a proc.Deadline) is checked between
     tables; past it `Timeout` is raised."""
     counts = _counts(HTML_KEYS)
-    out = _SVG.sub(_svg_repl(counts), raw_html)
-    out = _LISTING_RUN.sub(_listing_repl(counts), out)
-    out = _DATA_LINK.sub(_data_link_html_repl(counts), out)
-    out = _TABLE.sub(_table_repl(counts, deadline), out)
+    out = _sub_elements(raw_html, "svg", _svg_repl(counts))
+    out = _sub_listing_runs(out, counts)
+    out = _sub_data_links(out, counts)
+    out = _sub_elements(out, "table", _table_repl(counts, deadline))
     return out, counts
 
 

@@ -9,18 +9,29 @@ characters removed, every alphanumeric character of any script kept) is a substr
 **and** its word sequence occurs as a contiguous token sequence in the candidate's tokens — in the spaced
 form, or with the boundaries the page itself writes without whitespace (`SOFT`) joined — a key match
 without the token match is a *glued* line. Both checks are pure functions over strings; nothing here touches
-the network or the vault. Stdlib only, python 3.9.
+the network or the vault.
+
+The acquisition classification is one linear pass over at most the first `CLASSIFY_MAX_BYTES` of the body
+(`scan`): a small state machine driven by `str.find`, never a regex with `.*?` or `[^>]*` applied to the
+whole document — an unclosed `<script`, `<title` or `<svg` costs nothing more than a closed one, so a hostile
+page cannot hold the acquisition (and the vault lock) in in-process CPU time that no deadline can interrupt
+(D11). The same helpers (`find_start_tag`, `find_end_tag`, `elements`, `tag_attrs`, `strip_tags`) serve the
+sanitizer's HTML level and the fetch chain's metadata scans. Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
 import html as htmlmod
 import re
+import string
 import unicodedata
 from collections import defaultdict
-from typing import Dict, List, NamedTuple, Optional
+from typing import Dict, Iterator, List, NamedTuple, Optional, Tuple
 
 WALL_MAX_WORDS = 200
 JS_SHELL_MAX_WORDS = 30
+# The classification examines at most the first 1 MB of a body (§3.4): the visible words, the markers and
+# the js-shell signals all come from that prefix, in one pass.
+CLASSIFY_MAX_BYTES = 1 << 20
 # The reference projection marks a whitespace-free inline boundary (a drop cap `T`+`he`, an anchor inside a
 # word) with this invisible separator: the token check then accepts a candidate holding either the spaced
 # sequence or the sequence with those boundary tokens joined. It is not alphanumeric, so keys ignore it.
@@ -80,16 +91,6 @@ COOKIE_CONTAINER = re.compile(r"^(?:cookies?|consent|gdpr|cc[-_]banner|cc[-_]win
 CONTAINER_TAGS = frozenset(("div", "section", "aside", "article", "ol", "ul", "dl", "li", "main", "header", "footer", "figure",
                             "details", "dialog", "fieldset"))
 
-_SCRIPT = re.compile(r"<(script|style|noscript|template)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
-_HEAD = re.compile(r"<head\b[^>]*>.*?</head\s*>|<title\b[^>]*>.*?</title\s*>", re.IGNORECASE | re.DOTALL)
-_SCRIPT_ONLY = re.compile(r"<script\b[^>]*>.*?</script\s*>|<script\b[^>]*/>", re.IGNORECASE | re.DOTALL)
-_TAG = re.compile(r"<[^>]+>")
-_EMPTY_ROOT = re.compile(r"<(?:div|main|section|body)\b[^>]*\bid=[\"'](?:root|app|__next|__nuxt)[\"'][^>]*>\s*</(?:div|main|section|body)>",
-                         re.IGNORECASE)
-_NOSCRIPT = re.compile(r"<noscript\b[^>]*>(.*?)</noscript\s*>", re.IGNORECASE | re.DOTALL)
-_FORM = re.compile(r"<form\b", re.IGNORECASE)
-_PASSWORD = re.compile(r"<input\b[^>]*\btype=[\"']?password", re.IGNORECASE)
-_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _ZW = dict.fromkeys(map(ord, "­​‌‍⁠﻿"), None)
 _TOKEN = re.compile(r"[^\W_]+")
 _MD_IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
@@ -132,28 +133,285 @@ class Conv(NamedTuple):
         return not (self.missing or self.glued or self.headings_missing)
 
 
+# --- one linear pass over a document ------------------------------------------------------------------------
+
+_LOWER = {ord(c): ord(c) + 32 for c in string.ascii_uppercase}
+_RAW_TEXT_TAGS = frozenset(("script", "style", "noscript", "template"))
+_ROOT_TAGS = frozenset(("div", "main", "section", "body"))
+_ROOT_IDS = frozenset(("root", "app", "__next", "__nuxt"))
+_NAME_END = " \t\n\r\f/>"
+_SPACE = " \t\n\r\f"
+_ASCII_ALPHA = frozenset(string.ascii_letters)
+_WS_RUN = re.compile(r"\s+")
+_CTRL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+class Scan(NamedTuple):
+    visible: str                 # the visible text: head, title, raw-text elements and comments gone, tags as spaces
+    lowered: str                 # the ASCII-lowered document (the markers' haystack)
+    title: Optional[str]
+    script_chars: int            # characters inside <script> elements, tags included
+    noscript_js: bool            # a <noscript> naming JavaScript
+    empty_root: bool             # an empty #root / #app / #__next / #__nuxt container
+    forms: int                   # <form> start tags
+    password: bool               # an <input type=password>
+
+
+def ascii_lower(s: str) -> str:
+    """ASCII-only lowercasing — length-preserving, so an index into the result addresses the original."""
+    return s.translate(_LOWER)
+
+
+def tag_name(low: str, lt: int, gt: int) -> str:
+    """The name of the start or end tag between `<` at `lt` and `>` at `gt` of an ASCII-lowered document."""
+    start = lt + 2 if low[lt + 1:lt + 2] == "/" else lt + 1
+    j = start
+    while j < gt and low[j] not in _NAME_END:
+        j += 1
+    return low[start:j]
+
+
+def tag_attrs(inner: str) -> Dict[str, str]:
+    """The attributes of one start tag from the text between its name and `>`: lowercase names, unescaped
+    values, the first occurrence wins. One pass whatever the quoting; a quote never closed runs to the end."""
+    attrs: Dict[str, str] = {}
+    i, n = 0, len(inner)
+    while i < n:
+        c = inner[i]
+        if c in _SPACE or c == "/":
+            i += 1
+            continue
+        j = i
+        while j < n and inner[j] not in _SPACE and inner[j] not in "/=":
+            j += 1
+        name = inner[i:j].lower()
+        i = j
+        while i < n and inner[i] in _SPACE:
+            i += 1
+        value = ""
+        if i < n and inner[i] == "=":
+            i += 1
+            while i < n and inner[i] in _SPACE:
+                i += 1
+            if i < n and inner[i] in "\"'":
+                k = inner.find(inner[i], i + 1)
+                if k < 0:
+                    k = n
+                value = inner[i + 1:k]
+                i = k + 1
+            else:
+                k = i
+                while k < n and inner[k] not in _SPACE:
+                    k += 1
+                value = inner[i:k]
+                i = k
+        if name and name not in attrs:
+            attrs[name] = htmlmod.unescape(value)
+    return attrs
+
+
+def find_start_tag(low: str, name: str, start: int = 0) -> Tuple[int, int]:
+    """(`<`, `>`) of the next complete `<name …>` start tag at or after `start` in an ASCII-lowered document,
+    or (-1, -1): none left, or the next candidate has no `>` after it (an unclosed tag ends the document)."""
+    needle = "<" + name
+    pos = start
+    while True:
+        lt = low.find(needle, pos)
+        if lt < 0:
+            return -1, -1
+        after = low[lt + len(needle):lt + len(needle) + 1]
+        if after and after not in _NAME_END:        # <svgx is not <svg
+            pos = lt + 1
+            continue
+        gt = low.find(">", lt + 1)
+        return (lt, gt) if gt >= 0 else (-1, -1)
+
+
+def find_end_tag(low: str, name: str, start: int = 0) -> Tuple[int, int]:
+    """(`<`, `>`) of the next `</name …>` end tag at or after `start`, or (-1, -1) as find_start_tag."""
+    needle = "</" + name
+    pos = start
+    while True:
+        lt = low.find(needle, pos)
+        if lt < 0:
+            return -1, -1
+        after = low[lt + len(needle):lt + len(needle) + 1]
+        if after and after not in _NAME_END:
+            pos = lt + 1
+            continue
+        gt = low.find(">", lt + 1)
+        return (lt, gt) if gt >= 0 else (-1, -1)
+
+
+def elements(low: str, name: str, start: int = 0) -> Iterator[Tuple[int, int, int, int]]:
+    """Every complete `<name …>…</name>` element of an ASCII-lowered document in order, as (start `<`, start
+    `>`, end `<`, end `>`) — the first end tag after the start, as the `.*?` regexes took it; the scan stops
+    at an element that is never closed (the rest of the document is left as it is)."""
+    pos = start
+    while True:
+        lt, gt = find_start_tag(low, name, pos)
+        if lt < 0:
+            return
+        elt, egt = find_end_tag(low, name, gt + 1)
+        if elt < 0:
+            return
+        yield lt, gt, elt, egt
+        pos = egt + 1
+
+
+def strip_tags(s: str, sep: str = " ") -> str:
+    """Tags removed from a fragment by a bounded find loop; a `<` with no `>` after it is text."""
+    out: List[str] = []
+    i, n = 0, len(s)
+    while i < n:
+        lt = s.find("<", i)
+        if lt < 0:
+            out.append(s[i:])
+            break
+        gt = s.find(">", lt + 1)
+        if gt < 0:
+            out.append(s[i:])
+            break
+        out.append(s[i:lt])
+        out.append(sep)
+        i = gt + 1
+    return "".join(out)
+
+
+def _clean_title(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    title = htmlmod.unescape(strip_tags(raw))
+    title = _WS_RUN.sub(" ", _CTRL.sub(" ", title)).strip()[:300]
+    return title or None
+
+
+def scan(text: str) -> Scan:
+    """One pass over an HTML document: the visible text (the head, the title, script / style / noscript /
+    template elements and comments removed, every other tag a space), the `<title>`, the script bytes, the
+    js-shell signals and the login-form facts. Every step moves forward by a `str.find`, and an unclosed
+    construct ends the scan — the browser drops an unclosed tag and swallows the rest of the document into an
+    unclosed raw-text element — so the cost is linear in the input whatever its shape."""
+    low = ascii_lower(text)
+    n = len(text)
+    parts: List[str] = []
+    title: Optional[str] = None
+    script_chars = 0
+    noscript_js = False
+    empty_root = False
+    forms = 0
+    password = False
+    in_head = False
+    pending_root = False
+    i = 0
+    while i < n:
+        lt = low.find("<", i)
+        if lt < 0:
+            if not in_head:
+                parts.append(text[i:])
+            break
+        if lt > i:
+            if not in_head:
+                parts.append(text[i:lt])
+            if pending_root and text[i:lt].strip():
+                pending_root = False
+        nxt = low[lt + 1:lt + 2]
+        if nxt == "!" or nxt == "?":
+            if low.startswith("<!--", lt):
+                end = low.find("-->", lt + 4)
+                if end < 0:
+                    break
+                parts.append(" ")
+                i = end + 3
+                continue
+            gt = low.find(">", lt + 1)
+            if gt < 0:
+                break
+            parts.append(" ")
+            i = gt + 1
+            continue
+        if nxt == "/":
+            gt = low.find(">", lt + 2)
+            if gt < 0:
+                break
+            name = tag_name(low, lt, gt)
+            if name == "head":
+                in_head = False
+            if pending_root and name in _ROOT_TAGS:
+                empty_root = True
+            pending_root = False
+            parts.append(" ")
+            i = gt + 1
+            continue
+        if nxt not in _ASCII_ALPHA:          # a literal `<` (no tag starts here)
+            if not in_head:
+                parts.append("<")
+            i = lt + 1
+            continue
+        gt = low.find(">", lt + 1)
+        if gt < 0:
+            break
+        name = tag_name(low, lt, gt)
+        inner = text[lt + 1 + len(name):gt]
+        pending_root = False
+        parts.append(" ")
+        if name == "head":
+            in_head = True
+        elif name == "body":
+            in_head = False
+        elif name == "form":
+            forms += 1
+        elif name == "input":
+            if "password" in low[lt:gt] and tag_attrs(inner).get("type", "").strip().lower() == "password":
+                password = True
+        elif name in _ROOT_TAGS:
+            if "id" in low[lt:gt] and tag_attrs(inner).get("id", "").strip() in _ROOT_IDS:
+                pending_root = True
+        if name == "title":
+            end = low.find("</title", gt + 1)
+            if end < 0:
+                break
+            if title is None:
+                title = text[gt + 1:end]
+            close = low.find(">", end + 7)
+            if close < 0:
+                break
+            i = close + 1
+            continue
+        if name in _RAW_TEXT_TAGS:
+            end = low.find("</" + name, gt + 1)
+            if end < 0:
+                if name == "script":
+                    script_chars += n - lt
+                elif name == "noscript" and "javascript" in low[gt + 1:]:
+                    noscript_js = True
+                break
+            close = low.find(">", end + 2 + len(name))
+            if close < 0:
+                close = n - 1
+            if name == "script":
+                script_chars += close + 1 - lt
+            elif name == "noscript" and "javascript" in low[gt + 1:end]:
+                noscript_js = True
+            i = close + 1
+            continue
+        i = gt + 1
+    visible = _WS_RUN.sub(" ", htmlmod.unescape("".join(parts))).strip()
+    return Scan(visible, low, _clean_title(title), script_chars, noscript_js, empty_root, forms, password)
+
+
 # --- the acquisition table ---------------------------------------------------------------------------------
 
 def visible_text(body_html: str) -> str:
-    text = _HEAD.sub(" ", body_html)
-    text = _SCRIPT.sub(" ", text)
-    text = _TAG.sub(" ", text)
-    text = htmlmod.unescape(text)
-    return re.sub(r"\s+", " ", text).strip()
+    return scan(body_html).visible
 
 
 def visible_words(body_html: str) -> int:
-    return len(visible_text(body_html).split())
+    return len(scan(body_html).visible.split())
 
 
 def page_title(doc_html: str) -> Optional[str]:
-    m = _TITLE.search(doc_html)
-    if not m:
-        return None
-    title = htmlmod.unescape(_TAG.sub(" ", m.group(1)))
-    title = re.sub(r"[\x00-\x1f\x7f]", " ", title)
-    title = re.sub(r"\s+", " ", title).strip()[:300]
-    return title or None
+    return scan(doc_html).title
 
 
 def _find_marker(haystack: str, markers) -> Optional[str]:
@@ -163,35 +421,39 @@ def _find_marker(haystack: str, markers) -> Optional[str]:
     return None
 
 
+def _js_shell(sc: Scan, total: int) -> Optional[str]:
+    if sc.empty_root:
+        return "empty root container"
+    if total and sc.script_chars * 100 > total * 60:
+        return "script bytes %d%%" % (sc.script_chars * 100 // total)
+    if sc.noscript_js:
+        return "<noscript> names JavaScript"
+    return None
+
+
 def js_shell_signal(body_html: str) -> Optional[str]:
     """An empty root container, script bytes above 60 % of the body, or a <noscript> naming JavaScript."""
-    if _EMPTY_ROOT.search(body_html):
-        return "empty root container"
-    total = len(body_html)
-    if total:
-        script_bytes = sum(len(m.group(0)) for m in _SCRIPT_ONLY.finditer(body_html))
-        if script_bytes * 100 > total * 60:
-            return "script bytes %d%%" % (script_bytes * 100 // total)
-    for m in _NOSCRIPT.finditer(body_html):
-        if "javascript" in m.group(1).lower():
-            return "<noscript> names JavaScript"
-    return None
+    return _js_shell(scan(body_html), len(body_html))
 
 
 def acquisition(status: Optional[int], headers: Optional[Dict[str, str]], body: bytes, *,
                 thin_words: int = THIN_WORDS_DEFAULT) -> Acq:
-    """The decision table of §3.4 as amended by A7, first match wins. `status` is None for a rendered page."""
+    """The decision table of §3.4 as amended by A7, first match wins. `status` is None for a rendered page.
+    Only the first CLASSIFY_MAX_BYTES of the body are examined, in one pass (`scan`)."""
     headers = {k.lower(): v for k, v in (headers or {}).items()}
-    text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else str(body)
-    lower = text.lower()
+    if isinstance(body, (bytes, bytearray)):
+        text = bytes(body[:CLASSIFY_MAX_BYTES]).decode("utf-8", "replace")
+    else:
+        text = str(body)[:CLASSIFY_MAX_BYTES]
+    sc = scan(text)
     header_text = "\n".join("%s: %s" % (k, v) for k, v in headers.items()).lower()
-    haystack = lower + "\n" + header_text
-    W = visible_words(text)
-    title = page_title(text)
+    haystack = sc.lowered + "\n" + header_text
+    W = len(sc.visible.split())
+    title = sc.title
     retry_after = headers.get("retry-after")
     bot = _find_marker(haystack, BOT_WALL_MARKERS)
     login = _find_marker(haystack, LOGIN_MARKERS)
-    if login is None and W < WALL_MAX_WORDS and len(_FORM.findall(text)) == 1 and _PASSWORD.search(text):
+    if login is None and W < WALL_MAX_WORDS and sc.forms == 1 and sc.password:
         login = "a single form with a password field"
     paywall = _find_marker(haystack, PAYWALL_MARKERS)
 
@@ -231,7 +493,7 @@ def acquisition(status: Optional[int], headers: Optional[Dict[str, str]], body: 
         return row("http", "status %d without a followed Location" % status)
     if bot and W < WALL_MAX_WORDS:
         return row("bot-wall", bot)
-    signal = js_shell_signal(text)
+    signal = _js_shell(sc, len(text))
     if signal and W < JS_SHELL_MAX_WORDS:
         return row("js-shell", signal)
     if W < thin_words:

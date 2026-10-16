@@ -1,4 +1,5 @@
-"""§7.7 — sanitation on the fixtures: both levels, every repair counted, idempotent; lib_table."""
+"""§7.7 — sanitation on the fixtures: both levels, every repair counted, idempotent; lib_table; the bounded
+HTML-level loops (G1)."""
 from __future__ import annotations
 
 import time
@@ -7,6 +8,32 @@ import unittest
 from _helpers import read_fixture
 
 from capture import lib_table, proc, sanitize
+
+
+class Bounded(unittest.TestCase):
+    """The HTML level finds every element it rewrites by bounded find loops: an element that is never
+    closed costs nothing more than a closed one and leaves the rest of the document as it is."""
+
+    def test_unclosed_elements_are_left_and_linear(self):
+        for label, html in (("svg", ("<svg>" + "x" * 20) * 50000),
+                            ("table", "<table><tr><td>" * 60000),
+                            ("data anchor", ('<a href="data:text/plain,x">' + "y" * 10) * 40000),
+                            ("listing line", ('<div class="ltx_listingline">' + "z" * 10) * 30000)):
+            t0 = time.monotonic()
+            out, counts = sanitize.html(html, "arxiv")
+            self.assertLess(time.monotonic() - t0, 2.0, label)
+            self.assertEqual(out, html, "%s: an unclosed element and what follows it stay" % label)
+            self.assertEqual(sum(counts.values()), 0, label)
+
+    def test_closed_elements_before_an_unclosed_one_are_still_rewritten(self):
+        html = ("<p>a</p><svg><text>Lbl</text></svg><table><tr><td colspan='2'>c</td></tr></table>"
+                "<a href=\"data:text/plain,x\">⬇</a><svg><text>never closed")
+        out, counts = sanitize.html(html, "page")
+        self.assertIn("<p>[diagram: Lbl]</p>", out)
+        self.assertIn("<td>c</td><td>c</td>", out)
+        self.assertNotIn("⬇", out)
+        self.assertTrue(out.endswith("<svg><text>never closed"), out)
+        self.assertEqual((counts["svg_diagrams"], counts["tables_rewritten"], counts["data_links"]), (1, 1, 1))
 
 
 class Tables(unittest.TestCase):

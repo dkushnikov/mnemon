@@ -433,6 +433,21 @@ class Timeouts(FetchBase):
             self.assertTrue(wait_gone(pid, 4), "pid %d survived SIGTERM of its owner" % pid)
 
 
+class MetadataScans(unittest.TestCase):
+    def test_meta_map_and_declared_canonical_are_bounded(self):
+        """The metadata scans walk the tags by bounded find loops (G1): the facts of a page, and a page of
+        tags that never end, both cost one pass."""
+        html = ('<html><head><meta name="citation_title" content="A &amp; B"><META property="og:x" content=" y ">'
+                '<link rel="canonical alternate" href="https://e/x?a=1&amp;b=2"><meta name="empty" content=""></head></html>')
+        self.assertEqual(F._meta_map(html), {"citation_title": ["A & B"], "og:x": ["y"]})
+        self.assertEqual(F._declared_canonical(html), "https://e/x?a=1&b=2")
+        hostile = "<meta " * 200000 + "<link " * 200000
+        t0 = time.monotonic()
+        self.assertEqual(F._meta_map(hostile), {})
+        self.assertIsNone(F._declared_canonical(hostile))
+        self.assertLess(time.monotonic() - t0, 2.0)
+
+
 class VendorAdapters(unittest.TestCase):
     def test_firecrawl(self):
         method, host, path, headers, body = F.firecrawl_request("https://example.com/app", "KEY")
