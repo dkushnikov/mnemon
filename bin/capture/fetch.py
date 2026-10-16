@@ -460,6 +460,11 @@ class Chain:
         if res.timed_out:
             self.stage("render", "timeout", None, None, 0, ms, "renderer killed with its process group after %.0f s" % self.opts.render_timeout)
             return _Render("timeout", elapsed_ms=ms, note="render stage exceeded render_timeout=%g" % self.opts.render_timeout)
+        if res.rc == EXIT_TIMEOUT:
+            # A7 (iii): a renderer that exits 124 on its own timed out — terminal and retryable, never a
+            # transition to the external stage
+            self.stage("render", "timeout", None, None, len(res.stdout), ms, "renderer exited 124 (its own timeout)")
+            return _Render("timeout", elapsed_ms=ms, note="render stage timed out (renderer exit 124)", rc=res.rc)
         if not res.started or res.rc == RENDER_EXIT_NO_CHROME:
             self.stage("render", "unavailable", None, None, 0, ms, "no renderer (Chrome missing)")
             return _Render("unavailable", elapsed_ms=ms, note="no renderer", rc=res.rc)

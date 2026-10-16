@@ -397,6 +397,29 @@ class Timeouts(FetchBase):
             self.assertTrue(wait_gone(pid, 4), "pid %d survived the renderer timeout" % pid)
         self.assertLess(elapsed, 15)
 
+    def test_renderer_exit_124_is_timeout_terminal_never_external(self):
+        """A7 (iii): a renderer that exits 124 on its own is `timeout` (terminal, retryable, stage render) —
+        the chain never moves on to the external stage, whatever the instance allows."""
+        self.server.add("/wall", "<html><body><p>Access Denied</p></body></html>", status=403)
+        stub = write_stub(self.stubs, "render-124.sh", "#!/usr/bin/env bash\necho 'render-url.sh: timed out' >&2\nexit 124\n")
+        log = os.path.join(self.dir, "ext.log")
+        env = {"MNEMON_EXTERNAL_FETCH_CMD": self.external, "EXT_LOG": log, "FIRECRAWL_API_KEY": "k"}
+        rc, report, raw, se = self.fetch("/wall", ["--external", '{"mode": "auto", "fetchers": ["firecrawl", "jina"]}'],
+                                         render=stub, env_extra=env)
+        self.assertEqual(rc, 124, se)
+        self.assertEqual((report["error_class"], report["stage"], report["retryable"]), ("timeout", "render", True))
+        self.assertEqual(self.stages(report), [("direct", "bot-wall"), ("render", "timeout")])
+        self.assertIn("exited 124", report["stages"][-1]["note"])
+        self.assertIsNone(raw)
+        self.assertFalse(os.path.exists(log), "the external fetcher was called after a renderer timeout")
+        assert_same_keys(self, report, expected_shapes("fetch-timeout.json"), "fetch-timeout")
+        # under the thin trigger the direct result is kept (A7 iv), as for a supervised timeout
+        self.server.add("/thin", "<html><body><p>only a few words here</p></body></html>")
+        rc, report, raw, se = self.fetch("/thin", render=stub)
+        self.assertEqual(rc, 0, se)
+        self.assertEqual(self.stages(report), [("direct", "thin"), ("render", "timeout")])
+        self.assertEqual((report["method"], report["acquisition"]["outcome"]), ("direct", "thin"))
+
     def test_thin_trigger_keeps_direct_on_render_timeout(self):
         self.server.add("/thin", "<html><body><p>only a few words here</p></body></html>")
         stub, pidfile = self.sleeper("render-sleep2.sh")
