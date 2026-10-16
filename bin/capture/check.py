@@ -104,7 +104,11 @@ _MD_LINK = re.compile(r"\[([^\]\n]*)\]\(" + _MD_DEST + r"\)")
 _MD_REFLINK = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")
 _MD_LINKDEF = re.compile(r"^\s*\[[^\]]+\]:\s*\S+.*$", re.MULTILINE)
 _MD_AUTOLINK = re.compile(r"<(https?://[^>\s]+)>")
-_MD_HTML_TAG = re.compile(r"</?[A-Za-z][^>]*>")
+# An HTML tag has a tag's shape and never spans lines: `max<sub>i<j</sub>` reads `maxi<j(si − sj)` in the DOM
+# text, and a `<` followed by letters must not swallow everything up to a `>` lines later (G16); the
+# separator after the name is horizontal whitespace, never a newline.
+_MD_HTML_TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9:-]*(?:[^\S\n][^<>\n]*)?/?>")
+_MD_CODE_RUN = re.compile(r"`+")
 # An emphasis, code or strike marker with word characters on both sides (`*emph*asis`, pandoc's rendering
 # of <em>emph</em>asis) is markup inside a word, not a split: the candidate is also indexed with those
 # markers removed. A literal `*` in page text stays a boundary in the plain index, so the DOM text keeps
@@ -544,15 +548,79 @@ def spaceless_chars(s: str) -> int:
     return n
 
 
-def candidate_text(md: str) -> str:
-    """A candidate reduced to its text: link and image targets dropped (their tokens are not page text)."""
-    text = _MD_LINKDEF.sub("", md)
+def _fenced_segments(md: str) -> List[Tuple[bool, str]]:
+    """The text of a markdown document as (inside a fence, text) runs; the fence lines belong to the code run."""
+    segments: List[Tuple[bool, str]] = []
+    current: List[str] = []
+    fence = None
+    for line in md.split("\n"):
+        m = _FENCE.match(line)
+        if fence is None:
+            if m:
+                if current:
+                    segments.append((False, "\n".join(current)))
+                current = [line]
+                fence = m.group(1)
+            else:
+                current.append(line)
+        else:
+            current.append(line)
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not line.strip()[len(m.group(1)):].strip():
+                segments.append((True, "\n".join(current)))
+                current = []
+                fence = None
+    if current or not segments:
+        segments.append((fence is not None, "\n".join(current)))
+    return segments
+
+
+def _code_spans(text: str) -> List[Tuple[int, int]]:
+    """(start, end) of every inline code span: a backtick run closed by the next run of the same length; an
+    unclosed run is literal text (CommonMark). One pass over the runs."""
+    runs = list(_MD_CODE_RUN.finditer(text))
+    spans: List[Tuple[int, int]] = []
+    i = 0
+    while i < len(runs):
+        n = len(runs[i].group(0))
+        j = i + 1
+        while j < len(runs) and len(runs[j].group(0)) != n:
+            j += 1
+        if j < len(runs):
+            spans.append((runs[i].start(), runs[j].end()))
+            i = j + 1
+        else:
+            i += 1
+    return spans
+
+
+def _rewrite_prose(text: str) -> str:
     text = _MD_IMAGE.sub(r"\1", text)
     text = _MD_LINK.sub(r"\1", text)
     text = _MD_REFLINK.sub(r"\1", text)
     text = _MD_AUTOLINK.sub(r"\1", text)
     text = _MD_HTML_TAG.sub(" ", text)
     return text
+
+
+def candidate_text(md: str) -> str:
+    """A candidate reduced to its text: link and image targets dropped (their tokens are not page text) and
+    HTML tags blanked — in prose only. Fenced blocks and inline code spans are kept as they are: `grid[0][0]`
+    is code, not a reference link, and a `<` inside a listing is not a tag (G16)."""
+    out: List[str] = []
+    for in_code, seg in _fenced_segments(md):
+        if in_code:
+            out.append(seg)
+            continue
+        seg = _MD_LINKDEF.sub("", seg)
+        pieces: List[str] = []
+        pos = 0
+        for start, end in _code_spans(seg):
+            pieces.append(_rewrite_prose(seg[pos:start]))
+            pieces.append(seg[start:end])
+            pos = end
+        pieces.append(_rewrite_prose(seg[pos:]))
+        out.append("".join(pieces))
+    return "\n".join(out)
 
 
 def classify_line(line: str, title_key: Optional[str]) -> Optional[str]:
@@ -608,12 +676,14 @@ def plain(line: str) -> str:
     return line.replace(SOFT, "")
 
 
-def conversion(candidate_md: str, reference: str, title: Optional[str]) -> Conv:
+def conversion(candidate_md: str, reference: str, title: Optional[str], markdown: bool = True) -> Conv:
     """Every eligible reference line and every h1–h3 heading must be present: the key as a substring and
     the line's tokens — SOFT boundaries joined — as a contiguous sequence of the candidate's tokens, in the
-    plain tokenization or with intraword emphasis markers removed."""
+    plain tokenization or with intraword emphasis markers removed. `markdown=False` compares a plain-text
+    candidate (the DOM text) as it is: the link rewrites of `candidate_text` are for markdown, and prose that
+    merely looks like a reference link (`out[r][min(cols)]`) must not be eaten (G16)."""
     lines = reference_lines(reference)
-    text = candidate_text(candidate_md)
+    text = candidate_text(candidate_md) if markdown else candidate_md
     cand_key = line_key(text)
     index = _TokenIndex(tokens(text))
     unmarked = _INTRAWORD_MARK.sub("", text)

@@ -213,6 +213,40 @@ class ConversionCheck(unittest.TestCase):
         self.assertTrue(C.conversion(cand, ref, None).passed, C.conversion(cand, ref, None))
         self.assertEqual(C.candidate_text("see [x](y \"t (1)\") and [z](<u v> 'w') now").split(), ["see", "x", "and", "z", "now"])
 
+    def test_candidate_text_never_eats_text(self):
+        """G16: (a) an HTML tag has a tag's shape and never spans lines — the drawdown line `maxi<j(si − sj)`
+        keeps everything after `<j`, the headings after it included; (b) the link, image, reflink and autolink
+        rewrites skip fenced blocks and inline code spans, so `grid[0][0]` and `a[1][2]` stay code."""
+        ref = ("The maximal drawdown is maxi<j(si − sj) over the sequence of scores on this run\n"
+               "## Results on the synthetic benchmark\n"
+               "A paragraph after the heading with more than six words in it.\n"
+               "marker = grid[0][0] if h and w else 0\n"
+               "The value `a[1][2]` of the cell is read here first\n")
+        cand = ("The maximal drawdown is maxi<j(si − sj) over the sequence of scores on this run\n\n"
+                "## Results on the synthetic benchmark\n\n"
+                "A paragraph after the heading with more than six words in it.\n\n"
+                "~~~~text\nmarker = grid[0][0] if h and w else 0\n~~~~\n\n"
+                "The value `a[1][2]` of the cell is read here first\n")
+        conv = C.conversion(cand, ref, None)
+        self.assertTrue(conv.passed, conv)
+        self.assertEqual(conv.eligible_count, 5)
+        text = C.candidate_text(cand)
+        self.assertIn("maxi<j(si − sj) over the sequence", text, "a `<` followed by letters is not a tag")
+        self.assertIn("## Results on the synthetic benchmark", text, "the heading lines later are not eaten")
+        self.assertIn("grid[0][0]", text, "a fenced block is left as it is")
+        self.assertIn("`a[1][2]`", text, "an inline code span is left as it is")
+        self.assertIn(">", C.candidate_text("x <j\nstuff> y"), "no tag spans a line")
+        self.assertEqual(C.candidate_text("<b>x</b> <a href='u'>y</a><br/> <my-tag:x data-a=\"1\">z</my-tag:x>").split(), ["x", "y", "z"])
+        self.assertEqual(C.candidate_text("see [a][1] and [b](u) and ![c](i) and <https://h/x> here\n\n[1]: https://h/y\n").split(),
+                         ["see", "a", "and", "b", "and", "c", "and", "https://h/x", "here"])
+        self.assertEqual(C.candidate_text("``a [x](y) `` and `[q][r]` and `unclosed [s](t)").split(),
+                         ["``a", "[x](y)", "``", "and", "`[q][r]`", "and", "`unclosed", "s"])
+        self.assertEqual(C._code_spans("`a` ``b`` `c"), [(0, 3), (4, 9)])
+        # the DOM text is plain text: prose that looks like a reference link is compared as it is
+        plain = "The lineage traces to a recurring fragment in failed solver code (out[r][min(cols)] = 0) here\n"
+        self.assertTrue(C.conversion(plain, plain, None, markdown=False).passed, "a plain-text candidate satisfies itself")
+        self.assertFalse(C.conversion(plain, plain, None).passed, "...while the markdown rewrites would eat `[r][min(cols)]`")
+
     def test_chrome_lines_not_required_but_long_cookie_line_is(self):
         self.assertIsNone(C.classify_line("Accept all cookies and continue to the site", None))
         self.assertIsNone(C.classify_line("We use cookies to improve your experience okay", None))

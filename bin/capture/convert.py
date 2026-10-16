@@ -596,7 +596,8 @@ def convert(raw: bytes, url: str, raw_kind: str = "response", kind: str = "page"
             candidates.append(entry)
             return
         cleaned, md_repairs = sanitize.markdown(md, kind)
-        conv = check.conversion(cleaned, reference, title)
+        # the DOM text is plain text: compared as it is, never through the markdown link rewrites (G16)
+        conv = check.conversion(cleaned, reference, title, markdown=(name != "dom-text"))
         entry.update({"missing_count": len(conv.missing), "glued_count": len(conv.glued),
                       "headings_missing_count": len(conv.headings_missing)})
         if conv.passed and chosen is None and cleaned.strip():
