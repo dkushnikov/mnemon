@@ -223,6 +223,19 @@ class Chain(FetchBase):
         self.assertEqual(rc, 0, se)
         self.assertEqual(self.stages(report), [("render", "ok")])
 
+    def test_forced_render_on_a_refused_address_reports_the_policy_class(self):
+        """--render on a URL the policy's pre-validation refuses: the report carries that class (here
+        ssrf-blocked), permanent — not `fetch` / "the forced render produced no page", retryable — and the
+        renderer is never launched (a renderer that answered would have published)."""
+        rc, report, raw, se = self.fetch("", ["--render"], render=self.render_ok, url="http://10.0.0.1/x")
+        self.assertEqual(rc, 1, se)
+        self.assertEqual((report["error_class"], report["retryable"], report["stage"]), ("ssrf-blocked", False, "render"))
+        self.assertEqual(self.stages(report), [("render", "ssrf-blocked")])
+        self.assertIn("pre-validation", report["stages"][0]["note"])
+        self.assertIn("private address", report["error"])
+        self.assertIsNone(raw)
+        self.assertEqual(self.server.count(), 0)
+
     def test_pdf_served_as_a_page_ends_the_chain(self):
         self.server.add("/doc", b"%PDF-1.7\nbinary\n%%EOF\n", content_type="application/pdf")
         rc, report, raw, se = self.fetch("/doc")

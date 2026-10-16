@@ -212,15 +212,16 @@ def vendor_call(method: str, host: str, path: str, headers: dict, body: Optional
 # --- the chain -------------------------------------------------------------------------------------------
 
 class _Render:
-    __slots__ = ("state", "body", "acq", "elapsed_ms", "note", "rc")
+    __slots__ = ("state", "body", "acq", "elapsed_ms", "note", "rc", "exc")
 
-    def __init__(self, state, body=b"", acq=None, elapsed_ms=0, note=None, rc=None):
-        self.state = state          # ok | unavailable | timeout | failed
+    def __init__(self, state, body=b"", acq=None, elapsed_ms=0, note=None, rc=None, exc=None):
+        self.state = state          # ok | unavailable | timeout | failed | refused
         self.body = body
         self.acq = acq
         self.elapsed_ms = elapsed_ms
         self.note = note
         self.rc = rc
+        self.exc = exc              # refused: the PolicyError of the pre-validation (its kind is the class)
 
 
 class Chain:
@@ -448,8 +449,10 @@ class Chain:
         try:
             self.opts.policy.check(self.res.fetch_url, deadline=self.deadline)
         except policymod.PolicyError as exc:
+            # the policy's pre-validation of the name refused the URL before Chrome launched: the class is
+            # the policy's (ssrf-blocked, scheme, userinfo, …), never a renderer failure (G7)
             self.stage("render", exc.kind, None, None, 0, 0, "pre-validation: %s" % exc.message)
-            return _Render("failed", note=exc.message)
+            return _Render("refused", note=exc.message, exc=exc)
         if not os.path.exists(cmd) or not os.access(cmd, os.X_OK):
             self.stage("render", "unavailable", None, None, 0, 0, "renderer not found: %s" % cmd)
             return _Render("unavailable", note="renderer not found", rc=RENDER_EXIT_NO_CHROME)
@@ -486,6 +489,8 @@ class Chain:
             r = self.render(trigger=last_kind or "forced")
             if r.state == "timeout":
                 return self.fail("timeout", r.note or "render timed out", True, "render")
+            if r.state == "refused":
+                return self.policy_fail(r.exc, "render")
             if r.state == "unavailable":
                 renderer_missing = True
                 if forced:
