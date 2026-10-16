@@ -157,7 +157,7 @@ TEXT = {
     "inventory": {"headings": {"html": 9, "md": 9}, "list_items": {"html": 31, "md": 31}, "tables": {"html": 1, "md": 1},
                   "code_blocks": {"html": 2, "md": 2}, "links": {"html": 44, "md": 40}, "images": {"html": 3, "md": 3}},
     "repairs": {"html": {"svg_diagrams": 1, "svg_icons": 4, "latexml_listings": 0, "data_links": 0, "tables_rewritten": 0,
-                         "tables_unrepaired": 0},
+                         "tables_unrepaired": 0, "math_sources": 0},
                 "markdown": {"data_uris": 0, "data_links": 0, "next_images": 2, "tcolorbox_residue": 0, "residue_lines": 0,
                              "comment_sections": 1, "tables_unrepaired": 0}},
     "bytes_per_word": 5.9,

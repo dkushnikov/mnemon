@@ -205,6 +205,13 @@ class ConversionCheck(unittest.TestCase):
         ref = "Read the docs for more information about this feature\n"
         cand = "Read [the docs](https://example.com/docs/x) for more *information* about this feature\n"
         self.assertTrue(C.conversion(cand, ref, None).passed)
+        # G15: a quoted link title with parentheses (pandoc writes the page's `title` attribute) is part of the
+        # link, never text; so is an `<…>` destination and an image title
+        ref = "Table 3 reports the initial score across all three tasks\n"
+        cand = ('Table [3](#S7.T3 "Table 3 ‣ 7.1. Combined vs. harness-only (RQ1) ‣ 7. Discussion") reports the initial '
+                "score across all [three](<a b/c> 'tasks (counted)') tasks ![fig](x.png \"(a) panel\")\n")
+        self.assertTrue(C.conversion(cand, ref, None).passed, C.conversion(cand, ref, None))
+        self.assertEqual(C.candidate_text("see [x](y \"t (1)\") and [z](<u v> 'w') now").split(), ["see", "x", "and", "z", "now"])
 
     def test_chrome_lines_not_required_but_long_cookie_line_is(self):
         self.assertIsNone(C.classify_line("Accept all cookies and continue to the site", None))

@@ -1,7 +1,10 @@
 """capture.sanitize — sanitation before the check, every repair counted, no position guessed (spec D8).
 
-HTML level (`html`), on the raw before the reference and the converters see it: an SVG with `<text>`
-becomes a `<p>` placeholder carrying its labels, an icon SVG is removed; LaTeXML `div.ltx_listingline` runs
+HTML level (`html`), on the raw before the reference and the converters see it: every `<math>` element
+becomes the text `$<alttext>$` (display math `$$…$$`; without `alttext` the `<annotation
+encoding="application/x-tex">`, without either the element's visible text) so the reference, the converters
+and the published text all carry the formula's source instead of glyphs glued to it (`θ\\theta`, G15); an
+SVG with `<text>` becomes a `<p>` placeholder carrying its labels, an icon SVG is removed; LaTeXML `div.ltx_listingline` runs
 become `<pre><code>` (indentation from `ltx_lst_space`); `<a href="data:…">` listing buttons are removed (an
 anchor with real text is unwrapped to its text); merged-cell tables are rewritten into simple tables
 (lib_table) so pandoc never emits `[TABLE]` for them — a table whose expansion would exceed the cell cap
@@ -27,7 +30,8 @@ from typing import Callable, List, Tuple
 from . import lib_table
 from .check import COMMENTS, ascii_lower, elements, find_end_tag, find_start_tag, strip_tags, tag_attrs, tag_name
 
-HTML_KEYS = ("svg_diagrams", "svg_icons", "latexml_listings", "data_links", "tables_rewritten", "tables_unrepaired")
+HTML_KEYS = ("svg_diagrams", "svg_icons", "latexml_listings", "data_links", "tables_rewritten", "tables_unrepaired",
+             "math_sources")
 MD_KEYS = ("data_uris", "data_links", "next_images", "tcolorbox_residue", "residue_lines", "comment_sections",
            "tables_unrepaired")
 
@@ -71,6 +75,36 @@ def _sub_elements(text: str, name: str, repl: Callable[[str, str], str]) -> str:
         return text
     out.append(text[pos:])
     return "".join(out)
+
+
+def _math_source(inner: str, attrs: dict) -> str:
+    """The TeX source of one `<math>` element: `alttext`, else the `application/x-tex` annotation, else the
+    element's visible text — one line, HTML-escaped so it reads as a text node."""
+    src = (attrs.get("alttext") or "").strip()
+    if not src:
+        low = ascii_lower(inner)
+        for lt, gt, elt, egt in elements(low, "annotation"):
+            if tag_attrs(inner[lt + 11:gt]).get("encoding", "").strip().lower() == "application/x-tex":
+                src = htmlmod.unescape(inner[gt + 1:elt]).strip()
+                if src:
+                    break
+    if not src:
+        src = htmlmod.unescape(strip_tags(inner)).strip()
+    return htmlmod.escape(" ".join(src.split()), quote=False)
+
+
+def _math_repl(counts):
+    def repl(block: str, inner: str) -> str:
+        gt = block.find(">")
+        attrs = tag_attrs(block[5:gt]) if gt > 0 else {}
+        src = _math_source(inner, attrs)
+        counts["math_sources"] += 1
+        if not src:
+            return ""
+        if attrs.get("display", "").strip().lower() == "block":
+            return "$$%s$$" % src
+        return "$%s$" % src
+    return repl
 
 
 def _svg_repl(counts):
@@ -222,7 +256,8 @@ def html(raw_html: str, kind: str = "page", deadline=None) -> Tuple[str, dict]:
     """The HTML-level repairs; (sanitized html, counts). `deadline` (a proc.Deadline) is checked between
     tables; past it `Timeout` is raised."""
     counts = _counts(HTML_KEYS)
-    out = _sub_elements(raw_html, "svg", _svg_repl(counts))
+    out = _sub_elements(raw_html, "math", _math_repl(counts))
+    out = _sub_elements(out, "svg", _svg_repl(counts))
     out = _sub_listing_runs(out, counts)
     out = _sub_data_links(out, counts)
     out = _sub_elements(out, "table", _table_repl(counts, deadline))

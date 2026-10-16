@@ -95,8 +95,12 @@ CONTAINER_TAGS = frozenset(("div", "section", "aside", "article", "ol", "ul", "d
 
 _ZW = dict.fromkeys(map(ord, "­​‌‍⁠﻿"), None)
 _TOKEN = re.compile(r"[^\W_]+")
-_MD_IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
-_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+# A link destination: a bare one, or `<…>`, each optionally followed by a quoted title — pandoc writes the
+# page's `title` attribute there (`[3](#S7.T3 "Table 3 ‣ 7.1 … (RQ1)")`), and a title's parentheses must not
+# end the match early or its words leak into the candidate's token sequence (G15, the SIA paper).
+_MD_DEST = r"(?:<[^<>\n]*>|[^()\s]*)(?:\s+(?:\"[^\"\n]*\"|'[^'\n]*'))?\s*"
+_MD_IMAGE = re.compile(r"!\[([^\]\n]*)\]\(" + _MD_DEST + r"\)")
+_MD_LINK = re.compile(r"\[([^\]\n]*)\]\(" + _MD_DEST + r"\)")
 _MD_REFLINK = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")
 _MD_LINKDEF = re.compile(r"^\s*\[[^\]]+\]:\s*\S+.*$", re.MULTILINE)
 _MD_AUTOLINK = re.compile(r"<(https?://[^>\s]+)>")

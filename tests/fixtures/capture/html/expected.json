@@ -75,6 +75,34 @@
    }
   ]
  },
+ "math.html": {
+  "kind": "arxiv",
+  "title": "Formulas in a Synthetic Paper",
+  "defuddle": "math.defuddle.md",
+  "converter": "pandoc",
+  "completeness": "complete",
+  "defuddle_missing_min": 1,
+  "eligible_min": 3,
+  "repairs": {
+   "html": {
+    "math_sources": 4
+   }
+  },
+  "present": [
+   "$\\theta$",
+   "$$A",
+   "\\mathcal{M}",
+   "\\tau",
+   "the published line"
+  ],
+  "absent": [
+   "<math",
+   "<annotation",
+   "θ",
+   "τ",
+   "\\$"
+  ]
+ },
  "nextjs.html": {
   "kind": "page",
   "title": "Example Product — Marketing",

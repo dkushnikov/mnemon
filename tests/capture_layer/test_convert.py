@@ -130,6 +130,32 @@ class FixtureOutcomes(unittest.TestCase):
                 if name != "cjk.html":      # whitespace words: a CJK page is "bloated" by construction, flagged, never acted on
                     self.assertFalse(r["bloat"], label)
 
+    def test_math_is_compared_and_published_as_its_tex_source(self):
+        """G15: a LaTeXML formula is `$<alttext>$` in the reference, in every candidate and in the published
+        text — pandoc passes the check (the keys agree on the source's letters) and carries the `$…$` through
+        as text (tex_math_dollars off), so the tables of a paper are not lost to the DOM-text fallback."""
+        from capture import check, sanitize
+        raw = read_fixture("math.html", binary=True)
+        sanitized, repairs = sanitize.html(raw.decode("utf-8"), "arxiv")
+        self.assertEqual(repairs["math_sources"], 4)
+        reference = convert.dom_text(convert.content_subtree(convert.parse(sanitized), "arxiv"), reference=True)
+        line = [ln for ln in reference.split("\n") if ln.startswith("The underlying model")][0]
+        self.assertIn("$\\theta$", line)
+        self.assertIn("theta", check.line_key(line), "the reference key carries the source's letters")
+        self.assertEqual(check.classify_line(line, None), "body")
+        result = run_fixture("math.html", "injected")
+        r = result.report
+        self.assertEqual(r["repairs"]["html"]["math_sources"], 4)
+        self.assertIn("$\\theta$", result.text)
+        self.assertNotIn("\\$", result.text, "the dollar signs are not escaped")
+        self.assertIn("$$A", result.text)
+        if HAVE_PANDOC:
+            self.assertEqual(r["converter"], "pandoc")
+            pandoc = [c for c in r["candidates"] if c["converter"] == "pandoc"][0]
+            self.assertEqual((pandoc["missing_count"], pandoc["glued_count"], pandoc["chosen"]), (0, 0, True))
+            self.assertEqual(r["inventory"]["tables"], {"html": 1, "md": 1}, "the equation table survives")
+        self.assertEqual(r["completeness"], "complete")
+
     def test_rendered_site_external_raws_never_run_defuddle(self):
         raw = read_fixture("cookie.html", binary=True)
         for raw_kind in ("rendered", "site", "external"):

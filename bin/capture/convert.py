@@ -8,7 +8,7 @@ and reader-comment sections removed, `<header>` kept) → the reference = `dom_t
 (block elements break lines, h1–h3 carry `## `, whitespace-free inline boundaries marked so the check can
 require word boundaries or accept the page's own joined form, nothing else dropped) → the candidates in
 order — `defuddle` on the sanitized HTML (skipped for rendered, site and external raws and discarded on
-mojibake), `pandoc` on the same subtree (`-f html -t gfm-raw_html --wrap=none`), the DOM text with the
+mojibake), `pandoc` on the same subtree (`-f html -t gfm-raw_html-tex_math_dollars --wrap=none`), the DOM text with the
 page's own word boundaries — each through `sanitize.markdown` and `check.conversion` until one passes;
 otherwise the DOM text, which satisfies the reference by construction. The inventory counts the same
 subtree. Stdlib only, python 3.9.
@@ -514,7 +514,9 @@ def pandoc_subtree(subtree_html: str, *, deadline: Optional[proc.Deadline] = Non
     path = shutil.which("pandoc")
     if not path:
         return None, "skipped: pandoc not installed"
-    res = proc.run([path, "-f", "html", "-t", "gfm-raw_html", "--wrap=none"], timeout=DEFAULT_TIMEOUT,
+    # tex_math_dollars off: the `$…$` text nodes the sanitizer made of <math> elements (G15) pass through as
+    # text instead of being escaped to `\$…\$`, so the published text carries the formula source as written
+    res = proc.run([path, "-f", "html", "-t", "gfm-raw_html-tex_math_dollars", "--wrap=none"], timeout=DEFAULT_TIMEOUT,
                    deadline=deadline, stdin=subtree_html.encode("utf-8"))
     if res.timed_out:
         return None, "pandoc timed out after %d ms" % res.elapsed_ms

@@ -105,6 +105,28 @@ class HtmlLevel(unittest.TestCase):
         self.assertIn("<th>Task A · Acc</th>", out)
         self.assertIn('<img src="data:image/png;base64,', out, "base64 figures are a markdown-level repair")
 
+    def test_math_elements_become_their_tex_source(self):
+        """G15: every <math> becomes the text `$<alttext>$` (display math `$$…$$`), the annotation when there is
+        no alttext, the visible text when there is neither — before the reference and the converters see it."""
+        html = ('<p>weights <math alttext="\\theta" display="inline"><mi>θ</mi><annotation encoding="application/x-tex">'
+                '\\theta</annotation></math> here</p>'
+                '<table><tr><td><math alttext="A_{1}=\\mathcal{M}" display="block"><mrow><mi>A</mi></mrow></math></td></tr></table>'
+                '<p><math display="inline"><mi>τ</mi><annotation encoding="application/x-tex"> \\tau_{g} </annotation></math>'
+                ' and <math><mi>x</mi><mo>&lt;</mo><mi>y</mi></math> and <math alttext="a &amp;&amp; b"><mi>a</mi></math></p>')
+        out, counts = sanitize.html(html, "arxiv")
+        self.assertEqual(counts["math_sources"], 5)
+        self.assertIn("<p>weights $\\theta$ here</p>", out)
+        self.assertIn("<td>$$A_{1}=\\mathcal{M}$$</td>", out, "display math is $$…$$")
+        self.assertIn("<p>$\\tau_{g}$ and $x&lt;y$ and $a &amp;&amp; b$</p>", out,
+                      "annotation, visible-text fallback and the source re-escaped as a text node")
+        self.assertNotIn("<math", out)
+        self.assertNotIn("θ", out)
+        twice, counts2 = sanitize.html(out, "arxiv")
+        self.assertEqual((twice, counts2["math_sources"]), (out, 0), "idempotent")
+        out, counts = sanitize.html(read_fixture("math.html"), "arxiv")
+        self.assertEqual(counts["math_sources"], 4)
+        self.assertNotIn("<math", out)
+
     def test_data_links_keep_their_text(self):
         html = ('<p><a href="data:text/plain;base64,AAAA">⬇</a> <a href="data:text/plain,x">Read the <b>full</b> sentence here</a>'
                 ' <a href="data:image/png;base64,BB"><img src="x.png"></a></p>')
