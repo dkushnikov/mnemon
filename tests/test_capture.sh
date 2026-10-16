@@ -1114,7 +1114,7 @@ assert_eq "$(capfm "$srcf" reference_lines) $(capfm "$srcf" eligible_lines) $(ca
 assert_eq "$(capfm "$srcf" repairs)" '"svg_diagrams=1,svg_icons=4,next_images=2,comment_sections=1"' "...repairs key=n,… (non-zero html and markdown counts)"
 assert_eq "$(fm "$srcf" published)" '"2026-09-01"' "...published: from the article:published_time candidate (source_type article)"
 assert_eq "$(result completeness) $(result acquisition)" "complete ok" "...RESULT:completeness=complete, RESULT:acquisition=ok"
-assert_contains "$(head -1 "$STUB_DIR/text-calls")" "--raw-kind response --kind page --fetch-report $VSTATE/runs/fx-text/attempt-1/fetch.json" "...the converter received the raw kind, the URL kind and the receipt's fetch report"
+assert_contains "$(head -1 "$STUB_DIR/text-calls")" "--raw-kind response --kind page --timeout 120 --fetch-report $VSTATE/runs/fx-text/attempt-1/fetch.json" "...the converter received the raw kind, the URL kind, --timeout convert_timeout (G25) and the receipt's fetch report"
 assert_eq "$(jq -c '.capture_report.text == input' "$(receipt fx-text)" "$FIX/reports/text.json")" "true" "...the receipt holds the report verbatim"
 assert_eq "$(rget fx-text '.published_candidates | length')" "1" "...and the eligible dated candidates"
 
@@ -1141,6 +1141,32 @@ stub_reset
 MNEMON_CAPTURE_TEXT_CMD="$STUBS/capture-text-nesting.py" run_gw --url "https://example.com/nesting" --capture-id nest-1
 assert_eq "$rc $(result status) $(result error_class) $(result retryable)" "1 failed convert false" "a conversion report with retryable false → failed / convert / retryable false (the gateway honours the report)"
 assert_eq "$(rget nest-1 '.state + " " + .error_class + " " + (.retryable|tostring) + " " + (.raw_published|tostring) + " " + .capture_report.text.error')" "failed convert false true nesting" "...the receipt: failed, convert, retryable false, the raw published (retained), the report's error nesting"
+assert_eq "$(result revision)" "" "...nothing published"
+
+# a conversion the worker's supervisor killed at convert_timeout (G25): exit 124 → timeout, stage convert,
+# the report's retryable (false); the raw stays published for --resume after raising the budget
+cat > "$STUBS/capture-text-timeout.py" <<STUB
+#!/usr/bin/env bash
+# capture-text.py stub: the supervisor's timeout report of G25 — exit 124, retryable false, stage convert, no text
+report=""; prev=""
+for a in "\$@"; do case "\$prev" in --report) report="\$a" ;; esac; prev="\$a"; done
+printf '%s\\n' "\$*" >> "$STUB_DIR/text-calls"
+python3 - "\$report" "$FIX/reports/text.json" <<'PY'
+import json, sys
+rep = json.load(open(sys.argv[2]))
+rep.update({"method": None, "bytes": 0, "words": 0, "completeness": "unknown", "tool": None, "converter": None,
+            "error_class": "timeout", "stage": "convert", "error": "conversion exceeded convert_timeout=120", "retryable": False})
+json.dump(rep, open(sys.argv[1], "w"))
+PY
+echo "capture-text: timeout: conversion exceeded convert_timeout=120 (worker killed with its process group)" >&2
+exit 124
+STUB
+chmod +x "$STUBS/capture-text-timeout.py"
+stub_reset
+MNEMON_CAPTURE_TEXT_CMD="$STUBS/capture-text-timeout.py" run_gw --url "https://example.com/slow-convert" --capture-id ct-to
+assert_eq "$rc $(result status) $(result error_class) $(result retryable)" "1 failed timeout false" "capture-text.py exit 124 → failed / timeout / retryable false (the report's flag; G25)"
+assert_eq "$(rget ct-to '.state + " " + .error_class + " " + (.retryable|tostring) + " " + .stage + " " + (.raw_published|tostring)')" "failed timeout false convert true" "...the receipt: timeout, stage convert, the raw published (retained for --resume)"
+assert_contains "$err" "convert_timeout" "...the message names convert_timeout"
 assert_eq "$(result revision)" "" "...nothing published"
 
 # ---------------------------------------------------------------------------------------------

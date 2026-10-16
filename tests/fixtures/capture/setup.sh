@@ -249,6 +249,14 @@ def cmd_assemble(argv):
     d = positional(argv)[1]
     out = opt(argv, "--out")
     report_path = opt(argv, "--report")
+    if os.environ.get("STUB_SITE") == "assemble-timeout":
+        # the landing's conversion worker killed by convert_timeout (G25): timeout, stage convert, not retryable
+        if report_path:
+            json.dump({"schema": "mnemon-site/1", "pages": [], "included": 0, "captured": 0, "converted": 0, "completeness": "partial",
+                       "words": 0, "bytes": 0, "error_class": "timeout", "error": "the landing page: conversion exceeded the assembly budget",
+                       "retryable": False, "stage": "convert"}, open(report_path, "w"))
+        print("capture-site: timeout: the landing page: conversion exceeded the assembly budget", file=sys.stderr)
+        return 124
     manifest = json.loads(open(os.path.join(d, "manifest.json"), "rb").read().decode("utf-8"))
     plan = json.loads(open(os.path.join(d, "plan.json"), "rb").read().decode("utf-8"))
     titles = {p["n"]: p.get("title") for p in plan["pages"]}

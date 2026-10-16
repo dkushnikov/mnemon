@@ -27,6 +27,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -870,15 +871,66 @@ def verify_bundle(directory: str, expected_sha256: str) -> Tuple[bool, Optional[
 
 # --- assemble ----------------------------------------------------------------------------------------------
 
+CAPTURE_TEXT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "capture-text.py")
+
+
+class PageTimeout(Exception):
+    """The page's conversion worker was killed by the remaining assembly budget."""
+
+
+def convert_page(raw_path: str, url: str, fetch_report_path: Optional[str], kind: str, work_dir: str,
+                 deadline: proc.Deadline) -> convert.Result:
+    """One page through the capture-text worker (`capture-text.py --_worker`, its own process group) under
+    the remaining budget (G25): the text and the report come back by path; a killed worker — or one that
+    cannot start because nothing is left — is PageTimeout, a failed one ConvertError with the report's class."""
+    remaining = deadline.remaining()
+    out = os.path.join(work_dir, "page.md")
+    rep = os.path.join(work_dir, "page.json")
+    for stale in (out, rep):
+        try:
+            os.unlink(stale)
+        except OSError:
+            pass
+    argv = [sys.executable, CAPTURE_TEXT, "--_worker", raw_path, "--url", url, "--out", out, "--report", rep,
+            "--raw-kind", "site", "--kind", kind, "--timeout", "%g" % (remaining if remaining is not None else convert.DEFAULT_TIMEOUT)]
+    if fetch_report_path:
+        argv += ["--fetch-report", fetch_report_path]
+    res = proc.run(argv, timeout=remaining, deadline=deadline)
+    if res.timed_out or not res.started:
+        raise PageTimeout("conversion exceeded the assembly budget (convert_timeout): the worker was killed with its process group")
+    try:
+        report = reportmod.read_json(rep)
+    except (OSError, ValueError):
+        raise convert.ConvertError("convert", "the conversion worker wrote no report (exit %s): %s"
+                                   % (res.rc, res.stderr.decode("utf-8", "replace").strip()[:200]))
+    if res.rc != 0 or report.get("error_class"):
+        retryable = report.get("retryable")
+        raise convert.ConvertError(report.get("error_class") or "convert", report.get("error") or "conversion failed (exit %s)" % res.rc,
+                                   retryable=True if retryable is None else bool(retryable), candidates=report.get("candidates"))
+    with open(out, "r", encoding="utf-8") as fh:
+        text = fh.read()
+    return convert.Result(text, report)
+
+
 def assemble(directory: str, out_path: str, *, deadline: Optional[proc.Deadline] = None) -> Tuple[int, dict]:
-    """Convert every captured page in process and write the composite; (exit code, the mnemon-site/1 report)."""
+    """Convert every captured page through the capture-text worker under the remaining budget and write the
+    composite; (exit code, the mnemon-site/1 report)."""
     deadline = deadline or proc.Deadline.never()
     manifest = reportmod.read_json(os.path.join(directory, "manifest.json"))
+    work_dir = tempfile.mkdtemp(prefix="mnemon-assemble-")
+    try:
+        return _assemble(directory, out_path, manifest, deadline, work_dir)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _assemble(directory: str, out_path: str, manifest: dict, deadline: proc.Deadline, work_dir: str) -> Tuple[int, dict]:
     pages_out: List[dict] = []
     parts: List[str] = []
     landing_title = None
     landing_blocked = False
     landing_converted = False
+    landing_timeout = None
     total_words = total_bytes = 0
     for page in manifest.get("pages", []):
         entry = {"n": page["n"], "url": page["url"], "role": page.get("role"), "disposition": page.get("disposition"),
@@ -888,10 +940,12 @@ def assemble(directory: str, out_path: str, *, deadline: Optional[proc.Deadline]
         if page.get("disposition") != "captured":
             pages_out.append(entry)
             continue
+        raw_path = os.path.join(directory, page["file"])
+        fetch_report_path = os.path.join(directory, page["fetch_report"]) if page.get("fetch_report") else None
         try:
-            with open(os.path.join(directory, page["file"]), "rb") as fh:
+            with open(raw_path, "rb") as fh:
                 raw = fh.read()
-            fetch_report = reportmod.read_json(os.path.join(directory, page["fetch_report"])) if page.get("fetch_report") else {}
+            fetch_report = reportmod.read_json(fetch_report_path) if fetch_report_path else {}
         except (OSError, ValueError) as exc:
             entry.update({"disposition": "convert-failed", "error_class": "convert", "error": "cannot read the member: %s" % exc})
             pages_out.append(entry)
@@ -900,24 +954,28 @@ def assemble(directory: str, out_path: str, *, deadline: Optional[proc.Deadline]
         if is_landing and acq == "paywall":
             landing_blocked = True
         text = None
+        title = None
         if page.get("role") == "github_readme" or urlsplit(page["url"]).path.endswith("/llms.txt"):
             try:
                 text = raw.decode("utf-8")
                 if not text.endswith("\n"):
                     text += "\n"
                 entry.update({"converter": "text", "completeness": "unknown", "missing_count": 0, "glued_count": 0})
-                title = None
             except UnicodeDecodeError:
                 entry.update({"disposition": "convert-failed", "error_class": "invalid-utf8", "error": "the text page is not UTF-8"})
         elif page.get("raw_kind") == "file":
             entry.update({"disposition": "convert-failed", "error_class": "unsupported", "error": "a file raw (PDF) cannot be assembled"})
         else:
             try:
-                result = convert.convert(raw, page["url"], "site", fetch_report.get("kind") or "page", fetch_report, deadline=deadline)
+                result = convert_page(raw_path, page["url"], fetch_report_path, fetch_report.get("kind") or "page", work_dir, deadline)
                 text = result.text
                 title = result.report["title"]
                 entry.update({"converter": result.report["converter"], "completeness": result.report["completeness"],
                               "missing_count": result.report["missing_count"], "glued_count": result.report["glued_count"]})
+            except PageTimeout as exc:
+                entry.update({"disposition": "convert-failed", "error_class": "timeout", "error": str(exc)})
+                if is_landing:
+                    landing_timeout = str(exc)
             except convert.ConvertError as exc:
                 entry.update({"disposition": "convert-failed", "error_class": exc.error_class, "error": str(exc)})
         if text is not None and text.strip():
@@ -950,6 +1008,11 @@ def assemble(directory: str, out_path: str, *, deadline: Optional[proc.Deadline]
         completeness = "partial"
     report = {"schema": reportmod.SITE, "pages": pages_out, "included": included, "captured": captured, "converted": converted,
               "completeness": completeness, "words": total_words, "bytes": total_bytes}
+    if landing_timeout:
+        # the landing's conversion was killed by the budget: a page that cannot be converted in the budget
+        # will not convert on a retry either (G25)
+        report.update({"error_class": "timeout", "error": "the landing page: %s" % landing_timeout, "retryable": False, "stage": "convert"})
+        return fetch.EXIT_TIMEOUT, report
     if not landing_converted:
         report["error_class"] = "convert"
         report["error"] = "the landing page yielded no text"

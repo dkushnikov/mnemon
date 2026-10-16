@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 import unittest
 from unittest import mock
 
-from _helpers import BIN, HTML_FIX, assert_same_keys, clean_env, expected_shapes, pid_alive, read_fixture, read_json, \
+from _helpers import BIN, HTML_FIX, PY, assert_same_keys, clean_env, expected_shapes, pid_alive, read_fixture, read_json, \
     run_cli, tmpdir, wait_gone, write_stub
 
 from capture import convert
@@ -420,6 +421,33 @@ class CaptureTextCLI(unittest.TestCase):
         if sys.version_info[:2] == (3, 9):
             self.assertEqual(rc, 1, "on the legacy interpreter json.loads raises RecursionError: the nesting report")
 
+    def test_the_supervisor_kills_a_hung_worker(self):
+        """G25: the conversion runs in a worker process (`--_worker`, its own process group) that the
+        supervisor kills at --timeout: exit 124, the report `timeout` / stage `convert` / retryable false,
+        nothing at --out, no worker left. The hang is CPU-bound C code no signal handler interrupts (the
+        shape of a quadratic scan), so only the kill ends it."""
+        raw = os.path.join(self.dir, "raw.html")
+        env = clean_env({"MNEMON_TEST_CONVERT_HANG": "1"})
+        t0 = time.monotonic()
+        rc, text, report, se = self.run_ct("cookie.html", extra=["--raw-kind", "rendered", "--timeout", "1"], env=env)
+        secs = time.monotonic() - t0
+        self.assertEqual(rc, 124, se)
+        self.assertLess(secs, 10.0, "%.1f s" % secs)
+        self.assertIsNone(text, "nothing at --out")
+        self.assertEqual((report["error_class"], report["stage"], report["retryable"]), ("timeout", "convert", False))
+        self.assertEqual(report["error"], "conversion exceeded convert_timeout=1")
+        self.assertIn("worker killed with its process group", se)
+        ps = subprocess.run(["pgrep", "-f", "capture-text.py --_worker %s" % raw], capture_output=True)
+        self.assertEqual(ps.stdout.strip(), b"", "no worker of this raw is left")
+        rc, text, report, se = self.run_ct("cookie.html", extra=["--raw-kind", "rendered", "--timeout", "30"],
+                                           env=clean_env({"MNEMON_TEST_CONVERT_HANG": "1"}, hooks=False))
+        self.assertEqual(rc, 0, se)
+        self.assertIn("MNEMON_TEST_CONVERT_HANG ignored", se, "the hook is ignored, with a warning, when the test hooks are off")
+        self.assertIsNone(report["stage"])
+        helptext = subprocess.run([PY, CT, "--help"], capture_output=True).stdout.decode("utf-8", "replace")
+        self.assertNotIn("_worker", helptext, "the worker flag is hidden")
+        self.assertIn("convert_timeout in seconds (default 120)", helptext)
+
     def test_timeout_supervises_the_converters(self):
         stubs = tmpdir()
         pidfile = os.path.join(stubs, "pandoc.pid")
@@ -427,11 +455,16 @@ class CaptureTextCLI(unittest.TestCase):
                                     "echo $$ > %s\nsleep 30\n" % pidfile)
         env = clean_env({"MNEMON_TEST_DEFUDDLE_OUTPUT": "/nonexistent/candidate.md"})
         env["PATH"] = stubs + os.pathsep + "/usr/bin:/bin"
-        rc, text, report, se = self.run_ct("tabbed.html", extra=["--timeout", "1"], env=env)
+        # inside the worker a tool gets the remaining budget minus a reserve (G25), so the stuck pandoc is
+        # killed at 1.5 s of a 2 s budget and the DOM text, which needs no tool, is still published
+        rc, text, report, se = self.run_ct("tabbed.html", extra=["--timeout", "2"], env=env)
         self.assertEqual(rc, 0, se)
         self.assertEqual(report["converter"], "dom-text")
         pandoc = [c for c in report["candidates"] if c["converter"] == "pandoc"][0]
         self.assertIn("timed out", pandoc["note"])
+        self.assertEqual(convert.tool_deadline(None), None)
+        self.assertAlmostEqual(convert.tool_deadline(convert.proc.Deadline(2)).remaining(), 1.5, delta=0.1)
+        self.assertAlmostEqual(convert.tool_deadline(convert.proc.Deadline(120)).remaining(), 110, delta=0.5)
         with open(pidfile) as fh:
             pid = int(fh.read().strip())
         self.assertTrue(wait_gone(pid, 3), "the stub pandoc survived the timeout")

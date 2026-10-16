@@ -18,10 +18,19 @@ prohibits rendering everywhere (a plan's `pages[].render: true` cannot override 
 `--no-external`; otherwise `pages[].render: true` forces a render. `verify` exits 0 when the manifest's
 canonical bytes hash to the expected value and every member is present with its size and hash (no
 symlink, no escaping path), else 1 with `evidence-missing <member>` or `evidence-mismatch <member|manifest>`
-on stderr. `assemble` verifies nothing (the gateway verified the bundle): it converts every captured page in
-process (`raw_kind: site`, that page's fetch report; README and llms.txt pages as `converter: text`), writes
-the composite and the `mnemon-site/1` report; a landing without text is `convert`, exit 1. Stdlib only,
-python 3.9.
+on stderr. `assemble` verifies nothing (the gateway verified the bundle): it converts every captured page
+through the capture-text worker (`raw_kind: site`, that page's fetch report; README and llms.txt pages as
+`converter: text`) under one budget (`--timeout`, the instance's `convert_timeout`, default 120; each page
+gets what is left), writes the composite and the `mnemon-site/1` report; a landing without text is
+`convert`, exit 1; a landing whose conversion is killed by the budget is `timeout` (stage convert, not
+retryable), exit 124.
+
+`map` and `fetch-bundle` run under the CLI's own watchdog (D11, G25): the command re-executes itself as a
+worker (the hidden `--_worker` flag, its own process group) that does the whole phase cooperatively under
+`--site-timeout`, while the parent kills the group at `site_timeout + WATCHDOG_GRACE_S` (the grace covers
+the worker's own teardown and manifest write after its deadline) — so an in-process scan that never checks
+the deadline cannot outlive it. A watchdog kill is exit 124 with `error_class: timeout` (the `--report`
+of fetch-bundle; stderr for map). Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
@@ -34,9 +43,14 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from capture import fetch, proc, site  # noqa: E402
+from capture import convert, fetch, proc, site  # noqa: E402
 from capture import policy as policymod  # noqa: E402
 from capture import report as reportmod  # noqa: E402
+
+EXIT_TIMEOUT = 124
+# the watchdog fires this long after the worker's own deadline: its teardown (a render killed with the
+# 2 s + 2 s grace, a socket shut at the deadline) and the manifest write come first
+WATCHDOG_GRACE_S = 10.0
 
 
 def load_json_arg(text, what: str):
@@ -158,7 +172,7 @@ def cmd_verify(args) -> int:
 
 
 def cmd_assemble(args) -> int:
-    deadline = proc.Deadline(number(args.timeout, 300, "--timeout"))
+    deadline = proc.Deadline(number(args.timeout, convert.DEFAULT_TIMEOUT, "--timeout"))
     try:
         code, report = site.assemble(args.dir, args.out, deadline=deadline)
     except (OSError, ValueError) as exc:
@@ -168,6 +182,35 @@ def cmd_assemble(args) -> int:
     if code != 0:
         print("capture-site: %s: %s" % (report.get("error_class"), report.get("error")), file=sys.stderr)
     return code
+
+
+def supervise(args, config) -> int:
+    """`map` / `fetch-bundle` as a worker under the CLI's own watchdog: the worker does the phase under its
+    cooperative deadline (site_timeout); the parent kills its process group WATCHDOG_GRACE_S later (G25)."""
+    site_timeout = number(args.site_timeout, config.get("site_timeout", 900), "--site-timeout")
+    budget = site_timeout + WATCHDOG_GRACE_S
+    rest = sys.argv[2:] if sys.argv[1:2] == [args.cmd] else [a for a in sys.argv[1:] if a != args.cmd]
+    argv = [sys.executable, os.path.abspath(__file__), args.cmd, "--_worker"] + rest
+    res = proc.run(argv, timeout=budget, deadline=proc.Deadline(budget))
+    if res.stdout:
+        sys.stdout.buffer.write(res.stdout)
+        sys.stdout.flush()
+    if res.stderr:
+        sys.stderr.buffer.write(res.stderr)
+        sys.stderr.flush()
+    if res.timed_out:
+        error = "%s exceeded site_timeout=%g: the worker was killed with its process group by the watchdog %g s past the deadline" % (
+            args.cmd, site_timeout, WATCHDOG_GRACE_S)
+        if args.cmd == "fetch-bundle":
+            reportmod.write_report(args.report, {"schema": "mnemon-site-fetch/1", "landing": None, "bundle": args.out,
+                                                 "raw_sha256": None, "raw_bytes": None, "pages": [], "error_class": "timeout",
+                                                 "error": error, "retryable": True, "stage": "bundle", "elapsed_ms": res.elapsed_ms})
+        print("capture-site: timeout: %s" % error, file=sys.stderr)
+        return EXIT_TIMEOUT
+    if not res.started:
+        print("capture-site: the %s worker could not start: %s" % (args.cmd, res.stderr.decode("utf-8", "replace").strip()), file=sys.stderr)
+        return 3
+    return res.rc if res.rc is not None else 1
 
 
 def main() -> int:
@@ -215,14 +258,20 @@ def main() -> int:
     a.add_argument("dir")
     a.add_argument("--out", required=True)
     a.add_argument("--report", required=True)
-    a.add_argument("--timeout", default=None, help="convert_timeout for the whole assembly (default 300)")
+    a.add_argument("--timeout", default=None, help="convert_timeout for the whole assembly (default %g)" % convert.DEFAULT_TIMEOUT)
+    for p in (m, f):
+        p.add_argument("--_worker", dest="worker", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
     if not args.cmd:
         ap.print_help()
         return 2
     proc.close_lock_fd()
     proc.install_term_handler()
-    policymod.warn_ignored_hooks()
+    if args.cmd in ("map", "fetch-bundle") and not args.worker:
+        policymod.warn_ignored_hooks()
+        return supervise(args, load_json_arg(getattr(args, "policy", None), "--policy"))
+    if args.cmd not in ("map", "fetch-bundle"):
+        policymod.warn_ignored_hooks()
     return {"map": cmd_map, "fetch-bundle": cmd_fetch_bundle, "verify": cmd_verify, "assemble": cmd_assemble}[args.cmd](args)
 
 

@@ -121,7 +121,7 @@ assert_eq "$EXTERNAL_FETCHERS" "firecrawl,jina" "external_fetchers defaults to f
 assert_contains "$FETCH_USER_AGENT" "Mozilla/5.0" "fetch_user_agent defaults to a desktop browser string"
 assert_eq "$FETCH_TIMEOUT $FETCH_CONNECT_TIMEOUT $FETCH_READ_TIMEOUT" "60 15 45" "fetch_timeout 60 splits into connect 15 / read 45"
 assert_eq "$FETCH_MAX_BYTES $RENDER_TIMEOUT $RENDER_MAX_BYTES" "20000000 90 20000000" "fetch_max_bytes / render_timeout / render_max_bytes defaults"
-assert_eq "$ACQUIRE_TIMEOUT $TRANSCRIBE_TIMEOUT $SITE_MAX_PAGES $SITE_TIMEOUT $THIN_WORDS $EXTRACT_MAX_PARTS" "300 3600 40 900 60 8" "acquire/transcribe/site/thin/parts defaults"
+assert_eq "$ACQUIRE_TIMEOUT $CONVERT_TIMEOUT $TRANSCRIBE_TIMEOUT $SITE_MAX_PAGES $SITE_TIMEOUT $THIN_WORDS $EXTRACT_MAX_PARTS" "300 120 3600 40 900 60 8" "acquire/convert/transcribe/site/thin/parts defaults"
 printf 'vault_path: %s/vault5\nexternal_fetch: auto\nexternal_fetchers: jina\nfetch_timeout: 20\nsite_max_pages: 7\nthin_words: 10\nextract_max_parts: 3\nfetch_user_agent: "agent one"\n' "$TEST_TMPDIR" > "$TEST_TMPDIR/keys.yaml"
 load_config "$TEST_TMPDIR/keys.yaml"
 assert_eq "$EXTERNAL_FETCH $EXTERNAL_FETCHERS $SITE_MAX_PAGES $THIN_WORDS $EXTRACT_MAX_PARTS" "auto jina 7 10 3" "configured values honoured"

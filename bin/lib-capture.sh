@@ -1388,20 +1388,31 @@ cap_fetch_report_file() {   # → prints the path, or nothing
 }
 
 # capture-text.py on a raw (the receipt's fetch report as --fetch-report, the recorded raw kind,
-# the URL's kind): the conversion report goes into the receipt before the source is published. A
-# failure is `convert`; the report's `retryable` is honoured when it says so (false for `nesting`,
-# a document no parse can finish — G8), else the class table decides (retryable).
+# the URL's kind, --timeout convert_timeout): the conversion report goes into the receipt before the
+# source is published. A failure is `convert`; the report's `retryable` is honoured when it says so
+# (false for `nesting`, a document no parse can finish — G8), else the class table decides
+# (retryable). Exit 124 is `timeout` with stage convert and the report's retryable (false): the
+# conversion worker was killed by convert_timeout, and a page that cannot be converted in the budget
+# will not convert on a retry either — the raw is retained for --resume after raising it (G25).
 cap_convert_text_of() {   # <raw file> <out file>
-  local report="$ATTEMPT_DIR/capture-text.json" fr rk="${RAW_KIND:-response}"
+  local report="$ATTEMPT_DIR/capture-text.json" fr rk="${RAW_KIND:-response}" rc=0
   local -a args
-  FAIL_RETRYABLE=""
+  FAIL_RETRYABLE=""; FAIL_STAGE=""
   fr="$(cap_fetch_report_file)"
   [[ -n "$fr" && "$(jq -r '.egress // ""' "$fr")" == "external" ]] && rk=external
   case "$rk" in response|rendered|site|external) ;; *) rk=response ;; esac
-  args=("$1" --url "$URL" --out "$2" --report "$report" --raw-kind "$rk" --kind "${URL_KIND:-page}")
+  args=("$1" --url "$URL" --out "$2" --report "$report" --raw-kind "$rk" --kind "${URL_KIND:-page}" --timeout "${CONVERT_TIMEOUT:-120}")
   [[ -n "$fr" ]] && args+=(--fetch-report "$fr")
   rm -f "$report"
-  if ! "$CAP_TEXT_CMD" "${args[@]}" 2>>"$ATTEMPT_DIR/stderr.txt" || [[ ! -s "$2" ]]; then
+  "$CAP_TEXT_CMD" "${args[@]}" 2>>"$ATTEMPT_DIR/stderr.txt" || rc=$?
+  if [[ $rc -eq 124 ]]; then
+    [[ -f "$report" ]] && cap_receipt_report text "$report"
+    FAIL_CLASS=timeout; FAIL_STAGE=convert
+    FAIL_RETRYABLE="$(jq -r 'if .retryable == null then "false" else (.retryable | tostring) end' "$report" 2>/dev/null || echo false)"
+    FAIL_MSG="conversion of $1 exceeded convert_timeout=${CONVERT_TIMEOUT:-120}s ($(jq -r '.error // ""' "$report" 2>/dev/null || true); the raw is retained — raise convert_timeout and --resume)"
+    return 1
+  fi
+  if [[ $rc -ne 0 || ! -s "$2" ]]; then
     [[ -f "$report" ]] && cap_receipt_report text "$report"
     FAIL_CLASS=convert; FAIL_MSG="conversion of $1 produced no text ($(jq -r '.error // ""' "$report" 2>/dev/null || true))"
     FAIL_RETRYABLE="$(jq -r 'if .retryable == null then "" else (.retryable | tostring) end' "$report" 2>/dev/null || true)"
@@ -1519,7 +1530,7 @@ cap_convert_html() {
 # A phase-1 rendered raw (<revision>.txt, the rendered text): capture-text.py --rendered, unchanged
 cap_convert_rendered() {
   local report="$ATTEMPT_DIR/capture-text.json"
-  if ! "$CAP_TEXT_CMD" "$RAW_PATH" --url "$URL" --rendered "$RAW_PATH" --out "$ATTEMPT_DIR/capture.md" --report "$report" 2>>"$ATTEMPT_DIR/stderr.txt"; then
+  if ! "$CAP_TEXT_CMD" "$RAW_PATH" --url "$URL" --rendered "$RAW_PATH" --out "$ATTEMPT_DIR/capture.md" --report "$report" --timeout "${CONVERT_TIMEOUT:-120}" 2>>"$ATTEMPT_DIR/stderr.txt"; then
     FAIL_CLASS=convert; FAIL_MSG="rendered text for $URL is empty"; return 1
   fi
   cap_receipt_report text "$report"
@@ -1856,7 +1867,7 @@ cap_acquire_site() {
   case $rc in
     0) ;;
     124) rm -rf "$RAW_STAGED"; FAIL_CLASS=timeout; FAIL_RETRYABLE=true; FAIL_STAGE="$(jq -r '.stage // "landing"' "$report" 2>/dev/null || echo landing)"
-         FAIL_MSG="the site capture of $URL timed out before the landing was captured (site_timeout=${SITE_TIMEOUT:-900}s)"; return 1 ;;
+         FAIL_MSG="the site capture of $URL timed out (site_timeout=${SITE_TIMEOUT:-900}s): $(jq -r '.error // "the landing was not captured"' "$report" 2>/dev/null || echo "the landing was not captured")"; return 1 ;;
     3)   rm -rf "$RAW_STAGED"; FAIL_CLASS=environment; FAIL_RETRYABLE=true; FAIL_MSG="capture-site.py fetch-bundle needs an environment this host lacks"; return 1 ;;
     *)   rm -rf "$RAW_STAGED"
          if [[ -f "$report" ]]; then cap_fail_from_report "$report" "the landing of $URL could not be captured"
@@ -1869,14 +1880,23 @@ cap_acquire_site() {
   cap_assemble_site
 }
 
-# The composite from the published bundle (§3.6): capture-site.py assemble; the site report goes
-# into the receipt before the source is published; a landing that did not convert fails the
-# publication (`convert`, bundle retained, --resume reconverts — A5).
+# The composite from the published bundle (§3.6): capture-site.py assemble under convert_timeout
+# (every page through the conversion worker with the remaining budget); the site report goes into
+# the receipt before the source is published; a landing that did not convert fails the publication
+# (`convert`, bundle retained, --resume reconverts — A5); a landing whose conversion the budget
+# killed is `timeout`, stage convert, not retryable (G25).
 cap_assemble_site() {
   local report="$ATTEMPT_DIR/site.json" rc=0
   rm -f "$report"
-  "$CAP_SITE_CMD" assemble "$RAW_PATH" --out "$ATTEMPT_DIR/capture.md" --report "$report" >>"$ATTEMPT_DIR/stderr.txt" 2>&1 || rc=$?
+  FAIL_STAGE=""; FAIL_RETRYABLE=""
+  "$CAP_SITE_CMD" assemble "$RAW_PATH" --out "$ATTEMPT_DIR/capture.md" --report "$report" --timeout "${CONVERT_TIMEOUT:-120}" >>"$ATTEMPT_DIR/stderr.txt" 2>&1 || rc=$?
   [[ -f "$report" ]] && cap_receipt_report site "$report"
+  if [[ $rc -eq 124 ]]; then
+    FAIL_CLASS=timeout; FAIL_STAGE=convert
+    FAIL_RETRYABLE="$(jq -r 'if .retryable == null then "false" else (.retryable | tostring) end' "$report" 2>/dev/null || echo false)"
+    FAIL_MSG="the site bundle $RAW_PATH did not assemble within convert_timeout=${CONVERT_TIMEOUT:-120}s ($(jq -r '.error // ""' "$report" 2>/dev/null || true); bundle retained — raise convert_timeout and --resume)"
+    return 1
+  fi
   if [[ $rc -ne 0 || ! -s "$ATTEMPT_DIR/capture.md" ]]; then
     FAIL_CLASS=convert; FAIL_RETRYABLE=true; FAIL_MSG="the site bundle $RAW_PATH did not assemble: the landing's conversion failed or yielded no text (bundle retained; --resume reconverts)"; return 1
   fi

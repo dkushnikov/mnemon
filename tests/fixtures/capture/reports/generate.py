@@ -141,6 +141,7 @@ TEXT = {
     "error_class": None,
     "error": None,
     "retryable": None,
+    "stage": None,
     "converter": "pandoc",
     "acquisition": "ok",
     "candidates": [

@@ -173,6 +173,7 @@
    "error_class": null,
    "error": null,
    "retryable": null,
+   "stage": null,
    "converter": "pandoc",
    "acquisition": "ok",
    "candidates": [

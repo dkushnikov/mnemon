@@ -377,6 +377,34 @@ class RobotsPerOrigin(unittest.TestCase):
         self.assertEqual(paths.count("/docs-host/robots.txt"), 1)
 
 
+class Watchdog(unittest.TestCase):
+    """G25: `map` runs as a worker under the CLI's own watchdog — an in-process scan that never checks the
+    deadline (210 KB of `<a ` makes the link regex quadratic: minutes) is killed with its process group
+    WATCHDOG_GRACE_S after site_timeout: exit 124, no plan, no worker left."""
+
+    def test_map_watchdog_kills_an_in_process_scan(self):
+        server = LocalServer()
+        work = tmpdir("mnemon-watchdog-")
+        try:
+            server.add("/", "<html><head><title>Hostile</title></head><body>" + "<a " * 70000 + "</body></html>")
+            env = clean_env()
+            env["RENDER_URL_CMD"] = write_stub(work, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
+            plan = os.path.join(work, "plan.json")
+            t0 = time.monotonic()
+            rc, so, se = run_cli([CS, "map", server.base + "/", "--out", plan, "--site-timeout", "1"], env=env, timeout=180)
+            secs = time.monotonic() - t0
+            self.assertEqual(rc, 124, se)
+            self.assertLess(secs, 30, "%.1f s" % secs)
+            self.assertGreaterEqual(secs, 1.0)
+            self.assertIn("killed with its process group by the watchdog", se)
+            self.assertFalse(os.path.exists(plan))
+            ps = subprocess.run(["pgrep", "-f", "capture-site.py --_worker map %s" % server.base], capture_output=True)
+            self.assertEqual(ps.stdout.strip(), b"", "no map worker is left")
+        finally:
+            server.close()
+            shutil.rmtree(work, ignore_errors=True)
+
+
 class MapCli(unittest.TestCase):
     def test_map_without_out_prints_the_plan_and_leaves_no_temp_dir(self):
         server = LocalServer()
@@ -558,6 +586,26 @@ class Bundle(SiteBase):
         order = [p["n"] for p in self.manifest["pages"] if by[p["url"].replace(self.server.base, "") or "/"]["disposition"] == "converted"]
         self.assertEqual(order, sorted(order), "parts in plan order")
         self.assertEqual(sum(p["words"] for p in report["pages"]), report["words"])
+
+    def test_assemble_converts_through_the_worker_under_the_budget(self):
+        """G25: every page goes through the capture-text worker with the remaining budget; a landing whose
+        conversion the budget kills is `timeout` (stage convert, not retryable), exit 124, no composite."""
+        out = os.path.join(self.work, "capture-hang.md")
+        rep = os.path.join(self.work, "site-hang.json")
+        env = dict(self.env)
+        env["MNEMON_TEST_CONVERT_HANG"] = "1"
+        t0 = time.monotonic()
+        rc, so, se = run_cli([CS, "assemble", self.bundle, "--out", out, "--report", rep, "--timeout", "1"], env=env, timeout=120)
+        self.assertEqual(rc, 124, se)
+        self.assertLess(time.monotonic() - t0, 15)
+        with open(rep, encoding="utf-8") as fh:
+            report = json.load(fh)
+        self.assertEqual((report["error_class"], report["stage"], report["retryable"]), ("timeout", "convert", False))
+        self.assertEqual((report["pages"][0]["disposition"], report["pages"][0]["error_class"]), ("convert-failed", "timeout"))
+        self.assertFalse(os.path.exists(out))
+        self.assertIn("timeout", se)
+        ps = subprocess.run(["pgrep", "-f", "capture-text.py --_worker"], capture_output=True)
+        self.assertEqual(ps.stdout.strip(), b"", "no conversion worker is left")
 
     def test_assemble_fails_when_the_landing_has_no_text(self):
         copy = os.path.join(self.work, "nolanding")

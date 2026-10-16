@@ -81,6 +81,7 @@ assert_contains "$call" "--policy " "...the policy"
 assert_contains "$call" "--external " "...and the external settings"
 assert_eq "$(site_calls assemble)" "1" "assemble ran once, on the published bundle"
 assert_contains "$(grep '^assemble' "$STUB_DIR/site-calls")" "assemble $bundle --out" "...($bundle)"
+assert_contains "$(grep '^assemble' "$STUB_DIR/site-calls")" " --timeout 120" "...under --timeout convert_timeout (G25)"
 assert_eq "$(staging_left)" "0" "no staging left"
 assert_eq "$(fetch_calls)" "0" "capture-fetch.py was not called: the bundle fetcher owns the page loop"
 assert_eq "$(ls "$VSTATE/runs/site-1/attempt-1" 2>/dev/null | wc -l | tr -d ' ')" "0" "the attempt dir is removed after the final receipt (the locator is the plan file)"
@@ -134,6 +135,14 @@ assert_eq "$(nfolders)" "$n0" "...nothing published"
 assert_eq "$(staging_left)" "0" "...no staged bundle left"
 STUB_SITE=timeout run_gw --url "$LANDING" --site "$PLAN" --recapture --capture-id site-t
 assert_eq "$rc $(result error_class) $(result retryable) $(rget site-t '.stage')" "1 timeout true landing" "a site-wide timeout before the landing → failed/timeout, retryable, stage landing"
+# the landing's conversion killed by convert_timeout during the assembly (G25): timeout, stage convert, not
+# retryable; the bundle is retained for --resume after raising the budget
+stub_reset
+STUB_SITE=assemble-timeout run_gw --url "$LANDING" --site "$PLAN" --recapture --capture-id site-at
+assert_eq "$rc $(result status) $(result error_class) $(result retryable)" "1 failed timeout false" "assemble exit 124 → failed / timeout / retryable false (the report's flag; G25)"
+assert_eq "$(rget site-at '.stage') $(rget site-at '.raw_published') $(rget site-at '.capture_report.site.error_class')" "convert true timeout" "...stage convert, the bundle retained, the site report recorded"
+assert_dir_exists "$ARCHIVE/$(rget site-at '.revision').site" "...the bundle directory is published"
+assert_contains "$err" "convert_timeout" "...the message names convert_timeout"
 # the landing's own conversion failing fails the publication; the bundle is retained; --resume reconverts
 stub_reset
 STUB_SITE_CONVERT_FAIL=1 run_gw --url "$LANDING" --site "$PLAN" --recapture --capture-id site-lc

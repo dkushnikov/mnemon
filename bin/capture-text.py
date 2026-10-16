@@ -16,36 +16,44 @@ With `--rendered <file>` the capture-text is that file's bytes, unchanged (`rend
 The report is `mnemon-capture-text/2` (the phase-1 keys plus the converter, the acquisition, the candidates,
 the counts, the inventory, the repairs, the dated candidates). An empty or failed conversion is an
 acquisition failure: exit 1, `error_class: convert` (or `invalid-utf8`), nothing at --out — the raw stays
-published and a retry converts it again. `--timeout` (convert_timeout, default 300) supervises `defuddle` and
-`pandoc` in their own process groups (a stuck converter is skipped for the next candidate) and is checked
-between the tables the sanitizer rewrites (past it: exit 124, `error_class: timeout`). Stdlib only, python 3.9.
+published and a retry converts it again.
+
+The conversion runs under a killable owner (D11, G25): this process is a thin supervisor that parses its
+arguments, computes the deadline (`--timeout`, the instance's `convert_timeout`, default 120 s) and runs the
+whole conversion in a child process — a re-exec of itself with the hidden `--_worker` flag, in its own
+process group — with the raw and the fetch report passed by path and the report written by the child. On
+expiry the supervisor kills the group, reaps it, writes the report `{error_class: "timeout", stage:
+"convert", retryable: false, error: "conversion exceeded convert_timeout=N"}` and exits 124: a page that
+cannot be converted in the budget will not convert on a retry either (the raw is retained for `--resume`
+after raising the budget). Inside the worker the same deadline supervises `defuddle` and `pandoc` (a stuck
+converter is skipped for the next candidate) and is checked between the tables the sanitizer rewrites.
+Test hook (honoured only under MNEMON_TEST_HOOKS=1): MNEMON_TEST_CONVERT_HANG=1 makes the worker hang in
+C code that no signal handler interrupts, the shape of a quadratic scan — the proof that the supervisor's
+kill, not the worker's cooperation, ends the conversion. Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from capture import convert, proc, report as reportmod  # noqa: E402
+from capture import policy as policymod  # noqa: E402
+
+EXIT_TIMEOUT = 124
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description="Capture-text conversion for the url origin (phase 2)")
-    ap.add_argument("raw", help="the retained raw file (HTML), or the rendered text with --rendered")
-    ap.add_argument("--url", required=True, help="the URL the raw came from (recorded in the report)")
-    ap.add_argument("--out", required=True, help="where to write the capture-text bytes")
-    ap.add_argument("--report", required=True, help="where to write the JSON report (mnemon-capture-text/2)")
-    ap.add_argument("--fetch-report", default=None, help="the fetch report (mnemon-fetch/1) of this raw")
-    ap.add_argument("--raw-kind", default="response", choices=["response", "rendered", "site", "external", "file", "composite"])
-    ap.add_argument("--kind", default=None, choices=["page", "arxiv", "youtube", "github"])
-    ap.add_argument("--rendered", default=None, help="rendered text to use verbatim as capture-text (legacy)")
-    ap.add_argument("--timeout", type=float, default=convert.DEFAULT_TIMEOUT, help="convert_timeout in seconds")
-    args = ap.parse_args()
+def _hang() -> None:
+    """The test hook's hang: catastrophic backtracking inside the regex engine — CPU-bound C code that
+    returns to the interpreter (and its signal handlers) only after an astronomical number of steps."""
+    re.match(r"(a+)+$", "a" * 64 + "b")
 
-    proc.close_lock_fd()
-    proc.install_term_handler()
+
+def worker(args) -> int:
+    """The conversion itself, in the child process."""
     deadline = proc.Deadline(args.timeout)
     rep = convert.empty_report(args.url)
     fetch_report = None
@@ -58,6 +66,8 @@ def main() -> int:
         acq = (fetch_report.get("acquisition") or {}).get("outcome")
         if acq:
             rep["acquisition"] = acq
+    if policymod.hook("MNEMON_TEST_CONVERT_HANG"):
+        _hang()
 
     if args.rendered:
         try:
@@ -93,9 +103,11 @@ def main() -> int:
         rep["error_class"], rep["error"], rep["retryable"] = exc.error_class, str(exc), exc.retryable
         if exc.candidates:
             rep["candidates"] = exc.candidates      # what was tried before the failure (G17)
+        if exc.error_class == "timeout":
+            rep["stage"] = "convert"
         reportmod.write_report(args.report, rep)
         print("capture-text: %s for %s: %s" % (exc.error_class, args.url, exc), file=sys.stderr)
-        return 124 if exc.error_class == "timeout" else 1
+        return EXIT_TIMEOUT if exc.error_class == "timeout" else 1
     except RecursionError:
         # the belt to convert()'s guard (G8): a report, never a traceback; permanent
         rep["error_class"], rep["error"], rep["retryable"] = "convert", "nesting", False
@@ -110,6 +122,62 @@ def main() -> int:
     reportmod.write_bytes(args.out, result.text.encode("utf-8"))
     reportmod.write_report(args.report, result.report)
     return 0
+
+
+def supervise(args) -> int:
+    """Run the conversion in a worker process under the deadline; kill the group on expiry (G25)."""
+    timeout = float(args.timeout)
+    argv = [sys.executable, os.path.abspath(__file__), "--_worker"] + sys.argv[1:]
+    res = proc.run(argv, timeout=timeout, deadline=proc.Deadline(timeout))
+    if res.stdout:
+        sys.stdout.buffer.write(res.stdout)
+        sys.stdout.flush()
+    if res.stderr:
+        sys.stderr.buffer.write(res.stderr)
+        sys.stderr.flush()
+    if res.timed_out:
+        # the worker (and anything it started) is gone: nothing at --out, the timeout report
+        try:
+            os.unlink(args.out)
+        except OSError:
+            pass
+        rep = convert.empty_report(args.url)
+        rep.update({"error_class": "timeout", "stage": "convert", "retryable": False,
+                    "error": "conversion exceeded convert_timeout=%g" % timeout})
+        reportmod.write_report(args.report, rep)
+        print("capture-text: timeout for %s: conversion exceeded convert_timeout=%g (worker killed with its process group after %d ms)"
+              % (args.url, timeout, res.elapsed_ms), file=sys.stderr)
+        return EXIT_TIMEOUT
+    if not res.started:
+        rep = convert.empty_report(args.url)
+        rep.update({"error_class": "environment", "retryable": True,
+                    "error": "the conversion worker could not start: %s" % res.stderr.decode("utf-8", "replace").strip()})
+        reportmod.write_report(args.report, rep)
+        return 3
+    return res.rc if res.rc is not None else 1
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Capture-text conversion for the url origin (phase 2)")
+    ap.add_argument("raw", help="the retained raw file (HTML), or the rendered text with --rendered")
+    ap.add_argument("--url", required=True, help="the URL the raw came from (recorded in the report)")
+    ap.add_argument("--out", required=True, help="where to write the capture-text bytes")
+    ap.add_argument("--report", required=True, help="where to write the JSON report (mnemon-capture-text/2)")
+    ap.add_argument("--fetch-report", default=None, help="the fetch report (mnemon-fetch/1) of this raw")
+    ap.add_argument("--raw-kind", default="response", choices=["response", "rendered", "site", "external", "file", "composite"])
+    ap.add_argument("--kind", default=None, choices=["page", "arxiv", "youtube", "github"])
+    ap.add_argument("--rendered", default=None, help="rendered text to use verbatim as capture-text (legacy)")
+    ap.add_argument("--timeout", type=float, default=convert.DEFAULT_TIMEOUT,
+                    help="convert_timeout in seconds (default %g): the worker is killed past it, exit 124" % convert.DEFAULT_TIMEOUT)
+    ap.add_argument("--_worker", dest="worker", action="store_true", help=argparse.SUPPRESS)
+    args = ap.parse_args()
+
+    proc.close_lock_fd()
+    proc.install_term_handler()
+    if args.worker:
+        return worker(args)
+    policymod.warn_ignored_hooks()
+    return supervise(args)
 
 
 if __name__ == "__main__":

@@ -72,6 +72,9 @@ auto_detect_origin: true
 # render_timeout: 90                # seconds for the headless-Chrome render stage
 # render_max_bytes: 20000000        # cap on the rendered DOM output
 # acquire_timeout: 300              # seconds for the whole acquisition of one URL (every stage)
+# convert_timeout: 120              # seconds for the conversion of one retained raw (a worker process
+#                                   # killed past it: timeout, not retryable — the raw stays for --resume
+#                                   # after raising the budget); a site bundle's assembly as a whole
 # transcribe_timeout: 3600          # seconds for yt-dlp, ffprobe, whisper and the caption fetch
 # site_max_pages: 40                # pages a site plan may include (mnemon site map / --site)
 # site_timeout: 900                 # seconds for site mapping and for the bundle fetch loop

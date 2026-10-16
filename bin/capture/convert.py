@@ -29,7 +29,11 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from . import check, proc, sanitize
 
-DEFAULT_TIMEOUT = 300.0
+DEFAULT_TIMEOUT = 120.0        # convert_timeout (§5): the whole conversion, in a worker the supervisor kills past it (G25)
+# An external tool (defuddle, pandoc) gets the remaining budget minus a reserve — a quarter of it, at most
+# this many seconds — so that after a stuck tool is killed and skipped the DOM text, which needs no tool,
+# can still be judged and published before the supervisor's deadline.
+TOOL_RESERVE_S = 10.0
 BLOAT_BYTES_PER_WORD = 40.0
 MOJIBAKE = re.compile(r"[ÃÂ][\u0080-¿]|â€")
 VOID = frozenset(("area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
@@ -479,6 +483,14 @@ def tool_version(cmd: str) -> Optional[str]:
     return text[0].strip() if text else None
 
 
+def tool_deadline(deadline: Optional[proc.Deadline]) -> Optional[proc.Deadline]:
+    """The deadline of one external tool: the remaining budget minus the reserve for the tool-free fallback."""
+    if deadline is None or deadline.remaining() is None:
+        return deadline
+    remaining = deadline.remaining()
+    return proc.Deadline(max(0.0, remaining - min(TOOL_RESERVE_S, remaining * 0.25)))
+
+
 def defuddle_file(html_text: str, *, deadline: Optional[proc.Deadline] = None) -> Tuple[Optional[str], Optional[str]]:
     """`defuddle parse <file> --markdown` on a temp file holding the HTML; (markdown, note)."""
     injected = os.environ.get("MNEMON_TEST_DEFUDDLE_OUTPUT") if os.environ.get("MNEMON_TEST_HOOKS") == "1" else None
@@ -496,7 +508,7 @@ def defuddle_file(html_text: str, *, deadline: Optional[proc.Deadline] = None) -
         src = os.path.join(tmpdir, "page.html")
         with open(src, "w", encoding="utf-8") as fh:
             fh.write(html_text)
-        res = proc.run([path, "parse", src, "--markdown"], timeout=DEFAULT_TIMEOUT, deadline=deadline)
+        res = proc.run([path, "parse", src, "--markdown"], timeout=DEFAULT_TIMEOUT, deadline=tool_deadline(deadline))
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
     if res.timed_out:
@@ -520,7 +532,7 @@ def pandoc_subtree(subtree_html: str, *, deadline: Optional[proc.Deadline] = Non
     # tex_math_dollars off: the `$…$` text nodes the sanitizer made of <math> elements (G15) pass through as
     # text instead of being escaped to `\$…\$`, so the published text carries the formula source as written
     res = proc.run([path, "-f", "html", "-t", "gfm-raw_html-tex_math_dollars", "--wrap=none"], timeout=DEFAULT_TIMEOUT,
-                   deadline=deadline, stdin=subtree_html.encode("utf-8"))
+                   deadline=tool_deadline(deadline), stdin=subtree_html.encode("utf-8"))
     if res.timed_out:
         return None, "pandoc timed out after %d ms" % res.elapsed_ms
     out = res.stdout.decode("utf-8", "replace")
@@ -533,7 +545,7 @@ def empty_report(url: str) -> dict:
     """Every key of mnemon-capture-text/2 with its null shape."""
     return {
         "schema": "mnemon-capture-text/2", "url": url, "method": None, "bytes": 0, "words": 0, "title": None,
-        "completeness": "unknown", "tool": None, "error_class": None, "error": None, "retryable": None, "converter": None,
+        "completeness": "unknown", "tool": None, "error_class": None, "error": None, "retryable": None, "stage": None, "converter": None,
         "acquisition": "unknown", "candidates": [], "reference_count": 0, "eligible_count": 0, "missing_count": 0,
         "glued_count": 0, "headings_missing_count": 0, "missing_examples": [],
         "inventory": {k: {"html": 0, "md": 0} for k in ("headings", "list_items", "tables", "code_blocks", "links", "images")},
@@ -566,7 +578,8 @@ def convert(raw: bytes, url: str, raw_kind: str = "response", kind: str = "page"
     try:
         sanitized, html_repairs = sanitize.html(text, kind, deadline=deadline)
     except sanitize.Timeout as exc:
-        raise ConvertError("timeout", str(exc))
+        # a conversion timeout is permanent: the page will not convert in the budget on a retry either (G25)
+        raise ConvertError("timeout", str(exc), retryable=False)
     try:
         root = parse(sanitized)
         meta_title = meta_in.get("title") if isinstance(meta_in.get("title"), str) else None
