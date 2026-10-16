@@ -115,9 +115,21 @@ class MarkdownLevel(unittest.TestCase):
         out, counts = sanitize.markdown(md, "page")
         self.assertEqual(out, "# Post\n\nBody text.\n")
         self.assertEqual(counts["comment_sections"], 1)
-        md = "# Post\n\n## Comments\n\nReader.\n\n## Next section\n\nKept text.\n"
+        md = "# Post\n\n## Comments (4)\n\nReader.\n\n## Next section\n\nKept text.\n"
         out, _ = sanitize.markdown(md, "page")
         self.assertEqual(out, "# Post\n\n## Next section\n\nKept text.\n")
+        for heading in ("## Leave a comment", "## Reader comments", "## Post a comment", "### Leave a Reply"):
+            out, counts = sanitize.markdown("# Post\n\n%s\n\nReader.\n" % heading, "page")
+            self.assertEqual((out, counts["comment_sections"]), ("# Post\n", 1), heading)
+
+    def test_bare_discussion_and_comments_headings_are_body_text(self):
+        """A heading named Discussion, Responses, Replies or just Comments is never a cut (a widget is
+        identified by its container, or by a counted / call-to-action heading)."""
+        for heading in ("## Discussion", "## Responses", "## Replies", "## Comments", "## Comment"):
+            md = "# Paper\n\n%s\n\nThe discussion section interprets the results in full.\n\n## Conclusion\n\nEnd.\n" % heading
+            out, counts = sanitize.markdown(md, "page")
+            self.assertEqual(out, md, heading)
+            self.assertEqual(counts["comment_sections"], 0, heading)
 
     def test_fence_segments_track_tilde_and_backtick_fences(self):
         md = "a\n~~~~text\n```\ninner\n~~~~\nb\n```\nc\n```\n"
@@ -137,7 +149,7 @@ class MarkdownLevel(unittest.TestCase):
             self.assertEqual(sum(v for k, v in counts.items() if k != "tables_unrepaired"), 0)
 
     def test_reference_lines_mirror_the_repairs(self):
-        lines = ["\\newcommand{\\x}{y}", "## Title", "\\iow_now:Ne one \\iow_now:Ne two", "## Comments", "reader"]
+        lines = ["\\newcommand{\\x}{y}", "## Title", "\\iow_now:Ne one \\iow_now:Ne two", "## 3 Comments", "reader"]
         self.assertEqual(sanitize.reference_lines(lines, "arxiv"), ["## Title", "one", "two"])
         self.assertEqual(sanitize.reference_lines(lines, "page"), ["\\newcommand{\\x}{y}", "## Title", "one", "two"])
 

@@ -58,13 +58,22 @@ CHROME = re.compile(
     r"\bpowered by\b|\bsign in to\b|\blog in to\b|\bcontinue reading\b|\bsubscribe to\b|\bshare this\b|\bfollow us\b)",
     re.IGNORECASE)
 
-COMMENTS = re.compile(r"^(?:#{1,6}\s*)?(?:\d+\s+)?(?:comments?|discussion|responses|replies|leave a (?:comment|reply))\b\s*(?:\(\d+\))?\s*$",
-                      re.IGNORECASE)
-COMMENTS_CONTAINER = re.compile(r"(?:^|[\s_-])(?:comments?|comment-list|comment-section|disqus(?:_thread)?|giscus|utterances|"
-                                r"commento|respond|replies|responses|post-comments)(?:[\s_-]|$)", re.IGNORECASE)
-COOKIE_CONTAINER = re.compile(r"(?:^|[\s_-])(?:cookie|cookies|consent|gdpr|cc-banner|cookie-banner|cookiebanner|onetrust|"
-                              r"cookie-consent|cookieconsent|cmp-container|cookie-notice|cookie-bar|cookie-popup)(?:[\s_-]|$)",
-                              re.IGNORECASE)
+# A reader-comment section is cut at a heading only when the heading names a comment widget
+# (`N comments`, `comments (N)`, `leave a comment|reply`, `reader comments`, `post a comment`); a bare
+# `Comments`, `Discussion`, `Responses` or `Replies` heading is body text and never a cut.
+COMMENTS = re.compile(r"^(?:#{1,6}\s*)?(?:\d+\s+comments?|comments?\s*\(\d+\)|leave a (?:comment|reply)|reader comments?|"
+                      r"post a comment)\s*$", re.IGNORECASE)
+# Container patterns match a whole id/class token (`comments`, `comment-list`, `disqus_thread`, …, or a
+# `comments-*` family), never a substring of one: Prism's `token comment` and highlight.js's
+# `hljs-comment` are code, not a widget. They apply to block containers outside <pre>/<code> only.
+COMMENTS_CONTAINER = re.compile(r"^(?:comments|comments?[-_]list|comments?[-_]section|comments?[-_]area|comments?[-_]thread|"
+                                r"comments?[-_]wrapper|comment[-_]respond|post[-_]comments|disqus(?:[-_]thread)?|giscus|utterances|"
+                                r"commento|respond|comments[-_][a-z0-9_-]+)$", re.IGNORECASE)
+COOKIE_CONTAINER = re.compile(r"^(?:cookies?|consent|gdpr|cc[-_]banner|cc[-_]window|cmp[-_]container|cookieconsent|cookiebanner|"
+                              r"cookienotice|onetrust[-_][a-z0-9_-]+|cookies?[-_][a-z0-9_-]+|consent[-_][a-z0-9_-]+|"
+                              r"gdpr[-_][a-z0-9_-]+)$", re.IGNORECASE)
+CONTAINER_TAGS = frozenset(("div", "section", "aside", "article", "ol", "ul", "dl", "li", "main", "header", "footer", "figure",
+                            "details", "dialog", "fieldset"))
 
 _SCRIPT = re.compile(r"<(script|style|noscript|template)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
 _HEAD = re.compile(r"<head\b[^>]*>.*?</head\s*>|<title\b[^>]*>.*?</title\s*>", re.IGNORECASE | re.DOTALL)

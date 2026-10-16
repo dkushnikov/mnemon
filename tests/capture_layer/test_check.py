@@ -141,6 +141,24 @@ class ConversionCheck(unittest.TestCase):
         self.assertEqual(n, 1)
         self.assertEqual(lines, ["## Body heading", "Real text with more than six words here", "## Another top heading", "After"])
 
+    def test_comment_heading_rule_names_widgets_only(self):
+        for line in ("## 12 Comments", "## Comments (3)", "## Leave a comment", "## Leave a Reply", "## Reader comments",
+                     "## Post a comment", "3 comments"):
+            self.assertTrue(C.COMMENTS.match(line), line)
+        for line in ("## Discussion", "## Responses", "## Replies", "## Comments", "## Comment", "## Discussion of the results",
+                     "## 12 Comments on the method"):
+            self.assertIsNone(C.COMMENTS.match(line), line)
+
+    def test_container_tokens_match_whole_tokens_only(self):
+        for token in ("comments", "comment-list", "comments-section", "disqus_thread", "giscus", "respond", "comments__list"):
+            self.assertTrue(C.COMMENTS_CONTAINER.match(token), token)
+        for token in ("comment", "hljs-comment", "token", "commentary", "nocomments", "comment-count"):
+            self.assertIsNone(C.COMMENTS_CONTAINER.match(token), token)
+        for token in ("cookie-consent", "cookie-banner", "cc-banner", "onetrust-banner-sdk", "gdpr", "consent"):
+            self.assertTrue(C.COOKIE_CONTAINER.match(token), token)
+        for token in ("cookiecutter-docs", "ccc", "consented-reads"):
+            self.assertIsNone(C.COOKIE_CONTAINER.match(token), token)
+
 
 class InventoryAndOutcome(unittest.TestCase):
     HTML = ("<body><h1>T</h1><h2>S</h2><ul><li>a</li><li>b</li></ul><table><tr><td>1</td></tr></table>"

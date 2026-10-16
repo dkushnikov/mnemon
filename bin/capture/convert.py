@@ -230,12 +230,16 @@ def find_title(root: Node) -> Optional[str]:
 
 
 def _is_container(node: Node, pattern) -> bool:
-    ident = (node.attr("id") + " " + node.attr("class")).strip()
-    return bool(ident) and bool(pattern.search(ident))
+    """A block container whose id or one of whose class tokens matches the pattern as a whole token."""
+    if node.tag not in check.CONTAINER_TAGS:
+        return False
+    tokens = node.attr("id").split() + node.attr("class").split()
+    return any(pattern.match(t) for t in tokens)
 
 
 def content_subtree(root: Node, kind: str) -> Node:
-    """The content subtree, pruned in place (D7)."""
+    """The content subtree, pruned in place (D7): removed tags, cookie/consent and reader-comment containers
+    (whole id/class tokens on block elements, never inside <pre>/<code>)."""
     sub = None
     if kind == "arxiv":
         sub = root.find(lambda n: n.tag == "article" and "ltx_document" in n.attr("class").split())
@@ -244,7 +248,7 @@ def content_subtree(root: Node, kind: str) -> Node:
     if sub is None:
         sub = root
 
-    def prune(n: Node):
+    def prune(n: Node, in_code: bool):
         kept = []
         for c in n.children:
             if c.is_text:
@@ -252,13 +256,14 @@ def content_subtree(root: Node, kind: str) -> Node:
                 continue
             if c.tag in REMOVE_TAGS:
                 continue
-            if _is_container(c, check.COOKIE_CONTAINER) or _is_container(c, check.COMMENTS_CONTAINER):
+            code = in_code or c.tag in ("pre", "code")
+            if not code and (_is_container(c, check.COOKIE_CONTAINER) or _is_container(c, check.COMMENTS_CONTAINER)):
                 continue
-            prune(c)
+            prune(c, code)
             kept.append(c)
         n.children = kept
 
-    prune(sub)
+    prune(sub, False)
     return sub
 
 

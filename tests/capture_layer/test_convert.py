@@ -165,6 +165,18 @@ class FixtureOutcomes(unittest.TestCase):
         self.assertEqual(convert.dom_text(convert.content_subtree(convert.parse(convert.to_html(root)), "page")), "h\npaper")
         self.assertEqual(convert.dom_text(convert.content_subtree(root, "arxiv")), "paper")
 
+    def test_container_pruning_never_inside_code_and_by_whole_tokens(self):
+        root = convert.parse("<html><body><pre><code><span class='token comment'># a comment token</span>\nx = 1</code></pre>"
+                             "<p>The <span class='comment'>inline span named comment</span> stays.</p>"
+                             "<div class='comment-count'>3</div><div class='comments'><p>reader</p></div>"
+                             "<section class='nocomments'>kept</section></body></html>")
+        text = convert.dom_text(convert.content_subtree(root, "page"))
+        self.assertIn("# a comment token", text)
+        self.assertIn("inline span named comment", text)
+        self.assertIn("3", text)
+        self.assertIn("kept", text)
+        self.assertNotIn("reader", text)
+
 
 class CaptureTextCLI(unittest.TestCase):
     def setUp(self):

@@ -213,5 +213,28 @@
    "Deploy the company brain across every team today"
   ],
   "pandoc_glued_min": 1
+ },
+ "discussion.html": {
+  "kind": "page",
+  "title": "Results, Discussion and Conclusion",
+  "converter": "pandoc",
+  "completeness": "complete",
+  "eligible_min": 4,
+  "present": [
+   "The discussion section interprets the results and must survive the capture in full.",
+   "A second discussion paragraph argues that a heading named Discussion is body text, not a widget.",
+   "Conclusion"
+  ]
+ },
+ "highlighted-code.html": {
+  "kind": "page",
+  "title": "Highlighted Code Listings",
+  "converter": "pandoc",
+  "completeness": "complete",
+  "present": [
+   "# configure the client before use in every environment",
+   "# the second comment names the hljs class family explicitly",
+   "echo done"
+  ]
  }
 }
