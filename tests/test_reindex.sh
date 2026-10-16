@@ -33,6 +33,7 @@ export XDG_CONFIG_HOME="$TEST_TMPDIR/xdg" XDG_STATE_HOME="$TEST_TMPDIR/state"
 VAULT="$TEST_TMPDIR/vault"
 mkdir -p "$VAULT/Sources" "$VAULT/Synthesis" "$VAULT/_meta"
 TODAY="$(date +%Y-%m-%d)"
+TODAY_UTC="$(date -u +%Y-%m-%d)"   # the hand-edit heading carries a UTC stamp; the file name the local date
 REPORT="$VAULT/_inputs/index-hand-edits-$TODAY.md"
 
 # mk_source <folder> <title> [frontmatter line…] · mk_extract <folder> <title> <rating> [frontmatter line…]
@@ -121,7 +122,7 @@ echo "--- the preservation transaction (A1) ---"
 assert_file_exists "$REPORT" "the hand-edit report exists under _inputs/ (created)"
 assert_contains "$(cat "$REPORT")" "- [[Sources/$D/extract|Delta]] (article, x, rating 3) — my hand remark" "the exact hand-edited row is in the report"
 assert_contains "$(cat "$REPORT")" "- [[Sources/2026-01-01_gone0000/extract|Gone]] (article, x)" "...and the vanished folder's row"
-assert_contains "$(cat "$REPORT")" "## $TODAY" "...under a dated heading"
+assert_contains "$(cat "$REPORT")" "## $TODAY_UTC" "...under a dated heading (UTC stamp)"
 assert_eq "$(report_entries)" "2" "two entries"
 assert_contains "$out" "Preserved=2" "the counters line reports the preserved rows"
 assert_contains "$err" "2 replaced row(s) preserved in _inputs/index-hand-edits-$TODAY.md" "a one-line notice on stderr"

@@ -287,7 +287,7 @@ echo "--- the dirty vault: text lines, one per check, severity by cause ---"
 doc --archive "$ARCHIVE" --state-dir "$LEDGER"
 assert_eq "$rc" "0" "vault-doctor.py exits 0 (the dispatcher derives the exit from fail lines)"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^fail \|^warn \|^ok ' || true)" "$(printf '%s\n' "$out" | grep -c . || true)" "every line is ok|warn|fail <name> — <detail>"
-assert_eq "$(printf '%s\n' "$out" | grep -c ' — ' || true)" "20" "19 checks and the radius/parse diagnostic"
+assert_eq "$(printf '%s\n' "$out" | grep -c ' — ' || true)" "21" "19 checks, the radius/parse diagnostic and the unreadable diagnostic (one chmod-000 file by design)"
 assert_eq "$(status_of store/source-integrity)" "fail" "I1 fail: an edited managed body, a foreign `_width`, a partial key set"
 assert_contains "$(line_of store/source-integrity)" "2 do not ($M2, $M3)" "I1 names the managed bodies that do not match (edited; `_width`)"
 assert_contains "$(line_of store/source-integrity)" "1 damaged ($D1)" "I1: a partial managed key set is damaged (fail), not legacy"
@@ -358,7 +358,7 @@ assert_eq "$(status_of human/queues)" "warn" "H3 warn"
 assert_contains "$(line_of human/queues)" "5 declared queues, oldest 288 d; 2 over radius (parked-expired.md, recapture-queue.md); parked 2; untyped 2 (bookmarks.md, tabs.md) — declare (type: queue, since) or remove; pending-writes legacy 1 (radius 30 d)" "H3: age from since (not mtime), parked excluded until parked_until passes, untyped named with the door, pending-writes legacy counted"
 assert_eq "$(line_of doctor/radius-parse)" 'warn doctor/radius-parse — cannot parse "seeds: lots" (defaults used)' "an unparsable radius line is a diagnostic (doctor/radius-parse), never a silent default"
 TEXT_OK="$(count_status ok)"; TEXT_WARN="$(count_status warn)"; TEXT_FAIL="$(count_status fail)"; TEXT_DIAG_WARN="$(count_diag warn)"
-assert_eq "$((TEXT_OK + TEXT_WARN + TEXT_FAIL)) $TEXT_DIAG_WARN $(count_diag fail)" "19 1 0" "19 check lines, one warn diagnostic, no fail diagnostic"
+assert_eq "$((TEXT_OK + TEXT_WARN + TEXT_FAIL)) $TEXT_DIAG_WARN $(count_diag fail)" "19 2 0" "19 check lines, two warn diagnostics (radius-parse, unreadable), no fail diagnostic"
 TEXT_OUT="$out"
 
 echo "--- the frozen JSON: schema, 19 stable names, summary = text, probed, items complete ---"
@@ -374,12 +374,12 @@ done
 assert_eq "$(jf "$JSON" 'd["summary"]["ok"], d["summary"]["warn"], d["summary"]["fail"]')" "($TEXT_OK, $TEXT_WARN, $TEXT_FAIL)" "summary counts equal the text lines"
 assert_eq "$(jf "$JSON" 'd["summary"]["probed"], d["summary"]["not_probed"]')" "(19, 0)" "every check probed (archive and ledger given)"
 assert_eq "$(jf "$JSON" 'len(d["checks"]), d["summary"]["checks"]')" "(19, 19)" "exactly the 19 checks in checks"
-assert_eq "$(jf "$JSON" 'd["diagnostics"]')" "[{'code': 'radius-parse', 'level': 'warn', 'message': 'cannot parse \"seeds: lots\" (defaults used)'}]" "the diagnostics array, apart from the checks"
+assert_eq "$(jf "$JSON" 'd["diagnostics"]')" "[{'code': 'radius-parse', 'level': 'warn', 'message': 'cannot parse \"seeds: lots\" (defaults used)'}, {'code': 'unreadable', 'level': 'warn', 'message': '1 file(s) could not be read (the checks count them as unreadable; coverage incomplete)'}]" "the diagnostics array, apart from the checks"
 assert_eq "$(jf "$JSON" 'd["summary"]["diagnostics_warn"], d["summary"]["diagnostics_fail"]')" "($TEXT_DIAG_WARN, 0)" "summary.diagnostics_* equal the doctor/* lines"
 assert_eq "$(jf "$JSON" 'sorted(d["checks"][0].keys())')" "['counts', 'detail', 'fix', 'items', 'name', 'probed', 'reason', 'status', 'threshold']" "the check shape"
 assert_eq "$(jf "$JSON" 'sorted(d["summary"].keys())')" "['checks', 'diagnostics_fail', 'diagnostics_warn', 'fail', 'not_probed', 'ok', 'probed', 'warn']" "the summary shape"
 assert_eq "$(jf "$JSON" 'sorted(k for k in d["snapshot"] if k in ("lock_held", "unreadable", "budget_s", "complete"))')" "['budget_s', 'complete', 'lock_held', 'unreadable']" "the snapshot fields"
-assert_eq "$(jf "$JSON" 'd["snapshot"]["complete"], d["snapshot"]["lock_held"], d["snapshot"]["budget_s"]')" "(True, False, None)" "a full run: complete, lock free, no budget"
+assert_eq "$(jf "$JSON" 'd["snapshot"]["complete"], d["snapshot"]["lock_held"], d["snapshot"]["budget_s"]')" "(False, False, None)" "a full run: snapshot incomplete (the one unreadable file), lock free, no budget"
 if [[ "$(id -u)" == 0 ]]; then
   echo "  ○ skipped: unreadable-file counting (running as root, permissions do not bite)"
 else
@@ -426,7 +426,7 @@ echo "--- the one-line brief: numbers equal --json; a budget that cannot be met 
 doc --archive "$ARCHIVE" --state-dir "$LEDGER" --brief
 assert_eq "$rc" "0" "--brief exits 0"
 assert_eq "$(printf '%s\n' "$out" | grep -c .)" "1" "--brief is one physical line"
-assert_eq "$out" "Dirty · 94 sources (18 managed · 87 current · 6 superseded) · 90 extracted · 10 synthesis (2 seeds / 124 d · 4 drafts / 137 d) · data: $TEXT_FAIL fail · $TEXT_WARN warn · probed 19/19 · diagnostics: 1 warn" "the brief's numbers are the JSON's counters and summary; diagnostics named apart"
+assert_eq "$out" "Dirty · 94 sources (18 managed · 87 current · 6 superseded) · 90 extracted · 10 synthesis (2 seeds / 124 d · 4 drafts / 137 d) · data: $TEXT_FAIL fail · $TEXT_WARN warn · probed 19/19 · diagnostics: 2 warn (unreadable 1)" "the brief's numbers are the JSON's counters and summary; diagnostics named apart; the unreadable file said"
 doc --archive "$ARCHIVE" --state-dir "$LEDGER" --brief --budget 0.001
 assert_eq "$rc" "0" "--budget 0.001 exits 0"
 assert_eq "$out" "Dirty · data: not probed (budget 0.001 s exceeded)" "a budget the run cannot meet: not probed — never 0 fail"
@@ -452,10 +452,10 @@ assert_eq "$(line_of store/index)" "warn store/index — not probed: error: Runt
 assert_eq "$(line_of doctor/error)" "fail doctor/error — store/index: RuntimeError: test hook" "...and a fail-level error diagnostic names it"
 assert_eq "$((TEXT_OK + TEXT_WARN + TEXT_FAIL))" "$(( $(count_status ok) + $(count_status warn) + $(count_status fail) ))" "still 19 check lines"
 rc=0; out="$(MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_RAISE=store/index python3 "$DOCTOR" --vault "$DIRTY" --today "$TODAY" --guide-version 2 --archive "$ARCHIVE" --state-dir "$LEDGER" --json 2>/dev/null)" || rc=$?
-assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["snapshot"]["complete"], d["summary"]["probed"], d["summary"]["not_probed"], d["summary"]["diagnostics_fail"], [x["code"] for x in d["diagnostics"]])')" "False 18 1 1 ['radius-parse', 'error']" "--json: snapshot incomplete, 18 probed, the error diagnostic next to the radius one"
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["snapshot"]["complete"], d["summary"]["probed"], d["summary"]["not_probed"], d["summary"]["diagnostics_fail"], [x["code"] for x in d["diagnostics"]])')" "False 18 1 1 ['radius-parse', 'unreadable', 'error']" "--json: snapshot incomplete, 18 probed, the error diagnostic next to the radius and unreadable ones"
 doc --archive "$ARCHIVE" --state-dir "$LEDGER" --brief --json
 assert_contains "$out" '"schema": "mnemon-doctor-data/1"' "--brief --json carries the schema"
-assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("checks" in d, d["counters"]["folders"], d["summary"]["fail"], len(d["diagnostics"]))')" "False 94 $TEXT_FAIL 1" "--brief --json: counters, summary and diagnostics, no checks"
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("checks" in d, d["counters"]["folders"], d["summary"]["fail"], len(d["diagnostics"]))')" "False 94 $TEXT_FAIL 2" "--brief --json: counters, summary and diagnostics, no checks"
 
 echo "--- the vault lock: probed, never taken; held → the snapshot is marked ---"
 READY="$TEST_TMPDIR/holder.ready"
@@ -641,7 +641,7 @@ run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" doctor --data
 assert_eq "$rc" "1" "doctor --data exits 1 on a data fail"
 assert_contains "$out" "fail store/source-integrity — " "the data group follows the engine checks, in the dispatcher's line shape"
 assert_contains "$out" "ok config — $TEST_TMPDIR/dirty.yaml" "...after the engine checks"
-assert_eq "$(printf '%s\n' "$out" | grep -c '^[a-z]* \(store\|data\|human\|doctor\)/' || true)" "20" "19 check lines and the radius diagnostic"
+assert_eq "$(printf '%s\n' "$out" | grep -c '^[a-z]* \(store\|data\|human\|doctor\)/' || true)" "21" "19 check lines, the radius diagnostic and the unreadable diagnostic"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^fail doctor/' || true)" "0" "no tool error"
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" doctor
 assert_eq "$(printf '%s\n' "$out" | grep -c '^[a-z]* \(store\|data\|human\)/' || true)" "0" "without --data the doctor is unchanged"
@@ -653,7 +653,7 @@ assert_eq "$(jf "$ENV" 'd["data"]["schema"]')" "mnemon-doctor-data/1" "the tool'
 assert_eq "$(jf "$ENV" 'len([c for c in d["checks"] if c["name"] == "store/source-integrity" and c["status"] == "fail"])')" "1" "...and its checks are in checks[] too (uniform)"
 assert_eq "$(jf "$ENV" 'd["data"]["summary"]["probed"], d["data"]["summary"]["not_probed"]')" "(18, 1)" "through the config: archive probed, the ledger (XDG state of this test) not"
 assert_eq "$(jf "$ENV" 'len([c for c in d["checks"] if c["name"] == "doctor/radius-parse" and c["status"] == "warn"])')" "1" "...the diagnostics are in checks[] as doctor/<code>"
-assert_eq "$(jf "$ENV" 'd["data"]["summary"]["checks"], len(d["data"]["diagnostics"])')" "(19, 1)" "...and the embedded document keeps them apart"
+assert_eq "$(jf "$ENV" 'd["data"]["summary"]["checks"], len(d["data"]["diagnostics"])')" "(19, 2)" "...and the embedded document keeps them apart"
 assert_not_contains "$out" "ok config —" "--json emits no text lines"
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" doctor --list thin
 assert_eq "$rc" "0" "doctor --list thin exits 0"
@@ -813,6 +813,18 @@ assert_contains "$(line_of store/ledger)" "ok store/ledger — not probed: no le
 VAULT="$TEST_TMPDIR/cr-nosources"; mkdir -p "$VAULT/_meta"
 doc --json
 assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["snapshot"]["complete"], d["summary"]["not_probed"], d["summary"]["diagnostics_fail"])')" "False 14 1" "a vault without Sources/ is as unobserved as an unlistable one"
+
+echo "--- unreadable files are said: a diagnostic, an incomplete snapshot, the brief suffix ---"
+VAULT="$TEST_TMPDIR/unr"; mkdir -p "$VAULT/Sources" "$VAULT/_meta"
+UR1=2026-07-01_ur000001; UR2=2026-07-02_ur000002
+mk_legacy "$UR1" 350 'url: "https://unr.example.com/one"'; mk_extract "$UR1" 5
+mk_legacy "$UR2" 350 'url: "https://unr.example.com/two"'; mk_extract "$UR2" 5
+chmod 000 "$VAULT/Sources/$UR2/source.md"
+doc --json; unr_json="$out"
+doc --brief; unr_brief="$out"
+chmod 644 "$VAULT/Sources/$UR2/source.md"
+assert_eq "$(printf '%s' "$unr_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["snapshot"]["complete"], d["snapshot"]["unreadable"], [x["code"] for x in d["diagnostics"]])')" "False 1 ['unreadable']" "an unreadable source.md: snapshot incomplete, an unreadable diagnostic (warn)"
+assert_contains "$unr_brief" "(unreadable 1)" "the brief carries the unreadable count"
 
 echo "--- the engine's own guide stamp ---"
 assert_eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import lib_vault; print(lib_vault.engine_guide_version())' "$MNEMON_ROOT/bin")" "2" "vault-template/CLAUDE.md is stamped mnemon_guide: 2"

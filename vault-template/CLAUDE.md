@@ -65,7 +65,7 @@ source_type: <matches source>
 content_format: <matches source>
 origin: <matches source>
 visibility: <personal|public|company|private>
-status: <captured|extracted|integrated>
+status: <extracted|dismissed>    # extracted = the engine's default; dismissed = your judgement (phase 3); captured/integrated are derived, legacy words are counted by the doctor
 title: "<title>"
 author: "<author>"
 url: "<url>"

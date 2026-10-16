@@ -354,7 +354,8 @@ def check_supersedes(scan: dict, cfg: dict) -> Check:
         c.add("warn", {"id": name, "reason": "extract.md carries a stored `superseded` (legacy word)", "rating": None, "words": None})
     c.counts = {"edges": g["edges"], "dangling": len(g["dangling"]), "cycles": cycles_n,
                 "self_edges": len(g.get("self_edges", [])),
-                "cross_resource": len(g["cross_resource"]), "fan_out": len(g["fan_out"]), "stored_superseded": len(stored),
+                "cross_resource": len(g["cross_resource"]), "incomparable": g.get("incomparable", 0),
+                "fan_out": len(g["fan_out"]), "stored_superseded": len(stored),
                 "current_incomplete": g["current_incomplete"]}
     parts = ["%d edges, %d dangling, %d cycles" % (g["edges"], len(g["dangling"]), cycles_n)]
     if g["current_incomplete"]:
@@ -364,6 +365,8 @@ def check_supersedes(scan: dict, cfg: dict) -> Check:
                                    names(["%s → %s" % e for e in g["cross_resource"]], 3)))
     if g["fan_out"]:
         parts.append("fan-out %d (%s)" % (len(g["fan_out"]), names(g["fan_out"], 3)))
+    if g.get("incomparable"):
+        parts.append("%d edge(s) between unkeyed revisions (identity incomparable)" % g["incomparable"])
     if stored:
         parts.append("%d extract.md carry a stored `superseded` (legacy word)" % len(stored))
     c.detail = "; ".join(parts)
@@ -1069,6 +1072,12 @@ def run_checks(scan: dict, cfg: dict) -> Tuple[List[Check], List[dict]]:
                             "message": "vault lock not probed: the lock file could not be opened or flocked (lock_held: null)"})
     checks: List[Check] = []
     raise_in = test_hook("MNEMON_TEST_DOCTOR_RAISE")
+    if scan["snapshot"].get("unreadable"):
+        # a file that could not be read is coverage lost: the snapshot is incomplete and the text says so
+        scan["snapshot"]["complete"] = False
+        diagnostics.append({"code": "unreadable", "level": "warn",
+                            "message": "%d file(s) could not be read (the checks count them as unreadable; coverage incomplete)"
+                                       % scan["snapshot"]["unreadable"]})
     unlisted = scan["snapshot"].get("sources_unlisted")
     if unlisted:
         diagnostics.append({"code": "error", "level": "fail",
@@ -1181,6 +1190,8 @@ def brief_line(doc: dict) -> str:
         if s["diagnostics_warn"]:
             diag.append("%d warn" % s["diagnostics_warn"])
         line += " · diagnostics: " + " · ".join(diag)
+    if doc["snapshot"].get("unreadable"):
+        line += " (unreadable %d)" % doc["snapshot"]["unreadable"]
     if doc["snapshot"].get("lock_held"):
         line += " (snapshot may be partial)"
     elif doc["snapshot"].get("lock_held") is None and doc["snapshot"].get("lock") == "error":
