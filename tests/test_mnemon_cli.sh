@@ -808,7 +808,8 @@ RWT="$TEST_TMPDIR/engine"
 ORIGIN="$TEST_TMPDIR/origin.git"
 g() { local d="$1"; shift; git -C "$d" -c commit.gpgsign=false -c user.name="mnemon test" -c user.email="mnemon-test@example.invalid" "$@"; }
 mkdir -p "$REPO/bin" "$REPO/tests"
-cp "$MNEMON_ROOT/bin/mnemon" "$MNEMON_ROOT/bin/mnemon-config.sh" "$REPO/bin/"
+# the smoke runs tests/test_config.sh, which reads the config key table from bin/lib_config.py too (§5)
+cp "$MNEMON_ROOT/bin/mnemon" "$MNEMON_ROOT/bin/mnemon-config.sh" "$MNEMON_ROOT/bin/lib_config.py" "$REPO/bin/"
 cp "$MNEMON_ROOT/tests/test-helper.sh" "$MNEMON_ROOT/tests/test_config.sh" "$REPO/tests/"
 git init -q "$REPO"
 git -C "$REPO" symbolic-ref HEAD refs/heads/main
