@@ -6,10 +6,11 @@
 chain decides from it. `conversion` compares a sanitized candidate with the reference projected from the
 same raw bytes: a reference line is present when its *key* (NFKC, casefold, soft hyphens and zero-width
 characters removed, every alphanumeric character of any script kept) is a substring of the candidate's key
-**and** its word sequence occurs as a contiguous token sequence in the candidate's tokens — in the spaced
-form, or with the boundaries the page itself writes without whitespace (`SOFT`) joined — a key match
-without the token match is a *glued* line. Both checks are pure functions over strings; nothing here touches
-the network or the vault.
+**and** its word sequence occurs as a contiguous token sequence in the candidate's tokens — every boundary
+the page writes with whitespace a token boundary, every boundary it writes without (`SOFT`: a drop cap, an
+anchor inside a word) joined; a candidate showing the spaced form at a SOFT boundary has split a word and
+the line counts as *glued*, like a key match without the token match. Both checks are pure functions over
+strings; nothing here touches the network or the vault.
 
 The acquisition classification is one linear pass over at most the first `CLASSIFY_MAX_BYTES` of the body
 (`scan`): a small state machine driven by `str.find`, never a regex with `.*?` or `[^>]*` applied to the
@@ -33,8 +34,9 @@ JS_SHELL_MAX_WORDS = 30
 # the js-shell signals all come from that prefix, in one pass.
 CLASSIFY_MAX_BYTES = 1 << 20
 # The reference projection marks a whitespace-free inline boundary (a drop cap `T`+`he`, an anchor inside a
-# word) with this invisible separator: the token check then accepts a candidate holding either the spaced
-# sequence or the sequence with those boundary tokens joined. It is not alphanumeric, so keys ignore it.
+# word) with this invisible separator: the token check then requires the candidate to hold the sequence
+# with those boundary tokens joined — the page's own word — and treats the spaced form as a split word
+# (glued). It is not alphanumeric, so keys ignore it.
 SOFT = "⁣"
 THIN_WORDS_DEFAULT = 60
 CHROME_MAX_WORDS = 12
@@ -99,6 +101,11 @@ _MD_REFLINK = re.compile(r"\[([^\]]*)\]\[[^\]]*\]")
 _MD_LINKDEF = re.compile(r"^\s*\[[^\]]+\]:\s*\S+.*$", re.MULTILINE)
 _MD_AUTOLINK = re.compile(r"<(https?://[^>\s]+)>")
 _MD_HTML_TAG = re.compile(r"</?[A-Za-z][^>]*>")
+# An emphasis, code or strike marker with word characters on both sides (`*emph*asis`, pandoc's rendering
+# of <em>emph</em>asis) is markup inside a word, not a split: the candidate is also indexed with those
+# markers removed. A literal `*` in page text stays a boundary in the plain index, so the DOM text keeps
+# satisfying its own reference.
+_INTRAWORD_MARK = re.compile(r"(?<=[^\W_])[*`~]+(?=[^\W_])")
 
 
 class Acq(NamedTuple):
@@ -583,13 +590,9 @@ def reference_lines(reference: str) -> List[str]:
 
 
 def token_forms(line: str) -> List[List[str]]:
-    """The token sequences a reference line may be present as: the spaced one (every boundary a space) and,
-    when the line carries SOFT boundaries, the one with those boundary tokens joined."""
-    spaced = tokens(line.replace(SOFT, " "))
-    if SOFT not in line:
-        return [spaced]
-    joined = tokens(line.replace(SOFT, ""))
-    return [spaced, joined] if joined != spaced else [spaced]
+    """The one token sequence a reference line must be present as: every whitespace boundary a token
+    boundary, every SOFT boundary joined — the page's own words (G9). A list, as the check consumes it."""
+    return [tokens(line.replace(SOFT, ""))]
 
 
 def plain(line: str) -> str:
@@ -598,12 +601,15 @@ def plain(line: str) -> str:
 
 
 def conversion(candidate_md: str, reference: str, title: Optional[str]) -> Conv:
-    """Every eligible reference line and every h1–h3 heading must be present (key + contiguous tokens, in
-    the spaced form or with the SOFT boundaries joined)."""
+    """Every eligible reference line and every h1–h3 heading must be present: the key as a substring and
+    the line's tokens — SOFT boundaries joined — as a contiguous sequence of the candidate's tokens, in the
+    plain tokenization or with intraword emphasis markers removed."""
     lines = reference_lines(reference)
     text = candidate_text(candidate_md)
     cand_key = line_key(text)
     index = _TokenIndex(tokens(text))
+    unmarked = _INTRAWORD_MARK.sub("", text)
+    index2 = _TokenIndex(tokens(unmarked)) if unmarked != text else index
     title_key = line_key(title) if title else None
     missing, glued, headings_missing = [], [], []
     eligible = 0
@@ -619,7 +625,7 @@ def conversion(candidate_md: str, reference: str, title: Optional[str]) -> Conv:
             continue
         if cls == "spaceless":
             continue
-        if not any(index.contains(form) for form in token_forms(body)):
+        if not any(index.contains(form) or index2.contains(form) for form in token_forms(body)):
             (headings_missing if cls == "heading" else glued).append(plain(body))
     return Conv(missing, glued, headings_missing, len(lines), eligible)
 

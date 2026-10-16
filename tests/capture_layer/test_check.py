@@ -170,23 +170,35 @@ class ConversionCheck(unittest.TestCase):
         conv = C.conversion(cand, ref, None)
         self.assertTrue(conv.passed, conv)
 
-    def test_soft_boundaries_accept_the_joined_form_but_not_glued_whitespace(self):
+    def test_soft_boundaries_require_the_joined_form_and_hard_ones_the_spaced(self):
+        """G9: at a SOFT boundary (no whitespace in the HTML) only the joined form is the page's word — a
+        candidate showing the spaced form there split it (glued); at a HARD boundary (whitespace in the
+        HTML) the spaced form is required, as before."""
         soft = C.SOFT
         ref = ("T%she quick brown fox jumps over the lazy dog today\n"
-               "See the Deploy%sment guide for more than six words here\n" % (soft, soft))
-        pandoc_like = "The quick brown fox jumps over the lazy dog today\n\nSee the Deployment guide for more than six words here\n"
-        self.assertTrue(C.conversion(pandoc_like, ref, None).passed, "a drop cap and an in-word anchor pass in the joined form")
-        spaced_like = "T he quick brown fox jumps over the lazy dog today\n\nSee the Deploy ment guide for more than six words here\n"
-        self.assertTrue(C.conversion(spaced_like, ref, None).passed, "...and in the spaced form")
+               "See the Deploy%sment guide for more than six words here\n"
+               "A third paragraph with emph%sasis split across inline markup and more words\n" % (soft, soft, soft))
+        pandoc_like = ("The quick brown fox jumps over the lazy dog today\n\nSee the [Deploy](/deploy)ment guide for more than six words here\n\n"
+                       "A third paragraph with *emph*asis split across inline markup and more words\n")
+        self.assertTrue(C.conversion(pandoc_like, ref, None).passed,
+                        "the joined form passes, through a link inside the word and an emphasis marker inside the word")
+        spaced_like = ("T he quick brown fox jumps over the lazy dog today\n\nSee the [Deploy](/deploy) ment guide for more than six words here\n\n"
+                       "A third paragraph with *emph* asis split across inline markup and more words\n")
+        conv = C.conversion(spaced_like, ref, None)
+        self.assertEqual(len(conv.glued), 3, "the spaced form at a SOFT boundary split the page's word: glued")
+        self.assertEqual(conv.missing, [])
         glued_ref = "Deploy the company brain across every team today\n"
         conv = C.conversion("Deploythecompanybrainacrosseveryteamtoday\n", glued_ref, None)
         self.assertEqual(len(conv.glued), 1, "per-word spans separated by real whitespace stay glued when joined")
+        literal = "the product of 2*3 equals six in this line of text\n"
+        self.assertTrue(C.conversion(literal, literal, None).passed, "a literal intraword asterisk is still a boundary in the plain index")
+        self.assertTrue(C.conversion("the product of 2\\*3 equals six in this line of text\n", literal, None).passed, "...and escaped by a converter")
         conv = C.conversion("nothing relevant at all in here\n", ref, None)
-        self.assertEqual(conv.missing, ["The quick brown fox jumps over the lazy dog today",
-                                        "See the Deployment guide for more than six words here"],
+        self.assertEqual(conv.missing[:2], ["The quick brown fox jumps over the lazy dog today",
+                                            "See the Deployment guide for more than six words here"],
                          "examples and counts show the page's own boundaries, never the marker")
         self.assertNotIn(soft, "".join(C.missing_examples(conv)))
-        self.assertEqual(C.token_forms("a%sb c" % soft), [["a", "b", "c"], ["ab", "c"]])
+        self.assertEqual(C.token_forms("a%sb c" % soft), [["ab", "c"]])
         self.assertEqual(C.token_forms("a b c"), [["a", "b", "c"]])
 
     def test_links_in_candidates_do_not_break_sequences(self):

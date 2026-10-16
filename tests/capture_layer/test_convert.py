@@ -16,6 +16,7 @@ from _helpers import BIN, HTML_FIX, assert_same_keys, clean_env, expected_shapes
 from capture import convert
 
 HAVE_PANDOC = bool(shutil.which("pandoc"))
+HAVE_DEFUDDLE = bool(shutil.which("defuddle"))
 EXPECTED = read_json(os.path.join(HTML_FIX, "expected.json"))
 CT = os.path.join(BIN, "capture-text.py")
 
@@ -48,18 +49,19 @@ class _Env:
                 os.environ[k] = v
 
 
-def run_fixture(name: str):
-    """One fixture through convert(): defuddle injected when the fixture names a candidate, skipped otherwise
-    (raw_kind rendered), pandoc hidden when the fixture says so."""
+def run_fixture(name: str, mode: str = "rendered"):
+    """One fixture through convert(). `injected`: the fixture's canned defuddle candidate (raw_kind
+    response); `real`: the defuddle on PATH, nothing injected (raw_kind response); `rendered`: defuddle
+    skipped (raw_kind rendered). pandoc is hidden when the fixture says so."""
     e = EXPECTED[name]
     raw = read_fixture(name, binary=True)
-    env = {"MNEMON_TEST_HOOKS": "1"}
+    env = {"MNEMON_TEST_HOOKS": "1", "MNEMON_TEST_DEFUDDLE_OUTPUT": None}
     raw_kind = "rendered"
-    if e.get("defuddle"):
+    if mode == "injected":
         env["MNEMON_TEST_DEFUDDLE_OUTPUT"] = os.path.join(HTML_FIX, e["defuddle"])
         raw_kind = "response"
-    else:
-        env["MNEMON_TEST_DEFUDDLE_OUTPUT"] = None
+    elif mode == "real":
+        raw_kind = "response"
     if e.get("without_pandoc"):
         env["PATH"] = "/usr/bin:/bin"
     with _Env(**env):
@@ -68,51 +70,65 @@ def run_fixture(name: str):
 
 class FixtureOutcomes(unittest.TestCase):
     def test_every_fixture(self):
+        """Every fixture in every mode it has: the canned defuddle candidate where one is named, else both the
+        real defuddle on a response raw and a rendered raw (defuddle skipped). The outcome fields,
+        `completeness`, the `present`/`absent` text and the repairs hold in every mode; `converter` is one of
+        the fixture's set (`defuddle|pandoc` where the real defuddle legitimately wins) — G9."""
         for name, e in EXPECTED.items():
             if name.startswith("_"):
                 continue
-            if e.get("converter") == "pandoc" and not HAVE_PANDOC:
-                note("pandoc not on PATH: %s judged on the DOM text instead" % name)
-            result = run_fixture(name)
-            r = result.report
-            label = name
-            self.assertEqual(r["title"], e["title"], label)
-            self.assertEqual(r["completeness"], e["completeness"], label)
-            if HAVE_PANDOC or e.get("converter") != "pandoc":
-                self.assertEqual(r["converter"], e["converter"], label)
-            else:
-                self.assertEqual(r["converter"], "dom-text", label)
-            by_name = {c["converter"]: c for c in r["candidates"]}
-            if "defuddle_missing_min" in e:
-                self.assertGreaterEqual(by_name["defuddle"]["missing_count"], e["defuddle_missing_min"], label)
-                self.assertFalse(by_name["defuddle"]["chosen"], label)
-            if "defuddle_headings_missing_min" in e:
-                self.assertGreaterEqual(by_name["defuddle"]["headings_missing_count"], e["defuddle_headings_missing_min"], label)
-            if "defuddle_glued_min" in e:
-                self.assertGreaterEqual(by_name["defuddle"]["glued_count"], e["defuddle_glued_min"], label)
-                self.assertFalse(by_name["defuddle"]["chosen"], label)
-            if "pandoc_glued_min" in e and HAVE_PANDOC:
-                self.assertGreaterEqual(by_name["pandoc"]["glued_count"], e["pandoc_glued_min"], label)
-            for key, sub in (e.get("repairs") or {}).items():
-                for k, minimum in sub.items():
-                    self.assertGreaterEqual(r["repairs"][key][k], minimum, "%s: repairs.%s.%s" % (label, key, k))
-            if HAVE_PANDOC or e.get("converter") != "pandoc":
-                for s in e.get("present", []):
-                    self.assertIn(s, result.text, "%s: %r expected in the capture-text" % (label, s))
-            for s in e.get("absent", []):
-                self.assertNotIn(s, result.text, "%s: %r must be absent" % (label, s))
-            if "ordered" in e and (HAVE_PANDOC or e.get("converter") != "pandoc"):
-                positions = [result.text.index(s) for s in e["ordered"]]
-                self.assertEqual(positions, sorted(positions), label)
-            if "published_candidates" in e:
-                self.assertEqual(r["published_candidates"], e["published_candidates"], label)
-            if "authors" in e:
-                self.assertEqual(r["authors"], e["authors"], label)
-            if "eligible_min" in e:
-                self.assertGreaterEqual(r["eligible_count"], e["eligible_min"], label)
-            self.assertGreater(r["bytes_per_word"], 0, label)
-            if name != "cjk.html":      # whitespace words: a CJK page is "bloated" by construction, flagged, never acted on
-                self.assertFalse(r["bloat"], label)
+            allowed_all = set(e["converter"].split("|"))
+            modes = ["injected"] if e.get("defuddle") else ["rendered", "real"]
+            for mode in modes:
+                if mode == "real" and not HAVE_DEFUDDLE:
+                    note("defuddle not on PATH: %s not judged with the real defuddle" % name)
+                    continue
+                label = "%s [%s]" % (name, mode)
+                allowed = set(allowed_all)
+                if mode == "rendered":
+                    allowed.discard("defuddle")
+                if "pandoc" in allowed and not HAVE_PANDOC:
+                    allowed.discard("pandoc")
+                    allowed.add("dom-text")
+                    note("pandoc not on PATH: %s judged on the DOM text instead" % label)
+                result = run_fixture(name, mode)
+                r = result.report
+                self.assertEqual(r["title"], e["title"], label)
+                self.assertEqual(r["completeness"], e["completeness"], label)
+                self.assertIn(r["converter"], allowed, label)
+                if e["completeness"] == "complete":
+                    self.assertEqual((r["missing_count"], r["glued_count"], r["headings_missing_count"]), (0, 0, 0), label)
+                by_name = {c["converter"]: c for c in r["candidates"]}
+                defuddle_ran = "defuddle" in by_name and by_name["defuddle"]["missing_count"] is not None
+                if defuddle_ran:
+                    for key, field in (("defuddle_missing_min", "missing_count"), ("defuddle_headings_missing_min", "headings_missing_count"),
+                                       ("defuddle_glued_min", "glued_count")):
+                        if key in e:
+                            self.assertGreaterEqual(by_name["defuddle"][field], e[key], "%s: %s" % (label, key))
+                            self.assertFalse(by_name["defuddle"]["chosen"], label)
+                if "pandoc_glued_min" in e and HAVE_PANDOC:
+                    self.assertGreaterEqual(by_name["pandoc"]["glued_count"], e["pandoc_glued_min"], label)
+                for key, sub in (e.get("repairs") or {}).items():
+                    for k, minimum in sub.items():
+                        self.assertGreaterEqual(r["repairs"][key][k], minimum, "%s: repairs.%s.%s" % (label, key, k))
+                expected_tool_won = r["converter"] in allowed_all
+                if expected_tool_won:
+                    for s in e.get("present", []):
+                        self.assertIn(s, result.text, "%s: %r expected in the capture-text" % (label, s))
+                for s in e.get("absent", []):
+                    self.assertNotIn(s, result.text, "%s: %r must be absent" % (label, s))
+                if "ordered" in e and expected_tool_won:
+                    positions = [result.text.index(s) for s in e["ordered"]]
+                    self.assertEqual(positions, sorted(positions), label)
+                if "published_candidates" in e:
+                    self.assertEqual(r["published_candidates"], e["published_candidates"], label)
+                if "authors" in e:
+                    self.assertEqual(r["authors"], e["authors"], label)
+                if "eligible_min" in e:
+                    self.assertGreaterEqual(r["eligible_count"], e["eligible_min"], label)
+                self.assertGreater(r["bytes_per_word"], 0, label)
+                if name != "cjk.html":      # whitespace words: a CJK page is "bloated" by construction, flagged, never acted on
+                    self.assertFalse(r["bloat"], label)
 
     def test_rendered_site_external_raws_never_run_defuddle(self):
         raw = read_fixture("cookie.html", binary=True)

@@ -1,5 +1,5 @@
 {
- "_note": "Expected outcomes of the synthetic damage fixtures (spec D16, §7.6–§7.8). `converter` is the winner with a real pandoc on PATH; `present`/`absent` are substrings of the capture-text; `repairs` are minimum counts.",
+ "_note": "Expected outcomes of the synthetic damage fixtures (spec D16, §7.6–§7.8). `converter` is the winner with a real pandoc on PATH; `defuddle|pandoc` where the real defuddle legitimately passes the check and wins on a response raw (it is skipped for a rendered raw, where pandoc wins); a fixture naming a `defuddle` candidate is judged with that canned output. `present`/`absent` are substrings of the capture-text in every mode; `repairs` are minimum counts; `defuddle_*_min` apply when defuddle ran.",
  "dropped-section.html": {
   "kind": "page",
   "title": "Thirteen Sections — Example Project",
@@ -97,7 +97,7 @@
  "svg.html": {
   "kind": "page",
   "title": "Architecture Page",
-  "converter": "pandoc",
+  "converter": "defuddle|pandoc",
   "completeness": "complete",
   "repairs": {
    "html": {
@@ -116,7 +116,7 @@
  "cookie.html": {
   "kind": "page",
   "title": "Article Behind a Cookie Banner",
-  "converter": "pandoc",
+  "converter": "defuddle|pandoc",
   "completeness": "complete",
   "present": [
    "The article text is the only content"
@@ -131,13 +131,8 @@
  "comments.html": {
   "kind": "page",
   "title": "A Post With Comments",
-  "converter": "pandoc",
+  "converter": "defuddle|pandoc",
   "completeness": "complete",
-  "repairs": {
-   "markdown": {
-    "comment_sections": 1
-   }
-  },
   "present": [
    "The idea matters because"
   ],
@@ -150,14 +145,14 @@
  "jsonld-website.html": {
   "kind": "page",
   "title": "Example Site Home",
-  "converter": "pandoc",
+  "converter": "defuddle|pandoc",
   "completeness": "complete",
   "published_candidates": []
  },
  "jsonld-article.html": {
   "kind": "page",
   "title": "An Example Blog Post",
-  "converter": "pandoc",
+  "converter": "defuddle|pandoc",
   "completeness": "complete",
   "published_candidates": [
    {
@@ -173,7 +168,7 @@
  "table-wrong.html": {
   "kind": "page",
   "title": "Two Merged Tables",
-  "converter": "pandoc",
+  "converter": "defuddle|pandoc",
   "completeness": "complete",
   "repairs": {
    "html": {
@@ -198,7 +193,7 @@
  "cjk.html": {
   "kind": "page",
   "title": "日本語のテストページ",
-  "converter": "pandoc",
+  "converter": "defuddle|pandoc",
   "completeness": "complete",
   "eligible_min": 2
  },
@@ -219,7 +214,7 @@
  "discussion.html": {
   "kind": "page",
   "title": "Results, Discussion and Conclusion",
-  "converter": "pandoc",
+  "converter": "defuddle|pandoc",
   "completeness": "complete",
   "eligible_min": 4,
   "present": [
@@ -231,7 +226,7 @@
  "highlighted-code.html": {
   "kind": "page",
   "title": "Highlighted Code Listings",
-  "converter": "pandoc",
+  "converter": "defuddle|pandoc",
   "completeness": "complete",
   "present": [
    "# configure the client before use in every environment",
@@ -254,6 +249,7 @@
    "T he quick",
    "Deploy ment",
    "emph asis"
-  ]
+  ],
+  "defuddle_glued_min": 1
  }
 }
