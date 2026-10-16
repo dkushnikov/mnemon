@@ -617,6 +617,12 @@ assert_contains "$(cat "$TEST_TMPDIR/gate.out")" "[ok] $BASE/" "...and the item 
 assert_eq "$(jq -r '[.pages[] | select(.include)] | length' "$GATE_OUT/$GATE_DATE/$gslug/bundle/plan.json" 2>/dev/null)" "1" "...the bundle was fetched from that plan (the landing alone)"
 assert_eq "$(grep -c 'GET /sitemap.xml' "$REQLOG" || true)" "$sitemap_before" "...and no mapping request was made"
 assert_contains "$(cat "$GATE_OUT/$GATE_DATE/report.md")" "| $gslug | site |" "...the summary row is written"
+# G20: a site row carries the landing's method, converter and acquisition; the closing line counts ok/partial/failed
+gate_row="$(grep "| $gslug | site |" "$GATE_OUT/$GATE_DATE/report.md")"
+assert_contains "$gate_row" "| site | direct | " "...with the landing's fetch method (direct)"
+assert_contains "$gate_row" " | ok | complete | 0 | 0 | " "...the landing's acquisition (ok), the aggregate completeness and the counts"
+[[ "$gate_row" == *"| direct | pandoc | ok |"* || "$gate_row" == *"| direct | dom-text | ok |"* ]] && pass "...and the landing's converter" || fail "the landing's converter in the row" "$gate_row"
+assert_contains "$(tail -n 1 "$TEST_TMPDIR/gate.out")" "items: 1, ok: 1, partial: 0, failed: 0" "...the closing line counts ok / partial / failed"
 
 # ==================================================================================================
 echo "--- (h) a 1 MB text: chunked extraction under extract_inline_max_bytes ---"

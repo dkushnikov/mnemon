@@ -14,11 +14,11 @@
 #
 # five sites
 https://dylanzsz.github.io/faulty-memory/ | site | 6000 | data:,[TABLE]    # github-pages project page, 13 sections; defuddle returned 1 of 13
-https://www.jetbrains.com/help/air/supported-agents.html | site | 300 | data:    # docs page with tabbed content (pandoc dropped tabs); plan: map https://www.jetbrains.com/air/ with --include '^/help/air/', pre-placed
+https://www.jetbrains.com/help/air/supported-agents.html | site | 300 | data:    # docs page with tabbed content (pandoc dropped tabs); plan: the maintainer places plan.json in the item's snapshot directory first (map https://www.jetbrains.com/air/ with --include '^/help/air/'; G13) and the runner uses it as it is
 https://vidiq.com/ | site | 400 | _next/image    # spa product site behind a bot checkpoint (429 to curl, passes headless chrome); plan: map with defaults
 https://www.codos.ai/ | site | 800 | _next/image,<svg    # marketing site: per-word span headings ("Deploythecompanybrain"), Next.js images, SVG; plan: map with defaults
 https://whrrari.substack.com/p/graph-engineering-how-to-build-ai | page | 1500 | data:    # substack article with a reader-comment section to cut
 # three arXiv papers pinned by version
 https://arxiv.org/abs/2605.12978v2 | paper | 20000 | data:,[TABLE],\iow_now    # 67 inline base64 figures; LaTeXML
-https://arxiv.org/abs/2605.27276 | paper | 15000 | data:,[TABLE],\iow_now    # listing download buttons
+https://arxiv.org/abs/2605.27276 | paper | 6000 | data:,[TABLE],\iow_now    # listing download buttons; the paper is ~7 300 visible words
 https://arxiv.org/abs/2505.22954 | paper | 20000 | data:,[TABLE],\iow_now    # 19 listing download buttons, merged-cell tables, tcolorbox listings

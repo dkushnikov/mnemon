@@ -8,8 +8,10 @@
 # capture.md, text.json} (a site: plan.json, bundle/, capture.md, site.json). Per item it asserts §7.17:
 # the capture converts, completeness ∈ {complete, partial}, missing + glued ≤ 3 per page, the item's absent
 # artifacts are absent from the capture-text, and the word floor holds. A markdown report per item and a
-# summary (method, converter, acquisition, completeness, missing, glued, repairs, seconds) land next to the
-# snapshot; tests/live/replay.sh re-converts the snapshot deterministically. Exit 1 when any item fails.
+# summary (method, converter, acquisition, completeness, missing, glued, repairs, seconds — for a site item
+# the landing's method, converter and acquisition) land next to the snapshot; the closing line counts
+# ok / partial / failed items; tests/live/replay.sh re-converts the snapshot deterministically. Exit 1 when
+# any item fails.
 #
 # A site item is mapped by the runner unless <snapshot>/<slug>/plan.json already exists: a landing that
 # needs an --include plan is mapped by hand first (`capture-site.py map <url> --include '^/help/air/'
@@ -37,6 +39,8 @@ mkdir -p "$OUT"
 SUMMARY="$OUT/report.md"
 printf '# Capture gate — %s\n\n| item | kind | method | converter | acquisition | completeness | missing | glued | repairs | words | seconds | verdict |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n' "$DATE" > "$SUMMARY"
 failed=0
+n_ok=0
+n_partial=0
 n=0
 
 slug_of() { printf '%s' "$1" | sed -e 's#^https\{0,1\}://##' -e 's#[^A-Za-z0-9._-]#_#g' | cut -c1-80; }
@@ -59,6 +63,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   dir="$OUT/$slug"; mkdir -p "$dir"
   t0=$(date +%s)
   verdict="ok"; notes=""
+  # every per-item field starts empty: a failed row never shows the previous row's values (G20)
+  method=""; converter=""; acquisition=""; completeness=""; missing=""; glued=""; repairs=""; words=""; report=""
   if [[ "$kind" == "site" ]]; then
     if [[ -s "$dir/plan.json" ]]; then
       echo "using the pre-placed plan $dir/plan.json (not mapping)"; notes="$notes pre-placed plan;"
@@ -72,8 +78,11 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ "$verdict" == "ok" ]]; then
       python3 "$ROOT/bin/capture-site.py" assemble "$dir/bundle" --out "$dir/capture.md" --report "$dir/site.json" || verdict="assemble-failed"
     fi
-    report="$dir/site.json"; method="site+mixed"; converter="mixed"; acquisition="-"
+    report="$dir/site.json"
+    # the landing's own method and acquisition (its fetch report in the bundle) and converter (the site report)
+    if [[ -f "$dir/bundle/01.fetch.json" ]]; then method="$(jget "$dir/bundle/01.fetch.json" method)"; acquisition="$(jget "$dir/bundle/01.fetch.json" acquisition.outcome)"; fi
     if [[ "$verdict" == "ok" ]]; then
+      converter="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); p=[p for p in d["pages"] if p.get("role") == "landing"]; print((p[0].get("converter") if p else None) or "")' "$report")"
       completeness="$(jget "$report" completeness)"
       missing="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum((p.get("missing_count") or 0) for p in d["pages"]))' "$report")"
       glued="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum((p.get("glued_count") or 0) for p in d["pages"]))' "$report")"
@@ -110,11 +119,15 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     done
   fi
   secs=$(( $(date +%s) - t0 ))
-  [[ "$verdict" == "ok" || "$verdict" == "pdf-raw" ]] || failed=$((failed + 1))
+  if [[ "$verdict" == "ok" || "$verdict" == "pdf-raw" ]]; then
+    if [[ "$completeness" == "partial" ]]; then n_partial=$((n_partial + 1)); else n_ok=$((n_ok + 1)); fi
+  else
+    failed=$((failed + 1))
+  fi
   printf '| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n' "$slug" "$kind" "${method:--}" "${converter:--}" "${acquisition:--}" "${completeness:--}" "${missing:--}" "${glued:--}" "${repairs:--}" "${words:--}" "$secs" "$verdict$notes" >> "$SUMMARY"
   printf '# %s\n\n- url: %s\n- kind: %s\n- verdict: %s %s\n- seconds: %s\n- report: %s\n' "$slug" "$url" "$kind" "$verdict" "$notes" "$secs" "$report" > "$dir/report.md"
   echo "[$verdict] $url ($secs s)"
 done < "$CORPUS"
 
-echo "items: $n, failed: $failed — summary: $SUMMARY"
+echo "items: $n, ok: $n_ok, partial: $n_partial, failed: $failed — summary: $SUMMARY"
 [[ $failed -eq 0 ]]
