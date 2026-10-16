@@ -5,6 +5,19 @@ set -euo pipefail
 PASS=0
 FAIL=0
 
+# scrub_test_env: the test hooks, stub overrides, lock descriptors, vendor keys and proxies a suite
+# could inherit from the shell that runs it are cleared before the suite starts (capture layer
+# §7.16) — a stray MNEMON_POLICY_ALLOW_LOOPBACK or FIRECRAWL_API_KEY in the environment must never
+# change what a suite proves. Every suite inherits this by sourcing the helper; a suite that needs a
+# hook sets it itself, after this.
+scrub_test_env() {
+  unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT MNEMON_POLICY_ALLOW_LOOPBACK MNEMON_FETCH_URL_REWRITE \
+        MNEMON_EXTERNAL_FETCH_CMD MNEMON_CAPTURE_FETCH_CMD MNEMON_CAPTURE_SITE_CMD MNEMON_DEPTH_FOLD_CMD \
+        MNEMON_VAULT_LOCK_FD MNEMON_VAULT_LOCK_INODE MNEMON_SMOKE_CMD \
+        FIRECRAWL_API_KEY JINA_API_KEY HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY
+}
+scrub_test_env
+
 # No test may register the checkout under test as a Claude Code plugin
 # marketplace: setup.sh skips its plugin step while this is set (tests also pass
 # --skip-plugin; this is the belt to that braces). The one test that exercises

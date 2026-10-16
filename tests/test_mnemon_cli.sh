@@ -737,6 +737,12 @@ run "$MNEMON" add --url "https://example.com/dispatch" --dry-run
 assert_eq "$rc" "0" "add via dispatcher exits 0 (dry-run)"
 assert_contains "$out" "DRY RUN" "add reaches the gateway"
 assert_contains "$out" "https://example.com/dispatch" "add passes its arguments through"
+# a stray test-hook variable in the environment, the master switch unset (§3.2): the warning that
+# names it reaches the user on stderr and never the canonical JSON the gateway parses (G2)
+rc=0; MNEMON_POLICY_ALLOW_LOOPBACK=1 "$MNEMON" add --url "https://example.com/" --dry-run >"$TEST_TMPDIR/warn.out" 2>"$TEST_TMPDIR/warn.err" || rc=$?
+assert_eq "$rc" "0" "add --dry-run with MNEMON_POLICY_ALLOW_LOOPBACK=1 exported and MNEMON_TEST_HOOKS unset exits 0"
+assert_contains "$(cat "$TEST_TMPDIR/warn.err")" "WARNING: MNEMON_POLICY_ALLOW_LOOPBACK ignored: MNEMON_TEST_HOOKS=1 is not set" "...the ignored-hook warning is on stderr"
+assert_contains "$(cat "$TEST_TMPDIR/warn.out")" "DRY RUN" "...and the dry run proceeds: the warning never reached the JSON parser"
 run "$MNEMON" reindex
 assert_eq "$rc" "0" "reindex via dispatcher exits 0"
 assert_contains "$out" "reindex:" "reindex runs knowledge-reindex.py on the vault"

@@ -774,18 +774,27 @@ cap_resource_kind() {   # <origin>
 # (the identity of a url-kind resource), CANONICAL_VERSION, FETCH_URL, URL_KIND (page | arxiv |
 # youtube | github — the gateway routes by it, §12 A12), REQUESTED_VERSION (arXiv, or empty). No
 # network. Answered once per URL and process (CAP_CANON_FOR). An invalid URL is a usage error
-# (exit 2); a missing CLI is an environment error (exit 3).
+# (exit 2); a missing CLI is an environment error (exit 3). Only stdout is the answer: what the CLI
+# says on stderr (the warning about ignored test variables, §3.2) goes to the attempt's stderr.txt,
+# or to the gateway's own stderr before an attempt dir exists (--dry-run, identity) — never into
+# the JSON the parser reads.
 cap_canonical_lookup() {   # <url>
-  local url="$1" json rc=0
+  local url="$1" json rc=0 errf detail
   url="$(printf '%s' "$url" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
   [[ "${CAP_CANON_FOR:-}" == "$url" && -n "${CANONICAL_URL:-}" ]] && return 0
   if [[ ! -x "$CAP_FETCH_CMD" ]]; then
     echo "ERROR: $CAP_FETCH_CMD is missing or not executable — the capture layer (bin/capture-fetch.py) is not installed" >&2
     exit 3
   fi
-  json="$("$CAP_FETCH_CMD" --canonical-only "$url" 2>&1)" || rc=$?
+  errf="$(mktemp "${TMPDIR:-/tmp}/mnemon-canonical.XXXXXX")"
+  json="$("$CAP_FETCH_CMD" --canonical-only "$url" 2>"$errf")" || rc=$?
+  detail="$(tail -1 "$errf" 2>/dev/null | tr -d '\000-\037' | cut -c1-300)"
+  if [[ -s "$errf" ]]; then
+    if [[ -n "${ATTEMPT_DIR:-}" && -d "$ATTEMPT_DIR" ]]; then cat "$errf" >> "$ATTEMPT_DIR/stderr.txt"; else cat "$errf" >&2; fi
+  fi
+  rm -f "$errf"
   if [[ $rc -ne 0 ]] || ! printf '%s' "$json" | jq -e '.schema == "mnemon-canonical/1"' >/dev/null 2>&1; then
-    cap_die2 "invalid url '$url': $(printf '%s' "$json" | tr -d '\000-\037' | cut -c1-300)"
+    cap_die2 "invalid url '$url': ${detail:-capture-fetch.py --canonical-only exited $rc without an answer}"
   fi
   CANONICAL_URL="$(printf '%s' "$json" | jq -r '.canonical_url')"
   CANONICAL_VERSION="$(printf '%s' "$json" | jq -r '.canonical_version // 1')"
