@@ -120,4 +120,33 @@ else
 fi
 rm -rf "$GEN_TMP"
 
+# --- 7. the report fixtures (tests/fixtures/capture/reports/) equal generate.py's output — the frozen
+#        seam contracts of the capture layer are generated, never hand-edited (capture layer §12 A12; G27)
+echo "--- report fixtures ---"
+REPORTS="$MNEMON_ROOT/tests/fixtures/capture/reports"
+GEN_TMP="$(mktemp -d -t mnemon-reports-XXXX)"
+cp "$REPORTS/generate.py" "$GEN_TMP/"
+if python3 "$GEN_TMP/generate.py" >/dev/null 2>&1; then
+  n_same=0
+  for f in $(python3 - "$REPORTS/generate.py" <<'PY'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+block = src[src.index("FILES = {"):]
+print("\n".join(re.findall(r'^\s*"([^"]+\.json)":', block, re.MULTILINE)))
+PY
+  ); do
+    if cmp -s "$GEN_TMP/$f" "$REPORTS/$f"; then
+      n_same=$((n_same + 1))
+    else
+      fail "tests/fixtures/capture/reports/$f equals generate.py's output" "differs — edit generate.py and run: python3 tests/fixtures/capture/reports/generate.py"
+    fi
+  done
+  [[ $n_same -ge 14 ]] && pass "every report fixture ($n_same files) equals generate.py's output" || fail "every report fixture equals generate.py's output" "only $n_same compared"
+  stray="$(cd "$REPORTS" && find . -name '*.json' | sed 's#^\./##' | sort | comm -23 - <(cd "$GEN_TMP" && find . -name '*.json' | sed 's#^\./##' | sort))"
+  assert_eq "$stray" "" "no report fixture outside generate.py's output"
+else
+  fail "tests/fixtures/capture/reports/generate.py runs" "python3 generate.py failed in $GEN_TMP"
+fi
+rm -rf "$GEN_TMP"
+
 summary
