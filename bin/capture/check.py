@@ -59,21 +59,13 @@ RULES = {
 }
 WALL_KINDS = ("login", "paywall", "bot-wall", "forbidden", "rate-limit")
 
+# The chrome list is the 2026-09-22 rule's (G19): the phrases of cookie banners, copyright lines and
+# Substack's own footer and promos, searched (case-insensitively) in lines of at most CHROME_MAX_WORDS words.
+# A line matched here is never required of a candidate; a longer line is content whatever it mentions.
 CHROME = re.compile(
-    r"(?:^(?:skip to (?:main )?content|share(?: this)?(?: (?:post|article|page|story))?(?: on \w+)?|subscribe(?: now| today)?|"
-    r"sign (?:in|up)(?: (?:to|with|for) .*)?|log ?in|log ?out|register|menu|home|search|close|open|next|previous|"
-    r"back(?: to top)?|read more|learn more|copy link|print|download|loading\.*…?|table of contents|on this page|"
-    r"in this article|related (?:posts|articles|stories)|follow us.*|contact(?: us)?|about(?: us)?|"
-    r"privacy(?: policy| notice)?|terms(?: (?:of|and) (?:service|use|conditions))?|cookie(?:s)?(?: (?:policy|settings|preferences|notice))?|"
-    r"accept(?: all)?(?: cookies)?|reject(?: all)?(?: cookies)?|manage (?:cookies|preferences)|got it|dismiss|"
-    r"edit (?:this )?(?:page|on github)|last updated.*|was this (?:page |article )?helpful\??|yes|no|"
-    r"comments?|leave a (?:comment|reply)|reply|show more|view all|toggle (?:navigation|menu|dark mode)|"
-    r"dark mode|light mode|get started(?: for free)?|try (?:it )?(?:for )?free|book a demo|request a demo|"
-    r"sign up for free|start (?:your )?free trial|powered by .*|copyright.*|©.*|all rights reserved\.?|"
-    r"skip to .*|newsletter|share|like|tweet|pin it|email|\d+ (?:comments?|likes?|shares?|min(?:ute)?s? read))$"
-    r"|\bwe use cookies\b|\baccept all cookies\b|\bcookie (?:settings|policy|preferences|consent|notice)\b|"
-    r"\ball rights reserved\b|©|\bprivacy policy\b|\bterms of (?:service|use)\b|\bskip to (?:main )?content\b|"
-    r"\bpowered by\b|\bsign in to\b|\blog in to\b|\bcontinue reading\b|\bsubscribe to\b|\bshare this\b|\bfollow us\b)",
+    r"uses cookies|cookies? (?:for|to) |accept all|©|all rights reserved|privacy ∙ terms|privacy policy|"
+    r"terms of (?:use|service)|start your substack|get the app|home for great culture|subscribe for free|"
+    r"thanks for reading|claim up to \d+% off|discover more from|ready for more\?|share this post",
     re.IGNORECASE)
 
 # A reader-comment section is cut at a heading only when the heading names a comment widget

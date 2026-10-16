@@ -253,6 +253,17 @@ class ConversionCheck(unittest.TestCase):
         self.assertEqual(C.classify_line("We use cookies to improve your experience on this site and we track every single click", None),
                          "body")
         self.assertIsNone(C.classify_line("Copyright © 2026 Example Inc. All rights reserved.", None))
+        # G19: the list is the 2026-09-22 recipe's — Substack's footer and promos are chrome…
+        for line in ("Substack is the home for great culture", "Discover more from An Example Newsletter today",
+                     "Ready for more? Subscribe below right now", "Claim up to 50% off for your first year",
+                     "Share this post with a friend of yours", "Privacy ∙ Terms ∙ Collection notice ∙ Start writing",
+                     "Start your Substack today and get the app", "Thanks for reading this newsletter, subscribe for free",
+                     "This website uses cookies to make it work", "Read our privacy policy and terms of service here"):
+            self.assertIsNone(C.classify_line(line, None), line)
+        # …while a substantive short line the old list hid by its first words is required
+        for line in ("Sign in to the console to continue the setup", "Skip to content that matters in the tutorial",
+                     "Subscribe to the event stream from the client first"):
+            self.assertEqual(C.classify_line(line, None), "body", line)
 
     def test_title_line_not_required(self):
         self.assertIsNone(C.classify_line("## The Example Title Of This Page", C.line_key("The example title of this page")))
