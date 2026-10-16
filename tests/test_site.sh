@@ -275,6 +275,18 @@ assert_eq "$rc $(result status)" "4 captured" "fixture: a site capture whose ext
 stub_reset
 run_gw --resume "$(rget auto-4 '.revision')"
 assert_eq "$rc $(result status) $(site_calls fetch-bundle) $(site_calls assemble)" "0 extracted 0 0" "--resume finishes the extraction from the published source: no acquisition, no assembly"
+# the effective rendering switches reach the mapping as well as the bundle (A12; decision 12)
+stub_reset
+run_gw --url "https://auto5.example.com/" --site auto --no-render --capture-id auto-5
+assert_eq "$rc $(result status)" "0 extracted" "mnemon add --site auto --no-render exits 0"
+assert_contains "$(grep '^map' "$STUB_DIR/site-calls" | tail -1)" " --no-render" "...map received --no-render (no Chrome for a JavaScript-shell landing either)"
+assert_contains "$(grep '^map' "$STUB_DIR/site-calls" | tail -1)" " --no-external" "...and --no-external (no rendering means no remote rendering)"
+assert_contains "$(grep '^fetch-bundle' "$STUB_DIR/site-calls" | tail -1)" " --no-render" "...as fetch-bundle did"
+assert_eq "$(rget auto-5 '.request.render') $(rget auto-5 '.request.external')" "off off" "...bound in the request"
+stub_reset
+run_gw --url "https://auto6.example.com/" --site auto --no-external --capture-id auto-6
+assert_contains "$(grep '^map' "$STUB_DIR/site-calls" | tail -1)" " --no-external" "--no-external alone reaches map"
+assert_not_contains "$(grep '^map' "$STUB_DIR/site-calls" | tail -1)" " --no-render" "...without --no-render"
 
 # ---------------------------------------------------------------------------------------------
 echo "--- 7. without archive_dir, and mnemon site map ---"

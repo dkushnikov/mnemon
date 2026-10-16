@@ -913,6 +913,41 @@ assert_eq "$rc $(result replayed)" "0 true" "a full-request replay of a /1 recei
 run_gw --url "$lit" --capture-id p1-managed --no-render
 assert_eq "$rc" "2" "...a new flag off its default (--no-render) on a /1 replay is a binding mismatch"
 assert_contains "$err" "phase-1 request (mnemon-request/1)" "...named as such"
+# a phase-1 receipt that already spent cost_usd under a finite budget: the legacy spend is seeded as one
+# reconciled single call before the ledger starts, so the budget keeps counting it (A3)
+lit2="https://example.com/legacy-spent"
+l2rid="$(printf '%s' "$lit2" | shasum -a 256 | cut -c1-8)"
+l2rsha="$(printf 'url:%s' "$lit2" | shasum -a 256 | cut -c1-64)"
+l2rev="2026-10-02_$l2rid"
+mkdir -p "$VAULT/Sources/$l2rev"
+printf -- '---\ntype: source\nsource_type: article\ncontent_format: text\norigin: url\nurl: "%s"\ncaptured: 2026-10-02\ncaptured_by: agent\ncapture_id: "p1-spent"\nresource_kind: url\nresource_sha256: "%s"\nresource_id: "%s"\nrevision: "%s"\ncontext: "personal"\ncapture:\n  method: "curl+defuddle"\n  fidelity: converted\n  raw_store: none\n  raw_kind: response\n  text_sha256: "%s"\n  text_bytes: 12\n  completeness: unknown\n---\nlegacy body\n' "$lit2" "$l2rsha" "$l2rid" "$l2rev" "$ltsha" > "$VAULT/Sources/$l2rev/source.md"
+python3 - "$FIX/reports/receipts/request-v1.json" "$(receipt p1-spent)" "$lit2" "$l2rsha" "$l2rid" "$l2rev" "$VAULT" "$ltsha" <<'PY'
+import hashlib, json, sys
+fx, out, lit, rsha, rid, rev, vault, tsha = sys.argv[1:]
+r = json.load(open(fx))
+r["capture_id"] = "p1-spent"
+r["request"]["resource_key"] = lit; r["request"]["url"] = lit
+r["request_sha256"] = hashlib.sha256(json.dumps(r["request"], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+r.update({"resource_sha256": rsha, "resource_id": rid, "revision": rev, "vault": vault, "state": "extract-failed", "text_sha256": tsha,
+          "text_bytes": 12, "extract_sha256": None, "finalized_at": None, "raw_store": "none", "raw_path": None, "raw_kind": "none",
+          "raw_sha256": None, "raw_bytes": None, "raw_published": False, "attempt_dir": None, "argv": None, "cost_usd": 0.4, "duration_ms": 9000,
+          "error_class": "transient", "error": "simulated", "retryable": True})
+json.dump(r, open(out, "w"), indent=1)
+PY
+sed 's/^instance: captest/instance: captest-p1budget/; $a\
+extract_max_usd: 0.3' "$CONFIG" > "$TEST_TMPDIR/p1budget.yaml"
+stub_reset
+rc=0; "$GW" source-add --config "$TEST_TMPDIR/p1budget.yaml" --capture-id p1-spent >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+out="$(cat "$TEST_TMPDIR/run.out")"
+assert_eq "$rc $(result error_class) $(stub_calls)" "4 budget-exhausted 0" "a /1 receipt that spent 0.4 under extract_max_usd 0.3 stops before any call"
+assert_eq "$(rget p1-spent '.calls | length') $(rget p1-spent '.calls[0].kind') $(rget p1-spent '.calls[0].result') $(rget p1-spent '.calls[0].cost_usd')" "1 single legacy 0.4" "...its cost_usd seeded as one reconciled single call"
+sed 's/^extract_max_usd: 0.3/extract_max_usd: 0.5/' "$TEST_TMPDIR/p1budget.yaml" > "$TEST_TMPDIR/p1budget2.yaml"
+stub_reset
+rc=0; "$GW" source-add --config "$TEST_TMPDIR/p1budget2.yaml" --capture-id p1-spent >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+out="$(cat "$TEST_TMPDIR/run.out")"
+assert_eq "$rc $(result status)" "0 extracted" "...a raised budget (0.5) lets it finish"
+assert_eq "$(rget p1-spent '.calls | length') $(rget p1-spent '.calls[1].reserved_usd') $(rget p1-spent '.cost_usd')" "2 0.1 0.412" "...the new call reserved the remaining 0.1 and the lifetime spend includes the legacy 0.4"
+assert_contains "$(tr '\n' ' ' < "$STUB_DIR/call-1.argv")" "--max-budget-usd 0.1" "...and received --max-budget-usd = 0.5 − 0.4"
 run_gw --url "https://example.com/legacy-managed"
 assert_eq "$rc $(result status) $(result revision)" "0 skipped-duplicate $lrev" "the complete managed folder is a verified duplicate under canonical equality (no utm, no match by label)"
 printf 'edited\n' >> "$VAULT/Sources/$lrev/source.md"
@@ -1148,6 +1183,12 @@ assert_eq "$(fm "$srcd2" canonical_url)" '"https://example.com/thin2"' "...while
 assert_eq "$(grep -c '^canonical_url:' "$srcd2")" "1" "...one canonical_url line"
 STUB_DEPTH=timeout run_gw --url "https://example.com/thin3" --capture-id depth-3
 assert_eq "$rc $(result status) $(capfm "$VAULT/Sources/$(result revision)/source.md" raw_kind)" "0 extracted response" "a fold that times out publishes the landing alone"
+# a paywall teaser landing is decided by the chain before any deeper request (§4.2): no fold behind a wall
+stub_reset
+STUB_DEPTH=fold STUB_FETCH=blocked-paywall run_gw --url "https://example.com/teaser-depth" --capture-id depth-pay
+assert_eq "$rc $(result status) $(result completeness)" "0 extracted blocked" "a paywall teaser landing is published blocked"
+assert_eq "$(depth_calls | grep -c .)" "0" "...and the depth fold never runs behind the wall"
+assert_eq "$(capfm "$VAULT/Sources/$(result revision)/source.md" raw_kind)" "response" "...the raw is the landing response, not a composite"
 
 # ---------------------------------------------------------------------------------------------
 echo "--- p2.6 media (§7.12 gateway half) ---"

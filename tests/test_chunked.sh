@@ -99,27 +99,37 @@ assert_eq "$(fm "$VAULT/Sources/$rev1/extract.md" extraction)" "chunked" "...for
 assert_eq "$(rget ch-keep '.calls | map(select(.state == "done")) | length') $(rget ch-keep '.calls | map(select(.state == "reserved")) | length')" "$((n_parts + 1)) 0" "every call is reconciled (none left reserved)"
 assert_eq "$(rget ch-keep '.cost_usd')" "$(awk -v n="$((n_parts + 1))" 'BEGIN { printf "%g", n * 0.012 }')" "cost_usd = the sum of every call's cost"
 assert_eq "$(rget ch-keep '.cost_unknown')" "false" "...no unknown cost"
-assert_eq "$(rget ch-keep '.calls[0].id') $(rget ch-keep '.calls[0].n') $(rget ch-keep '.calls[0].attempt') $(rget ch-keep '.calls[0].reserved_usd')" "part-1-a1 1 1 null" "a call record: id, n, attempt, no reservation without a budget"
+assert_eq "$(rget ch-keep '.calls[0].id') $(rget ch-keep '.calls[0].n') $(rget ch-keep '.calls[0].attempt') $(rget ch-keep '.calls[0].reserved_usd')" "part-1-r1-a1 1 1 null" "a call record: id (part, round, attempt), n, attempt, no reservation without a budget"
+assert_eq "$(rget ch-keep '.calls[-1].id') $(rget ch-keep '.calls[-1].kind')" "merge-r1-a1 merge" "...the merge call's id names its round and attempt"
 assert_eq "$(grep -c -- '--max-budget-usd' "$p1.argv")" "0" "...and no --max-budget-usd without extract_max_usd"
 # a small text stays a single call
 printf 'small text\n' > "$TEST_TMPDIR/small.txt"
 stub_reset
 run_gw_stdin "$TEST_TMPDIR/small.txt" --origin text --capture-id ch-small
 assert_eq "$(fm "$VAULT/Sources/$(result revision)/extract.md" extraction) $(part_calls)" "single 0" "a text below the limit: extraction single, no part call"
-assert_eq "$(rget ch-small '.calls | length') $(rget ch-small '.calls[0].kind') $(rget ch-small '.calls[0].state')" "1 single done" "...recorded as one reconciled single call (A3)"
+assert_eq "$(rget ch-small '.calls | length') $(rget ch-small '.calls[0].kind') $(rget ch-small '.calls[0].state') $(rget ch-small '.calls[0].id')" "1 single done single-r1-a1" "...recorded as one reconciled single call (A3)"
 assert_eq "$(grep -c '^parts:' "$VAULT/Sources/$(result revision)/extract.md")" "0" "...and no parts: line"
 
 # ---------------------------------------------------------------------------------------------
 echo "--- 2. a validation retry of one part, a failing part, --resume ---"
 stub_reset
-STUB_FIXTURE_PART_BAD="$FIX/extract-part-bad.json" STUB_PART_BAD_CALLS=2 run_gw_stdin "$TEST_TMPDIR/big.md" --origin text --capture-id ch-retry --recapture --keep-run
+STUB_FIXTURE_PART_BAD="$FIX/extract-part-bad.json" STUB_PART_BAD_CALLS=2 STUB_COST_BY_CALL="3=0.05" run_gw_stdin "$TEST_TMPDIR/big.md" --origin text --capture-id ch-retry --recapture --keep-run
 assert_eq "$rc $(result status)" "0 extracted" "a part answered badly once is re-run with the validation diagnostic and the capture succeeds"
 assert_eq "$(part_calls)" "$((n_parts + 1))" "...one more part call than parts"
 assert_eq "$(rget ch-retry '.calls | map(select(.kind == "part" and .n == 2)) | length')" "2" "...both calls of part 2 recorded"
-assert_eq "$(rget ch-retry '.cost_usd')" "$(awk -v n="$((n_parts + 2))" 'BEGIN { printf "%g", n * 0.012 }')" "...and counted in the budget"
+assert_eq "$(rget ch-retry '[.calls[] | select(.kind == "part" and .n == 2) | .id] | join(" ")')" "part-2-r1-a1 part-2-r2-a1" "...under distinct ids naming the round (A3: exactly once each)"
+assert_eq "$(rget ch-retry '[.calls[] | select(.kind == "part" and .n == 2) | .cost_usd | tostring] | join(" ")')" "0.012 0.05" "...each keeping its own cost (the retry cost 0.05, the first answer 0.012)"
+assert_eq "$(rget ch-retry '.cost_usd')" "$(awk -v n="$((n_parts + 1))" 'BEGIN { printf "%g", n * 0.012 + 0.05 }')" "...and the sum counted in the budget"
 assert_file_exists "$VSTATE/runs/ch-retry/attempt-1/parts/part-2/prompt-retry.md" "...the re-run's prompt"
 assert_contains "$(cat "$VSTATE/runs/ch-retry/attempt-1/parts/part-2/prompt-retry.md")" "=== VALIDATION ===" "...carries the VALIDATION diagnostic"
 assert_contains "$(cat "$VSTATE/runs/ch-retry/attempt-1/parts/part-2/prompt-retry.md")" "summary: required" "...gateway-authored, naming the rule"
+# a crash between the retry's answer and its debit: the round-2 call reconciles from result-retry.json
+jq '(.calls[] | select(.id == "part-2-r2-a1")) |= (.state = "reserved" | .cost_usd = null | .result = null)' "$(receipt ch-retry)" > "$TEST_TMPDIR/r.json" && cp "$TEST_TMPDIR/r.json" "$(receipt ch-retry)"
+rm -f "$VAULT/Sources/$(rget ch-retry '.revision')/extract.md"
+stub_reset
+run_gw --capture-id ch-retry
+assert_eq "$rc $(result status)" "0 extracted" "a replay with the retry call left reserved finishes"
+assert_eq "$(rget ch-retry '[.calls[] | select(.id == "part-2-r2-a1") | .state, (.cost_usd | tostring), .result] | join(" ")')" "done 0.05 reconciled" "...the round-2 call reconciled from its own result-retry.json (A3)"
 stub_reset
 STUB_FAIL_CALLS=3 run_gw_stdin "$TEST_TMPDIR/big.md" --origin text --capture-id ch-fail --recapture
 assert_eq "$rc $(result status) $(result error_class) $(result retryable)" "4 captured claude-exit true" "a failing part → extract-failed with its class (exit 4), the capture retained"

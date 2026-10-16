@@ -21,7 +21,8 @@
 #   STUB_FIXTURE_PART_BAD + STUB_PART_BAD_CALLS="n,m"  call numbers that answer the bad part
 #                     fixture instead (the gateway's one validation re-run)
 #   STUB_FAIL_CALLS   "n,m": call numbers that exit 1 (a failing part)
-#   STUB_COST         total_cost_usd of every answer (default 0.012); STUB_COST_NULL=1 omits it
+#   STUB_COST         total_cost_usd of every answer (default 0.012); STUB_COST_NULL=1 omits it;
+#                     STUB_COST_BY_CALL="n=usd,m=usd" overrides it for the named call numbers
 #   STUB_BODY_FROM_TEMPLATE=1  rebuild the fixture's `body` from the `### ` headings of the prompt's
 #                     EXTRACTION TEMPLATE Body section (any source type's template validates)
 set -uo pipefail
@@ -75,8 +76,11 @@ fi
 case ",${STUB_FAIL_CALLS:-}," in *",$n,"*) echo "stub claude: simulated failure of call $n" >&2; exit 1 ;; esac
 
 emit() {  # <structured_output file or empty> <extra jq filter>
-  local so="$1" extra="${2:-.}" cost
+  local so="$1" extra="${2:-.}" cost pair
+  local -a pairs
   cost="${STUB_COST:-0.012}"
+  IFS=, read -r -a pairs <<< "${STUB_COST_BY_CALL:-}"
+  for pair in "${pairs[@]:-}"; do [[ -n "$pair" && "${pair%%=*}" == "$n" ]] && cost="${pair#*=}"; done
   [[ "${STUB_COST_NULL:-}" == "1" ]] && cost=null
   if [[ -n "$so" ]]; then
     jq -c --slurpfile so "$so" --argjson cost "$cost" '{type:"result", subtype:"success", is_error:false, total_cost_usd:$cost, duration_ms:1500, num_turns:1, permission_denials:[], structured_output:$so[0]} | '"$extra"

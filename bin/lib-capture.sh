@@ -543,27 +543,43 @@ elif cmd == "calls-spent":
     print(json.dumps({"spent": round(spent, 6), "unknown": unknown, "open": open_calls, "calls": len(calls)}))
 elif cmd == "reconcile-calls":
     # <receipt> <runs dir> <assume cost or ->: every call left `reserved` by a crash is reconciled
-    # from its own result.json (total_cost_usd) when the file exists, else recorded done with an
-    # unknown cost; with an assumed cost every call whose cost is unknown gets it (assumed: true).
-    # Rewrites the receipt atomically. Prints the number of calls changed.
+    # from its own result (total_cost_usd) when the file exists — round 1 reads result.json (or
+    # .result-1.json once a round 2 set it aside), round 2 reads result-retry.json (or result.json
+    # while the retry's answer is not yet renamed) — else recorded done with an unknown cost; with
+    # an assumed cost every call whose cost is unknown gets it (assumed: true). A phase-1 receipt
+    # (cost_usd, no calls) gets its cost seeded as one reconciled `single` call before the ledger
+    # starts, so a finite budget keeps counting what it already spent. Rewrites the receipt
+    # atomically. Prints the number of calls changed.
+    import re
     with open(a[0], "r", encoding="utf-8") as fh:
         receipt = json.load(fh)
     runs, assume = a[1], (None if a[2] in ("-", "") else float(a[2]))
-    calls = receipt.get("calls") or []
     changed = 0
+    if receipt.get("calls") is None and receipt.get("cost_usd") is not None:
+        calls = [{"id": "single-legacy", "kind": "single", "n": 1, "attempt": receipt.get("attempts") or 1, "state": "done",
+                  "reserved_usd": None, "started_at": receipt.get("started_at"), "cost_usd": float(receipt["cost_usd"]),
+                  "duration_ms": receipt.get("duration_ms"), "result": "legacy"}]
+        changed += 1
+    else:
+        calls = receipt.get("calls") or []
     for c in calls:
         if c.get("state") == "reserved":
-            sub = {"single": "result.json", "part": "parts/part-%s/result.json" % c.get("n"), "merge": "merge/result.json"}.get(c.get("kind"), "result.json")
-            path = os.path.join(runs, receipt["capture_id"], "attempt-%s" % c.get("attempt"), sub)
+            m = re.search(r"-r(\d+)-a\d+$", str(c.get("id") or ""))
+            rnd = int(m.group(1)) if m else 1
+            base = {"single": "", "part": "parts/part-%s/" % c.get("n"), "merge": "merge/"}.get(c.get("kind"), "")
+            adir = os.path.join(runs, receipt["capture_id"], "attempt-%s" % c.get("attempt"), base)
+            names = ["result-retry.json", "result.json"] if rnd >= 2 else [".result-1.json", "result.json"]
             cost = None
             dur = None
-            try:
-                with open(path, "r", encoding="utf-8") as fh:
-                    doc = json.load(fh)
-                cost = doc.get("total_cost_usd")
-                dur = doc.get("duration_ms")
-            except (OSError, ValueError, AttributeError):
-                pass
+            for name in names:
+                try:
+                    with open(os.path.join(adir, name), "r", encoding="utf-8") as fh:
+                        doc = json.load(fh)
+                    cost = doc.get("total_cost_usd")
+                    dur = doc.get("duration_ms")
+                    break
+                except (OSError, ValueError, AttributeError):
+                    continue
             c["state"] = "done" if cost is not None else "failed"
             c["cost_usd"] = cost
             c["duration_ms"] = dur
@@ -1416,7 +1432,8 @@ cap_acquire_render() {
 
 # The depth fold (§4.2, §12 A8): kb-depth-fold.py <url> --depth D --landing-file <staged raw>
 # --budget-s <remaining> --context <frozen acquisition context>; never for --render, arXiv, a site
-# capture or --depth off. Returns 0 when it folded (depth.json and the manifest in the attempt dir).
+# capture, --depth off or a paywall-teaser landing. Returns 0 when it folded (depth.json and the
+# manifest in the attempt dir).
 cap_depth_fold_run() {   # <landing file>
   DEPTH_MANIFEST_FILE=""
   [[ "$ORIGIN" == "url" && -n "$URL" && "$DEPTH" != "off" && "${URL_KIND:-page}" != "arxiv" && -z "${SITE_MODE:-}" ]] || return 1
@@ -1424,6 +1441,9 @@ cap_depth_fold_run() {   # <landing file>
   local fold="${MNEMON_DEPTH_FOLD_CMD:-$_LIB_CAPTURE_DIR/kb-depth-fold.py}"
   [[ -x "$fold" ]] || return 1
   local report="$ATTEMPT_DIR/fetch.json" elapsed budget ctx depth_json render=auto
+  # a landing the chain classified as a paywall teaser is decided (published blocked) before any
+  # deeper request: nothing is folded behind a wall (§4.2)
+  [[ "$(jq -r '.acquisition.kind // ""' "$report" 2>/dev/null || true)" == "paywall" ]] && return 1
   elapsed="$(jq -r '.elapsed_ms // 0' "$report" 2>/dev/null || echo 0)"
   [[ "$elapsed" =~ ^[0-9]+$ ]] || elapsed=0
   budget=$(( ${ACQUIRE_TIMEOUT%.*} - elapsed / 1000 ))
@@ -1751,12 +1771,17 @@ cap_site_plan_check() {   # <plan> → 0, or FAIL_CLASS=unsupported (a refused p
 
 cap_acquire_site() {
   local plan printed rc=0 report="$ATTEMPT_DIR/bundle.json" sha
-  local -a args
+  local -a args map_args
   if [[ "$SITE_MODE" == "auto" ]]; then
     plan="$RUNS_DIR/$CAPTURE_ID/attempt-1/plan.json"
     if [[ ! -f "$plan" ]]; then
       mkdir -p "$(dirname "$plan")"
-      "$CAP_SITE_CMD" map "$URL" --max-pages "${SITE_MAX_PAGES:-40}" --site-timeout "${SITE_TIMEOUT:-900}" --policy "$(cap_policy_json)" --out "$plan.tmp" >>"$ATTEMPT_DIR/stderr.txt" 2>&1 || rc=$?
+      # the effective rendering switches govern the mapping as well as the bundle (A12: --no-render
+      # means no rendering anywhere, and implies --no-external)
+      map_args=(map "$URL" --max-pages "${SITE_MAX_PAGES:-40}" --site-timeout "${SITE_TIMEOUT:-900}" --policy "$(cap_policy_json)" --out "$plan.tmp")
+      ${NO_RENDER:-false} && map_args+=(--no-render)
+      cap_external_off && map_args+=(--no-external)
+      "$CAP_SITE_CMD" "${map_args[@]}" >>"$ATTEMPT_DIR/stderr.txt" 2>&1 || rc=$?
       if [[ $rc -ne 0 || ! -s "$plan.tmp" ]]; then
         rm -f "$plan.tmp"
         case $rc in
@@ -2399,8 +2424,11 @@ cap_reconcile_open_calls() {
 }
 
 # Reserve one billable call → CAP_CALL_ID, CAP_CALL_BUDGET (the remaining budget, empty = no cap);
-# 1 with EXTRACT_CLASS budget-exhausted | budget-unreconciled when nothing may start.
-cap_call_reserve() {   # <kind> <n> <attempt>
+# 1 with EXTRACT_CLASS budget-exhausted | budget-unreconciled when nothing may start. The id names
+# the round as well as the part and the attempt — `part-<n>-r<round>-a<attempt>`,
+# `single|merge-r<round>-a<attempt>` — so a validation re-run is its own call and is reconciled
+# exactly once, never on top of the first answer's record.
+cap_call_reserve() {   # <kind> <n> <round> <attempt>
   local remaining="" reserved=null
   CAP_CALL_BUDGET=""
   if [[ -n "${EXTRACT_MAX_USD:-}" ]]; then
@@ -2419,9 +2447,9 @@ cap_call_reserve() {   # <kind> <n> <attempt>
     reserved="$remaining"
     CAP_CALL_BUDGET="$remaining"
   fi
-  CAP_CALL_ID="$1-$2-a$3"
+  if [[ "$1" == part ]]; then CAP_CALL_ID="part-$2-r$3-a$4"; else CAP_CALL_ID="$1-r$3-a$4"; fi
   cap_receipt_update "$CAPTURE_ID" '.calls += [{id:$id, kind:$k, n:$n, attempt:$a, state:"reserved", reserved_usd:$r, started_at:$now, cost_usd:null, duration_ms:null, result:null}]' \
-    --arg id "$CAP_CALL_ID" --arg k "$1" --argjson n "$2" --argjson a "$3" --argjson r "$reserved"
+    --arg id "$CAP_CALL_ID" --arg k "$1" --argjson n "$2" --argjson a "$4" --argjson r "$reserved"
   return 0
 }
 
@@ -2442,10 +2470,10 @@ cap_call_reconcile() {   # <call id> <result.json> <result label>
 # One extractor call: the reservation, extract-run.py in <dir> (its own argv.txt / argv.json /
 # result.json / stderr.txt) with the prompt on stdin, the reconciliation. CAP_CALL_CLS = ok |
 # timeout | claude-exit | invalid-json; 1 (budget) when the call was not started.
-cap_call_run() {   # <kind> <n> <dir> <prompt> <schema>
-  local kind="$1" n="$2" dir="$3" prompt="$4" schema="$5"
+cap_call_run() {   # <kind> <n> <round> <dir> <prompt> <schema>
+  local kind="$1" n="$2" round="$3" dir="$4" prompt="$5" schema="$6"
   local -a run_args
-  cap_call_reserve "$kind" "$n" "$ATTEMPT_N" || return 1
+  cap_call_reserve "$kind" "$n" "$round" "$ATTEMPT_N" || return 1
   run_args=(--attempt-dir "$dir" --schema "$schema" --model "$MODEL" --timeout "${EXTRACT_TIMEOUT:-900}" --max-turns 4 --claude "${CLAUDE_CMD:-claude}")
   [[ -n "$CAP_CALL_BUDGET" ]] && run_args+=(--max-budget-usd "$CAP_CALL_BUDGET")
   CAP_CALL_CLS="$(python3 "$_LIB_CAPTURE_DIR/extract-run.py" "${run_args[@]}" --prompt "$prompt" || true)"
@@ -2535,7 +2563,7 @@ cap_run_main_call() {   # <kind single|merge> <dir> <content file> <meta.json>
       mv "$dir/result.json" "$dir/.result-1.json" 2>/dev/null || true
       mv "$dir/stderr.txt" "$dir/.stderr-1.txt" 2>/dev/null || true
     fi
-    cap_call_run "$kind" "$round" "$dir" "$prompt" "$schema" || return 1
+    cap_call_run "$kind" "$round" "$round" "$dir" "$prompt" "$schema" || return 1
     if [[ $round -eq 2 ]]; then
       mv "$dir/result.json" "$dir/result-retry.json" 2>/dev/null || true
       mv "$dir/stderr.txt" "$dir/stderr-retry.txt" 2>/dev/null || true
@@ -2581,7 +2609,7 @@ cap_extract_chunked() {
         mv "$part_dir/result.json" "$part_dir/.result-1.json" 2>/dev/null || true
         mv "$part_dir/stderr.txt" "$part_dir/.stderr-1.txt" 2>/dev/null || true
       fi
-      cap_call_run part "$n" "$part_dir" "$prompt" "$pschema" || return 1
+      cap_call_run part "$n" "$round" "$part_dir" "$prompt" "$pschema" || return 1
       if [[ $round -eq 2 ]]; then
         mv "$part_dir/result.json" "$part_dir/result-retry.json" 2>/dev/null || true
         mv "$part_dir/stderr.txt" "$part_dir/stderr-retry.txt" 2>/dev/null || true
