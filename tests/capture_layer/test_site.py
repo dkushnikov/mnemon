@@ -377,17 +377,40 @@ class RobotsPerOrigin(unittest.TestCase):
         self.assertEqual(paths.count("/docs-host/robots.txt"), 1)
 
 
+class LinearDiscovery(unittest.TestCase):
+    """G26 for the mapper: the link and sitemap patterns are bounded and nesting-free, so a hostile landing or
+    sitemap is a linear scan — 70 000 `<a ` without a `>` (210 KB), one 200 KB `<a` tag, 30 000 attributes,
+    50 000 `<loc>` without a `</loc>` — each in well under 2 s (the old `[^>]*` took minutes, the old `.*?`
+    100 s); the real shapes (multi-line tags, every quoting, upper case, whitespace inside `<loc>`) still match."""
+
+    def test_hostile_links_and_sitemaps_are_linear(self):
+        t0 = time.monotonic()
+        self.assertEqual(site.links_of("<a " * 70000, "https://h/"), [])
+        self.assertEqual(site.links_of("<a " + "x" * 200000 + ">", "https://h/"), [])
+        self.assertEqual(site.links_of("<a " + " ".join("data-k%d=v" % i for i in range(30000)) + ">", "https://h/"), [])
+        self.assertEqual(site._LOC.findall("<loc>" * 50000 + "x" * 100000), [])
+        self.assertLess(time.monotonic() - t0, 2.0)
+
+    def test_real_shapes_still_match(self):
+        html = ('<a\n  class="c"\n  href="/docs/x"\n>d</a> <a href=\'/y\'>y</a> <a href=/z>z</a> '
+                '<A HREF="https://h/q?a=1&amp;b=2">q</A> <a data-href="/no" hreflang="en" href="/w">w</a> <a name="anchor">n</a>')
+        self.assertEqual(site.links_of(html, "https://h/base/"),
+                         ["https://h/docs/x", "https://h/y", "https://h/z", "https://h/q?a=1&b=2", "https://h/w"])
+        self.assertEqual(site._LOC.findall("<loc>\n  https://h/a \n</loc><LOC>https://h/b</LOC>"), ["https://h/a", "https://h/b"])
+
+
 class Watchdog(unittest.TestCase):
     """G25: `map` runs as a worker under the CLI's own watchdog — an in-process scan that never checks the
-    deadline (210 KB of `<a ` makes the link regex quadratic: minutes) is killed with its process group
-    WATCHDOG_GRACE_S after site_timeout: exit 124, no plan, no worker left."""
+    deadline (the MNEMON_TEST_MAP_HANG hook: C code no signal handler interrupts, the shape the bounded
+    patterns of LinearDiscovery no longer produce) is killed with its process group WATCHDOG_GRACE_S after
+    site_timeout: exit 124, no plan, no worker left."""
 
     def test_map_watchdog_kills_an_in_process_scan(self):
         server = LocalServer()
         work = tmpdir("mnemon-watchdog-")
         try:
-            server.add("/", "<html><head><title>Hostile</title></head><body>" + "<a " * 70000 + "</body></html>")
-            env = clean_env()
+            server.add("/", page("Landing"))
+            env = clean_env({"MNEMON_TEST_MAP_HANG": "1"})
             env["RENDER_URL_CMD"] = write_stub(work, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
             plan = os.path.join(work, "plan.json")
             t0 = time.monotonic()

@@ -64,8 +64,14 @@ BLOG_SEGMENTS = frozenset(("blog", "posts", "news"))
 DOCS_SEGMENTS = frozenset(("docs", "help", "guide", "manual", "reference"))
 HOWTO_TITLES = ("how to", "install", "getting started with git")
 
-_HREF = re.compile(r"<a\b[^>]*\bhref\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))", re.IGNORECASE)
-_LOC = re.compile(r"<loc>\s*(.*?)\s*</loc>", re.IGNORECASE | re.DOTALL)
+# The discovery patterns are bounded and nesting-free (G26 applied to the mapper): an `<a` tag's attribute
+# block is at most 4 000 characters and never crosses `<` or `>`, an attribute value at most 4 000 characters
+# without a newline, a `<loc>` value likewise — so 70 000 `<a ` without a `>` (210 KB) or 50 000 `<loc>`
+# without a `</loc>` cost one bounded scan per occurrence, never a rescan to the end of the document (the
+# old `[^>]*` and `.*?` were quadratic: minutes for the links, 100 s for the sitemap).
+_HREF = re.compile(r"<a\b[^<>]{0,4000}?\shref\s{0,20}=\s{0,20}(?:\"([^\"\n]{0,4000})\"|'([^'\n]{0,4000})'|([^\s<>\"']{1,4000}))",
+                   re.IGNORECASE)
+_LOC = re.compile(r"<loc>\s{0,100}([^<>\n]{0,4000}?)\s{0,100}</loc>", re.IGNORECASE)
 _GITHUB = re.compile(r"^https?://(?:www\.)?github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?(?:[#?].*)?$")
 _LOCALE = re.compile(r"^([a-z]{2})(?:-[a-z]{2})?$")
 

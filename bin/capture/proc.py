@@ -13,6 +13,7 @@ the vault (D11). Stdlib only, python 3.9.
 from __future__ import annotations
 
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -84,6 +85,14 @@ def child_env(extra=None) -> dict:
     if extra:
         env.update(extra)
     return env
+
+
+def hang() -> None:
+    """The test hooks' hang (MNEMON_TEST_CONVERT_HANG=1, MNEMON_TEST_MAP_HANG=1, under MNEMON_TEST_HOOKS=1):
+    catastrophic backtracking inside the regex engine — CPU-bound C code that returns to the interpreter,
+    its signal handlers and its threads only after an astronomical number of steps, the shape of a quadratic
+    scan. The proof that the supervisor's kill, not the worker's cooperation, ends the phase (G25)."""
+    re.match(r"(a+)+$", "a" * 64 + "b")
 
 
 def close_lock_fd() -> None:

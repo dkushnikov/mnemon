@@ -19,7 +19,9 @@ not an exception: the response comes back with its status and body for classific
 Test hooks, honoured only under `MNEMON_TEST_HOOKS=1`: `MNEMON_POLICY_ALLOW_LOOPBACK=1` admits a local test
 server; `MNEMON_FETCH_URL_REWRITE="https://arxiv.org=http://127.0.0.1:PORT;…"` rewrites the prefix of the
 transport URL (the logical URL, the hops and the identity are untouched); `MNEMON_EXTERNAL_FETCH_CMD` is read
-by the fetch chain. Without the master switch the three are ignored and a warning names them.
+by the fetch chain; `MNEMON_TEST_CONVERT_HANG` and `MNEMON_TEST_MAP_HANG` make the conversion and the map
+worker hang in C code (proc.hang — the supervisor's kill is the proof). Without the master switch the hooks
+are ignored and a warning names them.
 Stdlib only, python 3.9.
 """
 from __future__ import annotations
@@ -46,7 +48,8 @@ DEFAULT_MAX_REDIRECTS = 5
 ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 RETRYABLE_KINDS = ("timeout", "connection", "tls")
-HOOK_VARS = ("MNEMON_POLICY_ALLOW_LOOPBACK", "MNEMON_FETCH_URL_REWRITE", "MNEMON_EXTERNAL_FETCH_CMD", "MNEMON_TEST_CONVERT_HANG")
+HOOK_VARS = ("MNEMON_POLICY_ALLOW_LOOPBACK", "MNEMON_FETCH_URL_REWRITE", "MNEMON_EXTERNAL_FETCH_CMD", "MNEMON_TEST_CONVERT_HANG",
+             "MNEMON_TEST_MAP_HANG")
 CHUNK = 65536
 
 _warned = False

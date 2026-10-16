@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -44,12 +43,6 @@ from capture import convert, proc, report as reportmod  # noqa: E402
 from capture import policy as policymod  # noqa: E402
 
 EXIT_TIMEOUT = 124
-
-
-def _hang() -> None:
-    """The test hook's hang: catastrophic backtracking inside the regex engine — CPU-bound C code that
-    returns to the interpreter (and its signal handlers) only after an astronomical number of steps."""
-    re.match(r"(a+)+$", "a" * 64 + "b")
 
 
 def worker(args) -> int:
@@ -67,7 +60,7 @@ def worker(args) -> int:
         if acq:
             rep["acquisition"] = acq
     if policymod.hook("MNEMON_TEST_CONVERT_HANG"):
-        _hang()
+        proc.hang()
 
     if args.rendered:
         try:

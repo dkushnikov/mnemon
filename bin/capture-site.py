@@ -30,7 +30,10 @@ worker (the hidden `--_worker` flag, its own process group) that does the whole 
 `--site-timeout`, while the parent kills the group at `site_timeout + WATCHDOG_GRACE_S` (the grace covers
 the worker's own teardown and manifest write after its deadline) — so an in-process scan that never checks
 the deadline cannot outlive it. A watchdog kill is exit 124 with `error_class: timeout` (the `--report`
-of fetch-bundle; stderr for map). Stdlib only, python 3.9.
+of fetch-bundle; stderr for map). Test hook (honoured only under MNEMON_TEST_HOOKS=1): MNEMON_TEST_MAP_HANG=1
+makes the map worker hang in C code that no signal handler interrupts (proc.hang) — the proof that the
+watchdog's kill, not the worker's cooperation, ends the phase. The discovery patterns themselves are bounded
+(site._HREF, site._LOC), so a hostile landing is a linear scan, not a hang. Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
@@ -115,6 +118,8 @@ def cmd_map(args) -> int:
                          deadline=deadline)
     work = tempfile.mkdtemp(prefix="mnemon-map-")      # the landing's staging area, whatever --out says
     try:
+        if policymod.hook("MNEMON_TEST_MAP_HANG"):
+            proc.hang()       # the in-process scan that never checks the deadline: only the watchdog ends it
         plan = site.map_site(args.url, policy, max_pages=int(number(args.max_pages, config.get("site_max_pages", site.DEFAULT_MAX_PAGES), "--max-pages")),
                              includes=args.include or [], excludes=args.exclude or [], deadline=deadline, fetch_opts=opts,
                              extra_hosts=args.host or [], tmp_dir=work)
