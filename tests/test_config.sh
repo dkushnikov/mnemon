@@ -160,6 +160,39 @@ while read -r key typ def; do
 done <<< "$table_sh"
 assert_eq "$disagree" "" "every table key: load_config's export and 'mnemon config get' both answer the table's default ($agree keys)"
 assert_contains "$("$MNEMON_ROOT/bin/mnemon" --instance keys5 config dump)" "SITE_MAX_PAGES=40" "config dump lists the capture-layer exports"
+# every §5 key appears in `config dump` with the value the instance sets — not only SITE_MAX_PAGES
+# (CONVERT_TIMEOUT was missing from CONFIG_EXPORTS: the loader exported it, the dump never showed it)
+cat > "$CFG_DIR/instances/keys5set.yaml" << EOF2
+instance: keys5set
+vault_path: $TEST_TMPDIR/vault5
+extract_timeout: 901
+extract_inline_max_bytes: 400001
+extract_max_usd: 2.5
+external_fetch: auto
+external_fetchers: jina
+fetch_user_agent: agent-five
+fetch_timeout: 61
+fetch_max_bytes: 20000001
+render_timeout: 91
+render_max_bytes: 20000002
+acquire_timeout: 301
+convert_timeout: 121
+transcribe_timeout: 3601
+site_max_pages: 41
+site_timeout: 901
+thin_words: 61
+extract_max_parts: 9
+EOF2
+dump="$("$MNEMON_ROOT/bin/mnemon" --instance keys5set config dump)"
+shown=0; unshown=""
+while read -r key typ def; do
+  [[ -n "$key" ]] || continue
+  var="$(mnemon_config_var_of "$key")"
+  want="$(_parse_yaml_value "$key" "$CFG_DIR/instances/keys5set.yaml")"
+  [[ -n "$want" ]] || { unshown="$unshown $key(not set by the fixture)"; continue; }
+  if printf '%s\n' "$dump" | grep -qxF -- "$var=$want"; then shown=$((shown + 1)); else unshown="$unshown $key($var=$want)"; fi
+done <<< "$table_sh"
+assert_eq "$unshown" "" "config dump shows every §5 key of an instance that sets it, with the set value ($shown keys)"
 python3 - "$MNEMON_ROOT/bin" "$CFG_DIR/instances/keys5.yaml" <<'PY' && pass "lib_config.load_config exposes every table variable" || fail "lib_config.load_config exposes every table variable" "missing or wrong"
 import sys
 sys.path.insert(0, sys.argv[1])
