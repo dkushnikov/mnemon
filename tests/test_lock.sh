@@ -15,9 +15,9 @@ echo "--- 11. receipts, lock, writer ---"
 run_gw --url "https://example.com/r1" --capture-id r-1
 assert_eq "$rc" "0" "a capture under the self-acquired lock exits 0"
 assert_eq "$(ls "$VSTATE/captures" | grep -c '\.tmp$' || true)" "0" "no receipt .tmp left behind"
-assert_eq "$(stat -f %Lp "$(receipt r-1)")" "600" "receipt mode 0600"
-assert_eq "$(stat -f %Lp "$VSTATE")" "700" "vault state dir mode 0700"
-assert_eq "$(stat -f %Lp "$VSTATE/captures")" "700" "captures dir mode 0700"
+assert_eq "$(file_mode "$(receipt r-1)")" "600" "receipt mode 0600"
+assert_eq "$(file_mode "$VSTATE")" "700" "vault state dir mode 0700"
+assert_eq "$(file_mode "$VSTATE/captures")" "700" "captures dir mode 0700"
 assert_eq "$(python3 "$LOCK" --vault "$VAULT" --probe)" "free" "the lock is free after the capture"
 
 # writer_host mismatch → exit 2 before any write

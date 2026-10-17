@@ -157,6 +157,14 @@ _mnemon_load_table_keys() {   # <file>
 # MNEMON_ENGINE_LOCK_OWNER=<pid of the lock> and pass.
 MNEMON_ENGINE_LOCK_MAX_AGE=1800
 
+# The engine's version string, one describe for `mnemon version` and the extractor.engine stamp of
+# extract.md (lib-capture.sh cap_engine): the nearest release tag — release/YYYY-MM-DD[-n], written by
+# `mnemon release` — else the older v* tags, else the commit; `-dirty` on an edited checkout. Other
+# tags (a scratch tag, one pulled from a fork) never name a version. Empty output outside a repo.
+mnemon_engine_describe() {   # <checkout root>
+  git -C "$1" describe --tags --always --dirty --match 'release/*' --match 'v*' 2>/dev/null
+}
+
 mnemon_engine_lock_file() {
   printf '%s/mnemon/engine-release.lock' "$(mnemon_state_home)"
 }

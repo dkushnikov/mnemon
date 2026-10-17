@@ -53,9 +53,12 @@ for skill in "$MNEMON_ROOT"/plugins/mnemon/skills/*/SKILL.md; do
   stray=$(grep -F 'bin/mnemon' "$skill" | grep -vF "$ONE_FORM" || true)
   assert_eq "$stray" "" "$name never names bin/mnemon outside the one path form"
   assert_eq "$(sed -n '2p' "$skill")" "name: $name" "$name frontmatter name matches its directory"
-  # skills carry no logic (CLAUDE.md): nothing they tell a session to run scans the vault's files —
-  # every number comes from the engine (#9: source-status used to count origins/domains in shell)
-  assert_eq "$(grep -cE 'for [A-Za-z_]+ in .*(Sources|VAULT_PATH)' "$skill" || true)" "0" "$name does not loop over the vault's files in shell"
+  # skills carry no logic (CLAUDE.md): a fenced bash block of a skill names no vault path and no
+  # Sources/ file — every number comes from the engine (#9: source-status used to count origins and
+  # domains in shell). The whole block is checked, not one loop shape.
+  fence_hits="$(awk '/^```bash/ { f = 1; next } /^```/ { f = 0 } f && /VAULT_PATH|vault_path|Sources\//' "$skill")"
+  assert_eq "$fence_hits" "" "$name: no vault path or Sources/ inside its bash blocks (skills carry no logic)"
+  [[ -n "$fence_hits" ]] && printf '%s\n' "$fence_hits"
 done
 
 # --- 4. python sources compile cleanly: a SyntaxWarning (e.g. an invalid escape

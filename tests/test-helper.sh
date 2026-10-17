@@ -75,6 +75,16 @@ assert_toolchain_legacy() {
   esac
 }
 
+# Portable forms of two BSD-only idioms the suites used (`sed -i ''`, `stat -f %Lp`), so the
+# suites run under GNU utilities too (ubuntu CI).
+sed_inplace() {   # <sed expression> <file>
+  local expr="$1" f="$2"
+  sed "$expr" "$f" > "$f.sed-tmp" && mv "$f.sed-tmp" "$f"
+}
+file_mode() {   # <path> → the permission bits as three octal digits (600, 700, …)
+  python3 -c 'import os, sys; print("%03o" % (os.stat(sys.argv[1]).st_mode & 0o777))' "$1"
+}
+
 # wait_file <path> [seconds=10]: poll until the file exists — the readiness signal of a
 # background lock holder that creates it after its flock succeeded. Never a fixed sleep window
 # (a loaded machine makes those lie), never a probe that could take the lock from the holder for

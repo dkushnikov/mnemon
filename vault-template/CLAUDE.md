@@ -13,7 +13,7 @@ Personal knowledge extraction vault. Sources are captured and extracted by the e
 - `Synthesis/` — the owner's thinking across sources (`status: seed → draft → stable`). An agent writes here only on explicit request, and only `seed` or `draft` notes marked `drafted_by: <agent>`; `stable` is the owner's act
 - `_inputs/` — incoming material: sessions and producers drop it, sessions drain it; a queue is declared with `type: queue` and `since: <date>` in its frontmatter
 - `_meta/charter.md` — the owner's intent: purpose, the declared capture contexts (`## Contexts`), the value scale, the ratification radius (`## Radius`). Owner-only
-- `_meta/reader-context.md` — the reader's context (role, domains, goals) that frames every extraction; an agent updates it on request, under the freshness protocol (`synced:`)
+- the reader context — the reader's role, domains and goals that frame every extraction. The file in use is the one the instance's `reader_context_path` names (`mnemon config get reader_context_path`): `reader-context.md` at the vault root by default, `_meta/reader-context.md` when the vault keeps it there. An agent updates it on request, under the freshness protocol (`synced:`)
 - `_meta/Protocol.md` — the short form of the store spec: folders, ownership, states, the doctor's checks, doors
 - Bases, Templates and the vault's own notes — the owner's and the agent's working surface, outside the engine's files
 
@@ -23,7 +23,7 @@ Personal knowledge extraction vault. Sources are captured and extracted by the e
 2. **The engine extracts; the owner synthesizes.** The engine publishes `source.md` (what was captured) and `extract.md` (validated model output). A Synthesis note is the owner's thinking. An agent asked to help writes a `seed` or a `draft` with `drafted_by: <agent>` and leaves `status: stable` to the owner — ratification is a human act, never a default.
 3. **The radius bounds agent production.** Unratified drafts and open seeds are counted by `mnemon doctor --data` against the charter's `## Radius` (`seeds: N open · D days`, `drafts: N unratified · D days`, `queues: D days`). An agent that drafts faster than the owner ratifies is producing debt, not knowledge: before adding a draft, look at `mnemon status --brief` — when the radius is crossed, propose ratification or pruning instead.
 4. **Key Ideas are atomic.** Each one stands alone, domain-tagged, max 16 words.
-5. **Extraction is personal.** Every extract is framed by `_meta/reader-context.md` — not generic.
+5. **Extraction is personal.** Every extract is framed by the reader context file `reader_context_path` names — not generic. Edit that file, not a copy at another path: the engine reads exactly one.
 
 ## Doors — who writes what
 
@@ -35,7 +35,7 @@ The engine is the only writer of `Sources/`, `index.md`, the archive and its led
 | `Synthesis/` | owner; agent on explicit request | agent notes are `seed`/`draft` with `drafted_by: <agent>`; `stable` = owner |
 | `_inputs/` | sessions, producers | incoming material; declared queues; drained by sessions |
 | `_meta/charter.md` | owner | contexts, value scale, radius |
-| `_meta/reader-context.md` | owner; agent on request | the freshness protocol (`synced:`, `staleness_threshold_days`) |
+| the reader context (`reader_context_path`: `reader-context.md` or `_meta/reader-context.md`) | owner; agent on request | the freshness protocol (`synced:`, `staleness_threshold_days`) |
 | Bases, Templates, the vault's notes, this file | owner, agent | ordinary vault files |
 
 Everything else — a `Sources/` folder written by hand, an edited `source.md`, a hand-edited `index.md`, a file in the archive — is a defect the doctor reports.

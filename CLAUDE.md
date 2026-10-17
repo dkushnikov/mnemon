@@ -34,13 +34,15 @@ Mnemon is the tool; the plugin is a thin door into it.
 ## Development
 
 ```bash
-# Run every suite — one table (passed / failed / not run), exit 1 on any failure; --both adds
-# the legacy toolchain (the system bash 3.2 + python 3.9, PATH=/usr/bin:/bin first), -k keeps
-# going after a failing suite. The suites never touch your Claude Code plugin registry:
-# tests/test-helper.sh exports MNEMON_SKIP_PLUGIN=1 and setup.sh skips its plugin step under
-# it; the two tests of that step (tests/test_setup.sh) run it in a temp HOME — one with no
-# `claude` on PATH, one against a logging stub `claude`
-tests/run-suites.sh --both
+# Run every suite — one table (passed / failed / not run), exit 1 on any failure; -k keeps going
+# after a failing suite. On a Mac, --both runs everything again under the legacy toolchain (the
+# system bash 3.2 + python 3.9, PATH=/usr/bin:/bin first) — the oldest toolchain the engine
+# supports; elsewhere --both exits 2 and CI's macOS job covers that leg. The suites never touch
+# your Claude Code plugin registry: tests/test-helper.sh exports MNEMON_SKIP_PLUGIN=1 and setup.sh
+# skips its plugin step under it; the two tests of that step (tests/test_setup.sh) run it in a
+# temp HOME — one with no `claude` on PATH, one against a logging stub `claude`
+tests/run-suites.sh            # every suite under the bash and python3 on PATH
+tests/run-suites.sh --both     # macOS: the current toolchain, then the legacy one
 
 # Dry-run a capture through the dispatcher against an explicit instance file
 ./bin/mnemon --config /path/to/instance.yaml add --url https://example.com --dry-run
@@ -51,7 +53,7 @@ tests/run-suites.sh --both
 ./setup.sh /tmp/test-vault --non-interactive --skip-qmd --skip-plugin
 ```
 
-CI (`.github/workflows/ci.yml`, staged 2026-10-17): a lint job (`bash -n` on every shell script, `python -m py_compile` on every python source, the hygiene suite) and the suites through `tests/run-suites.sh` on macOS under the legacy toolchain (bash 3.2 + system python 3.9) and on ubuntu under its current one. Not a required check until a week of green runs; releases stay manual.
+CI (`.github/workflows/ci.yml`, staged 2026-10-17): a lint job (`bash -n` on every shell script, `python -m py_compile` on every python source, the hygiene suite) and the suites through `tests/run-suites.sh` on macOS (`macos-15`) under the legacy toolchain (bash 3.2 + system python 3.9) and on ubuntu under its current one. Not a required check until a week of green runs; releases stay manual.
 
 ### Branch model
 
@@ -61,7 +63,7 @@ CI (`.github/workflows/ci.yml`, staged 2026-10-17): a lint job (`bash -n` on eve
 2. Open a PR, review, merge into `main`.
 3. `mnemon release` (from the dev tree) takes the engine maintenance lock — other engine commands exit 75 meanwhile — drains running engine processes, fast-forwards `main` → `release` so the engine worktree at `$MNEMON_HOME` follows, smokes the updated worktree (engine health only), and only when the smoke is green tags the released commit `release/YYYY-MM-DD[-n]` (annotated; `-2`, `-3`… on the same day) and pushes `origin/release` and the tag together (`--atomic`); `mnemon version` reports the nearest release tag; `mnemon release --rollback <ref>` — a sha or a release tag — is the way back.
 
-Never commit to `release` directly; never force-push `main`. `release` moves only through `mnemon release` (a fast-forward of `main`) and `mnemon release --rollback <ref>`, which prints — never runs — the `git push --force-with-lease origin release` that publishes a rollback. Release tags are written by `mnemon release` only (a failed smoke leaves none) and never deleted. Conventional commit prefixes (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`) — `git log --oneline` is the audit trail.
+Never commit to `release` directly; never force-push `main`. `release` moves only through `mnemon release` (a fast-forward of `main`) and `mnemon release --rollback <ref>`, which prints — never runs — the `git push --force-with-lease origin release` that publishes a rollback. Release tags are written by `mnemon release` (a failed smoke leaves none) and never deleted; the one exception is naming a release made before the tags existed, by hand from the dev tree, one tag pushed by name (`docs/install.md` § Releasing) — never `git push --tags`. Conventional commit prefixes (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`) — `git log --oneline` is the audit trail.
 
 ### Dev vs installed
 

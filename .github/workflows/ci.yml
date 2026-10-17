@@ -57,8 +57,11 @@ jobs:
       matrix:
         include:
           # the oldest toolchain the engine supports: the system bash 3.2 and python 3.9 of macOS,
-          # selected by run-suites.sh --legacy (PATH=/usr/bin:/bin first; every suite asserts it)
-          - os: macos-latest
+          # selected by run-suites.sh --legacy (PATH=/usr/bin:/bin first; every suite asserts it).
+          # Pinned to an image known to carry that exact toolchain: on another image the runner
+          # refuses with exit 2 ("legacy toolchain … is not available") before any suite runs —
+          # move the pin deliberately, after checking /usr/bin/python3 there.
+          - os: macos-15
             toolchain: legacy
             args: --legacy -k
           # a current toolchain on another OS: the distribution's bash 5 and python 3
@@ -72,13 +75,17 @@ jobs:
 
       - name: the tools the engine and the suites expect on PATH
         run: |
-          set -u
+          set -eu
+          if ! command -v jq >/dev/null 2>&1 && [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update -q && sudo apt-get install -y -q jq || { echo "jq install failed"; exit 1; }
+          fi
+          missing=0
           for t in git bash python3 jq shasum pgrep; do
-            if command -v "$t" >/dev/null 2>&1; then printf '%-8s %s\n' "$t" "$(command -v "$t")"; else echo "MISSING: $t"; fi
+            if command -v "$t" >/dev/null 2>&1; then printf '%-8s %s\n' "$t" "$(command -v "$t")"; else echo "MISSING: $t"; missing=1; fi
           done
-          if ! command -v jq >/dev/null 2>&1 && [ "$RUNNER_OS" = Linux ]; then sudo apt-get update -q && sudo apt-get install -y -q jq; fi
           echo "---"; bash --version | head -1; python3 --version
           if [ "$RUNNER_OS" = macOS ]; then /bin/bash --version | head -1; /usr/bin/python3 --version; fi
+          [ "$missing" -eq 0 ] || { echo "a required tool is missing — the suites would fail on it"; exit 1; }
 
       - name: run every suite
         run: tests/run-suites.sh ${{ matrix.args }} --logs "$RUNNER_TEMP/suite-logs"

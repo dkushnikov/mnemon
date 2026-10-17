@@ -678,7 +678,8 @@ cap_sha256()  { shasum -a 256 "$1" | cut -c1-64; }
 cap_sha256_str() { printf '%s' "$1" | shasum -a 256 | cut -c1-64; }
 cap_bytes()   { wc -c < "$1" | tr -d ' '; }
 cap_host()    { local h; h="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)"; printf '%s' "${h%%.*}"; }
-cap_engine()  { local v; v="$(git -C "$MNEMON_ROOT" describe --tags --always 2>/dev/null || true)"; printf 'mnemon %s' "${v:-unknown}"; }
+# the extractor.engine stamp: the describe `mnemon version` prints (mnemon-config.sh, sourced by the gateway)
+cap_engine()  { local v; v="$(mnemon_engine_describe "$MNEMON_ROOT" || true)"; printf 'mnemon %s' "${v:-unknown}"; }
 cap_oneline() { printf '%s' "$1" | tr -d '\000-\037\177' ; }
 # Raw-store extension of a path: from the basename only (a dot in a directory name is not an
 # extension), lowercased; a basename without one (or a dotfile) gets the default.

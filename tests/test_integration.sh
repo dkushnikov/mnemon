@@ -80,7 +80,7 @@ assert_contains "$output" "Source type: video" "video source type"
 echo "--- Auto-reindex guard ---"
 # Set search_provider to qmd in the test config so the hook's provider
 # check would pass if the dry-run guard weren't working.
-sed -i '' 's/^search_provider: grep/search_provider: qmd/' "$MNEMON_CONFIG"
+sed_inplace 's/^search_provider: grep/search_provider: qmd/' "$MNEMON_CONFIG"
 # We can't easily observe "no background qmd invocation" directly, so
 # we assert the gateway exits cleanly and the output still contains the
 # dry-run marker — the hook runs AFTER the main if/else block, so any
@@ -91,7 +91,7 @@ output=$("$MNEMON_ROOT/bin/knowledge-gateway.sh" source-add \
   --dry-run 2>&1)
 assert_contains "$output" "DRY RUN" "dry-run still works with qmd provider set"
 # Flip back for subsequent tests
-sed -i '' 's/^search_provider: qmd/search_provider: grep/' "$MNEMON_CONFIG"
+sed_inplace 's/^search_provider: qmd/search_provider: grep/' "$MNEMON_CONFIG"
 
 # The in-tree plugin (plugins/mnemon, .claude-plugin/marketplace.json) is
 # covered by tests/test_hygiene.sh: manifest validity, version, path form.

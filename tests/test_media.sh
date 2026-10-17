@@ -17,12 +17,9 @@ echo "=== media-extract.py Tests ==="
 echo "--- toolchain ---"
 PY_VER="$(python3 --version 2>&1)"
 echo "  python3: $PY_VER ($(command -v python3)) · bash: $BASH_VERSION"
-if [[ "$(command -v python3)" == /usr/bin/python3 ]]; then
-  assert_contains "$PY_VER" "Python 3.9." "legacy toolchain: python3 is 3.9.x"
-  assert_contains "$BASH_VERSION" "3.2." "legacy toolchain: bash is 3.2.x"
-else
-  pass "toolchain: $PY_VER, bash $BASH_VERSION (the 3.9/3.2 proof runs under PATH=/usr/bin:/bin:\$PATH)"
-fi
+# the legacy run is the PATH prefix /usr/bin:/bin (test-helper.sh), never "python3 is /usr/bin/python3" —
+# on ubuntu that is the current toolchain
+assert_toolchain_legacy
 
 # --- isolation (§7.16): no inherited keys, proxies or test variables; a temp tree; stubs ---
 unset FIRECRAWL_API_KEY JINA_API_KEY HTTP_PROXY HTTPS_PROXY http_proxy https_proxy

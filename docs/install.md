@@ -141,8 +141,8 @@ Working on the engine itself:
 
 ```bash
 git -C ~/Code/mnemon switch -c feat/p1-<slug>         # branch from main
-~/Code/mnemon/tests/run-suites.sh --both               # every suite under the current and the legacy toolchain:
-                                                      #   one table, exit 1 on any failure (-k: keep going after one)
+~/Code/mnemon/tests/run-suites.sh                      # every suite: one table, exit 1 on any failure (-k: keep going after one)
+~/Code/mnemon/tests/run-suites.sh --both               # macOS: again under the legacy toolchain (bash 3.2 + python 3.9); CI covers it elsewhere
 ~/Code/mnemon/bin/mnemon --config /path/to/test-instance.yaml status   # run the dev tree explicitly, against a test instance
 ```
 
@@ -171,6 +171,6 @@ What a release does, in order:
 
 `--rollback <ref>` skips the tree checks (a rollback must work from any dev tree), runs steps 1–2, then `git -C "$MNEMON_HOME" reset --hard <ref>` and prints (does not run) the `push --force-with-lease` that publishes the rollback. `<ref>` is any commit-ish — a sha or a release tag (`mnemon release --rollback release/2026-10-16`). A rollback creates no tag and deletes none: the tags stay the record of what was released when.
 
-Releases made before the tags existed can be named after the fact with `git tag -a release/<date>[-n] -m 'mnemon release …' <sha>` from the dev tree and `git push origin --tags`; `mnemon version` picks them up at once.
+The one tag `mnemon release` does not write: a release made before the tags existed may be named after the fact, from the dev tree — `git tag -a release/<date>[-n] -m 'mnemon release …' <sha>`, then `git push origin refs/tags/release/<date>[-n]` (one tag, by name; never `git push --tags`, which would publish every local tag). Pick the name as `mnemon release` would — the next free `release/<date>[-n]` for that date — so the two never collide. `mnemon version` picks it up at once.
 
 **First release ever.** The worktree recipes above assume `origin` already has a `release` branch. Create it once from the dev tree: `git -C ~/Code/mnemon branch release main && git -C ~/Code/mnemon push -u origin release`, then add the worktree.

@@ -25,6 +25,6 @@ This is a pointer, not a second guide. The full developer guide is [`CLAUDE.md`]
 
 ## Working in this repository
 
-- Branch from `main`, run `tests/run-suites.sh --both` (every suite under the current and the legacy toolchain — bash 3.2 and python 3.9 must keep working), open a PR. `release` moves only through `mnemon release`.
+- Branch from `main`, run `tests/run-suites.sh` (every suite, one table, exit 1 on any failure; on a Mac `--both` adds the legacy toolchain — bash 3.2 and python 3.9 must keep working, CI's macOS job checks it otherwise), open a PR. `release` moves only through `mnemon release`.
 - Tests are hermetic: no network, no real `claude`, a temporary `HOME`/`XDG_*`; a test that would touch the real plugin registry, a real vault or `~/.config/mnemon` is a defect.
 - Specs carry their decisions and amendments; a change to a contract lands in the spec and the code in the same PR.

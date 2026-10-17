@@ -110,15 +110,21 @@ tc_versions() {
   bp="$(env PATH="$path" sh -c 'command -v bash' 2>/dev/null || echo bash)"
   b="$(env PATH="$path" bash -c 'printf %s "$BASH_VERSION"' 2>/dev/null || echo '?')"
   pp="$(env PATH="$path" sh -c 'command -v python3' 2>/dev/null || echo python3)"
-  p="$(env PATH="$path" python3 --version 2>&1 | head -1 || true)"
+  p="$(python_version "$path")"
   [[ -n "$p" ]] || p="python3 missing"
   printf 'bash %s · %s (%s · %s)' "$b" "$p" "$bp" "$pp"
+}
+
+# python_version <PATH>: the `Python X.Y.Z` line of the python3 that PATH resolves — the line that
+# starts with "Python", not the first line (a warning printed before it must not pass for the version)
+python_version() {
+  env PATH="$1" python3 --version 2>&1 | grep -m1 -E '^Python [0-9]' || true
 }
 
 legacy_available() {
   local b p
   b="$(env PATH="$LEGACY_PATH" bash -c 'printf %s "$BASH_VERSION"' 2>/dev/null || true)"
-  p="$(env PATH="$LEGACY_PATH" python3 --version 2>&1 | head -1 || true)"
+  p="$(python_version "$LEGACY_PATH")"
   [[ "$b" == 3.2.* && "$p" == "Python 3.9."* ]]
 }
 
@@ -154,7 +160,6 @@ row ' ' toolchain suite result passed failed time
 
 n_pass=0; n_fail=0; n_skip=0
 STOP=false
-FAILED_LOGS=""
 
 for tc in $TOOLCHAINS; do
   case "$tc" in
@@ -209,7 +214,6 @@ for tc in $TOOLCHAINS; do
     else
       row '✗' "$tc" "$name" failed "$passed" "$failed" "${secs}s"
       n_fail=$((n_fail + 1))
-      FAILED_LOGS="$FAILED_LOGS $log"
       if [[ -n "$leftovers" ]]; then
         printf '    the suite left file(s) in its working directory (kept in %s): %s\n' "$cwd" "$leftovers"
       fi
