@@ -153,28 +153,37 @@ def terminate_all() -> None:
             _children.pop(proc.pid, None)
 
 
-def watch_parent(interval: float = 0.25, exit_code: int = 1) -> None:
+def watch_parent(interval: float = 0.25, exit_code: int = 1, parent_pid: Optional[int] = None) -> None:
     """A worker never outlives its supervisor (D11): a daemon thread polls the parent pid every `interval`
-    seconds (at most one second) and, when it changes — the supervisor died without its own teardown (a
-    SIGKILL; a SIGTERM runs the handler above) and the worker, in its own session, was reparented — SIGKILLs
-    every tracked child group and exits the process at once. The thread needs the interpreter: python code
-    and subprocess waits yield to it within milliseconds; C code that never returns (the regex hang of
-    `hang`) does not, and that case is the supervisor's kill to end."""
-    parent = os.getppid()
+    seconds (at most one second) and, when it is not the supervisor's — the supervisor died without its own
+    teardown (a SIGKILL; a SIGTERM runs the handler above) and the worker, in its own session, was reparented
+    — SIGKILLs every tracked child group and exits the process at once. `parent_pid` is the supervisor's pid
+    as the supervisor passed it: with it the check is exact and runs once before the thread starts, so a
+    worker whose supervisor died while the worker was still importing (the race a loaded CI runner hit: the
+    reparented pid would have been read as "the parent" and never changed) exits at once; without it the
+    pid read now is taken for the supervisor's. The thread needs the interpreter: python code and subprocess
+    waits yield to it within milliseconds; C code that never returns (the regex hang of `hang`) does not,
+    and that case is the supervisor's kill to end."""
+    parent = parent_pid if parent_pid is not None else os.getppid()
+
+    def _orphaned() -> None:
+        with _lock:
+            procs = list(_children.values())
+        for child in procs:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        os._exit(exit_code)
+
+    if os.getppid() != parent:
+        _orphaned()
 
     def _watch():
         while True:
             time.sleep(interval)
-            if os.getppid() == parent:
-                continue
-            with _lock:
-                procs = list(_children.values())
-            for child in procs:
-                try:
-                    os.killpg(child.pid, signal.SIGKILL)
-                except OSError:
-                    pass
-            os._exit(exit_code)
+            if os.getppid() != parent:
+                _orphaned()
 
     threading.Thread(target=_watch, name="parent-watch", daemon=True).start()
 

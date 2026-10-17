@@ -491,6 +491,67 @@ class CaptureTextCLI(unittest.TestCase):
             if sup.poll() is None:
                 sup.kill()
 
+    def test_the_supervisor_killed_before_the_worker_looked_at_its_parent(self):
+        """The race itself, made deterministic: the worker's start is delayed (test hook
+        MNEMON_TEST_WORKER_START_DELAY) and the supervisor is SIGKILLed inside that delay — before the worker
+        has read any parent pid. The old watch would have recorded the reparented pid and lived out the hang;
+        with the supervisor's pid passed in, the first check finds it gone and the worker exits at once."""
+        raw = os.path.join(self.dir, "raw.html")
+        shutil.copy(os.path.join(HTML_FIX, "cookie.html"), raw)
+        out, rep = os.path.join(self.dir, "orphan3.md"), os.path.join(self.dir, "orphan3.json")
+        env = clean_env({"MNEMON_TEST_CONVERT_HANG": "sleep", "MNEMON_TEST_WORKER_START_DELAY": "1.5"})
+        sup = subprocess.Popen([PY, CT, raw, "--url", "https://example.com/orphan3", "--out", out, "--report", rep,
+                                "--raw-kind", "rendered", "--timeout", "120"], env=env,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        worker_pid = None
+        try:
+            end = time.monotonic() + 15
+            while worker_pid is None and time.monotonic() < end:
+                ps = subprocess.run(["pgrep", "-f", "capture-text.py --_worker %s" % raw], capture_output=True)
+                pids = [int(p) for p in ps.stdout.split()]
+                if pids:
+                    worker_pid = pids[0]
+                else:
+                    time.sleep(0.05)
+            self.assertIsNotNone(worker_pid, "the worker did not start")
+            killed_at = time.monotonic()
+            os.kill(sup.pid, signal.SIGKILL)        # inside the worker's start delay: it has not looked yet
+            sup.wait(timeout=5)
+            bound = 10.0 if os.environ.get("CI") else 4.0
+            self.assertTrue(wait_gone(worker_pid, bound),
+                            "a worker whose supervisor died before it looked outlived it by more than %g s" % bound)
+            self.assertGreater(time.monotonic() - killed_at, 0.5, "the kill landed inside the start delay (sanity)")
+            self.assertFalse(os.path.exists(out))
+        finally:
+            if worker_pid is not None and pid_alive(worker_pid):
+                try:
+                    os.killpg(worker_pid, signal.SIGKILL)
+                except OSError:
+                    pass
+            if sup.poll() is None:
+                sup.kill()
+
+    def test_a_worker_born_after_its_supervisor_died_exits_at_once(self):
+        """The race the CI runners hit: the supervisor is SIGKILLed before the worker has read its parent pid
+        — the worker then saw the reparented pid as "the parent" and lived out its hang. The supervisor now
+        passes its pid (`--_parent`), the watch compares against it and checks once before anything else:
+        a worker started with a `--_parent` that is not its parent exits 1 immediately, converting nothing;
+        with the right pid it converts as usual."""
+        raw = os.path.join(self.dir, "raw.html")
+        shutil.copy(os.path.join(HTML_FIX, "cookie.html"), raw)
+        out, rep = os.path.join(self.dir, "orphan2.md"), os.path.join(self.dir, "orphan2.json")
+        base = [PY, CT, "--_worker", raw, "--url", "https://example.com/orphan2", "--out", out, "--report", rep,
+                "--raw-kind", "rendered", "--timeout", "120"]
+        env = clean_env({"MNEMON_TEST_CONVERT_HANG": "sleep"})
+        started = time.monotonic()
+        r = subprocess.run(base + ["--_parent", "1"], env=env, capture_output=True, timeout=30)
+        self.assertEqual(r.returncode, 1, "a worker whose --_parent is not its parent exits 1")
+        self.assertLess(time.monotonic() - started, 10.0, "...at once, not after its hang")
+        self.assertFalse(os.path.exists(out), "...and converts nothing")
+        r = subprocess.run(base + ["--_parent", str(os.getpid())], env=clean_env(), capture_output=True, timeout=120)
+        self.assertEqual(r.returncode, 0, "with the real parent's pid the worker converts: %s" % r.stderr.decode("utf-8", "replace")[-300:])
+        self.assertTrue(os.path.exists(out))
+
     def test_bounded_markdown_regexes_are_linear(self):
         """G26: every regex applied to candidate markdown uses bounded, nesting-free character classes, so a
         page of 200 KB of `[`, of `](` or of `<a` converts in under 2 s on either interpreter — the

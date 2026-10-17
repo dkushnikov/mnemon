@@ -901,6 +901,7 @@ def convert_page(raw_path: str, url: str, fetch_report_path: Optional[str], kind
             "--raw-kind", "site", "--kind", kind, "--timeout", "%g" % (remaining if remaining is not None else convert.DEFAULT_TIMEOUT)]
     if fetch_report_path:
         argv += ["--fetch-report", fetch_report_path]
+    argv += ["--_parent", str(os.getpid())]   # this process is the worker's supervisor; its watch compares against it
     res = proc.run(argv, timeout=remaining, deadline=deadline)
     if res.timed_out or not res.started:
         raise PageTimeout("conversion exceeded the assembly budget (convert_timeout): the worker was killed with its process group")

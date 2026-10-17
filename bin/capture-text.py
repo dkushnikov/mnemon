@@ -33,7 +33,8 @@ outlives the owner that would have reaped it.
 Test hook (honoured only under MNEMON_TEST_HOOKS=1): MNEMON_TEST_CONVERT_HANG=1 makes the worker hang in
 C code that no signal handler interrupts, the shape of a quadratic scan — the proof that the supervisor's
 kill, not the worker's cooperation, ends the conversion; MNEMON_TEST_CONVERT_HANG=sleep makes it wait in
-interruptible python code instead — the proof of the parent watch. Stdlib only, python 3.9.
+interruptible python code instead — the proof of the parent watch; MNEMON_TEST_WORKER_START_DELAY=<s> delays the
+worker's start so a test can kill the supervisor before the worker has looked at its parent. Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
@@ -52,7 +53,12 @@ EXIT_TIMEOUT = 124
 
 def worker(args) -> int:
     """The conversion itself, in the child process."""
-    proc.watch_parent()         # a SIGKILLed supervisor leaves no worker behind
+    # test hook: a slow start, so a test can kill the supervisor before the worker has looked at its parent
+    # (the race a loaded runner produces on its own)
+    start_delay = policymod.hook("MNEMON_TEST_WORKER_START_DELAY")
+    if start_delay:
+        time.sleep(float(start_delay))
+    proc.watch_parent(parent_pid=args.parent_pid)   # a SIGKILLed supervisor leaves no worker behind
     deadline = proc.Deadline(args.timeout)
     rep = convert.empty_report(args.url)
     fetch_report = None
@@ -129,7 +135,9 @@ def worker(args) -> int:
 def supervise(args) -> int:
     """Run the conversion in a worker process under the deadline; kill the group on expiry (G25)."""
     timeout = float(args.timeout)
-    argv = [sys.executable, os.path.abspath(__file__), "--_worker"] + sys.argv[1:]
+    # --_parent: the supervisor's pid, so the worker's parent watch compares against the real supervisor
+    # from its first instant (appended last: the `capture-text.py --_worker <raw>` shape stays greppable)
+    argv = [sys.executable, os.path.abspath(__file__), "--_worker"] + sys.argv[1:] + ["--_parent", str(os.getpid())]
     res = proc.run(argv, timeout=timeout, deadline=proc.Deadline(timeout))
     if res.stdout:
         sys.stdout.buffer.write(res.stdout)
@@ -172,6 +180,7 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=convert.DEFAULT_TIMEOUT,
                     help="convert_timeout in seconds (default %g): the worker is killed past it, exit 124" % convert.DEFAULT_TIMEOUT)
     ap.add_argument("--_worker", dest="worker", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--_parent", dest="parent_pid", type=int, default=None, help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     proc.close_lock_fd()
