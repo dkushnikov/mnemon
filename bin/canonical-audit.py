@@ -6,8 +6,9 @@ canonicalization v1.
     canonical-audit.py --vault <vault path> [--json]     # the form `mnemon audit --canonical` dispatches
 
 Groups `Sources/*/source.md` by the v1 canonical form of `url:` (and of `canonical_url:` when present),
-prints the groups of two or more folders with their revisions, `supersedes:` links and extract status,
-exits 0 and never writes anything — nothing is merged. Each header is read through its closing `---` or
+prints the groups of two or more folders with their revisions, `supersedes:` links (a list when one
+revision supersedes several — the block-list form of `source.md`; `a,b` in the text output) and extract
+status, exits 0 and never writes anything — nothing is merged. Each header is read through its closing `---` or
 `...` (cap 256 KB, the rule the lookup and the reindexer share); a folder without a readable header is
 reported on stderr as `malformed-frontmatter` and skipped. Stdlib only, python 3.9.
 """
@@ -27,8 +28,26 @@ HEADER_CAP = 256 * 1024
 _KEYS = ("url", "canonical_url", "supersedes", "revision", "capture_id")
 
 
-def read_header(path: str) -> Optional[Dict[str, str]]:
-    """The top-level scalar keys of a frontmatter header, or None when malformed."""
+def _unquote(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1]
+        if value and "\\" in value:
+            value = value.replace('\\"', '"').replace("\\\\", "\\")
+    return value
+
+
+def supersedes_text(value: object) -> str:
+    """The `supersedes=` column: `-` for none, the revision, or the list comma-joined."""
+    if not value:
+        return "-"
+    return ",".join(value) if isinstance(value, list) else str(value)
+
+
+def read_header(path: str) -> Optional[Dict[str, object]]:
+    """The top-level keys of a frontmatter header that the audit reads — scalars, except
+    `supersedes`, which is a list when it is a block list of several revisions — or None when
+    malformed."""
     try:
         with open(path, "rb") as fh:
             data = fh.read(HEADER_CAP + 1)
@@ -48,17 +67,28 @@ def read_header(path: str) -> Optional[Dict[str, str]]:
         body.append(line)
     if not closed:
         return None
-    out: Dict[str, str] = {}
+    out: Dict[str, object] = {}
+    items: List[str] = []
+    in_list = False
     for line in body:
+        if in_list and line[:1] in (" ", "\t"):
+            m = re.match(r"^\s*-\s*(.*)$", line)
+            if m and _unquote(m.group(1)):
+                items.append(_unquote(m.group(1)))
+            continue
+        if not line.strip():
+            continue
+        in_list = False
         m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$", line)
         if not m or m.group(1) not in _KEYS:
             continue
-        value = m.group(2).strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-            if value and "\\" in value:
-                value = value.replace('\\"', '"').replace("\\\\", "\\")
+        value = _unquote(m.group(2))
+        if m.group(1) == "supersedes" and not value:
+            in_list = True          # an empty key: the block list of revisions follows
+            continue
         out[m.group(1)] = value
+    if items:
+        out["supersedes"] = items[0] if len(items) == 1 else items
     return out
 
 
@@ -130,7 +160,7 @@ def main() -> int:
     for g in groups:
         print(g["canonical_url"])
         for r in g["revisions"]:
-            print("  %s  url=%s  supersedes=%s  extract=%s" % (r["revision"], r["url"], r["supersedes"] or "-", r["extract"]))
+            print("  %s  url=%s  supersedes=%s  extract=%s" % (r["revision"], r["url"], supersedes_text(r["supersedes"]), r["extract"]))
     print("%d group(s) coincide under canonicalization v%d; nothing was merged" % (len(groups), resolve.VERSION))
     return 0
 

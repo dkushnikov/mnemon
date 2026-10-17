@@ -17,6 +17,9 @@ class Audit(unittest.TestCase):
         self.vault = tmpdir("mnemon-audit-")
         self.folder("2026-10-01_aaaaaaaa", 'url: "https://example.com/post?utm_source=a"\n', extract=True)
         self.folder("2026-10-02_bbbbbbbb", 'url: "https://example.com/post?utm_source=b"\nsupersedes: "2026-10-01_aaaaaaaa"\n')
+        # a block list: one re-capture superseding both earlier revisions (O9), the links as written
+        self.folder("2026-10-08_gggggggg", 'url: "https://example.com/post?utm_source=c"\nsupersedes:\n  - "2026-10-01_aaaaaaaa"\n'
+                    '  - "Sources/2026-10-02_bbbbbbbb/extract"\n', extract=True)
         self.folder("2026-10-03_cccccccc", "url: https://example.com/other\n", extract=True)
         self.folder("2026-10-04_dddddddd", 'url: "https://example.com/third#intro"\ncanonical_url: "https://example.com/other"\n')
         self.folder("2026-10-05_eeeeeeee", "url: not a url\n")
@@ -59,9 +62,12 @@ class Audit(unittest.TestCase):
         groups = {g["canonical_url"]: g for g in d["groups"]}
         self.assertEqual(sorted(groups), ["https://example.com/other", "https://example.com/post"])
         post = groups["https://example.com/post"]["revisions"]
-        self.assertEqual([r["revision"] for r in post], ["2026-10-01_aaaaaaaa", "2026-10-02_bbbbbbbb"])
-        self.assertEqual([r["extract"] for r in post], ["ok", "missing"])
+        self.assertEqual([r["revision"] for r in post], ["2026-10-01_aaaaaaaa", "2026-10-02_bbbbbbbb", "2026-10-08_gggggggg"])
+        self.assertEqual([r["extract"] for r in post], ["ok", "missing", "ok"])
+        self.assertEqual(post[0]["supersedes"], None)
         self.assertEqual(post[1]["supersedes"], "2026-10-01_aaaaaaaa")
+        self.assertEqual(post[2]["supersedes"], ["2026-10-01_aaaaaaaa", "Sources/2026-10-02_bbbbbbbb/extract"],
+                         "a block list is a list in the JSON (one revision stays a string)")
         other = groups["https://example.com/other"]["revisions"]
         self.assertEqual([r["revision"] for r in other], ["2026-10-03_cccccccc", "2026-10-04_dddddddd", "2026-10-07_dddddddd"],
                          "canonical_url: joins the group of url:; a header closed with `...` is read like one closed with ---")
@@ -83,7 +89,8 @@ class Audit(unittest.TestCase):
         rc, so, se = run_cli([AUDIT, self.vault])
         self.assertEqual(rc, 0)
         self.assertIn("https://example.com/post\n  2026-10-01_aaaaaaaa", so)
-        self.assertIn("supersedes=2026-10-01_aaaaaaaa", so)
+        self.assertIn("supersedes=2026-10-01_aaaaaaaa  extract=missing", so)
+        self.assertIn("supersedes=2026-10-01_aaaaaaaa,Sources/2026-10-02_bbbbbbbb/extract  extract=ok", so)
         self.assertIn("2 group(s) coincide", so)
         empty = tmpdir("mnemon-audit-empty-")
         os.makedirs(os.path.join(empty, "Sources"))
