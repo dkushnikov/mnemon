@@ -564,6 +564,20 @@ doc
 assert_eq "$(line_of store/supersedes)" "warn store/supersedes — 1 edges, 0 dangling, 0 cycles; 1 cross-resource edge (2026-09-02_bbbb0002 → 2026-09-01_aaaa0001)" "I4 warn only; no incomplete mark"
 assert_eq "$(line_of store/identity)" "ok store/identity — 1 current revisions, 0 share a resource (resource_sha256 · canonical URL v1); unkeyed 0 (non-url legacy)" "I2: the superseded revision is not current"
 
+echo "--- I2/I4: one managed revision supersedes two legacy duplicates of its resource (a block list, O9) ---"
+fresh_vault o9
+mk_legacy 2026-09-01_dup00001 350 'url: "https://example.com/dup?utm_source=a"'; mk_extract 2026-09-01_dup00001 5
+mk_legacy 2026-09-02_dup00002 350 'url: "https://example.com/dup?utm_source=b"'; mk_extract 2026-09-02_dup00002 5
+mk_pair 2026-09-03_dup00003 350 7 'url: "https://example.com/dup"' 'canonical_url: "https://example.com/dup"' \
+  'supersedes:'$'\n''  - "2026-09-01_dup00001"'$'\n''  - "Sources/2026-09-02_dup00002/extract"'
+doc
+assert_eq "$(line_of store/supersedes)" "ok store/supersedes — 2 edges, 0 dangling, 0 cycles" "I4: one source.md naming two predecessors is two edges of one resource (no cross-resource edge)"
+assert_eq "$(line_of store/identity)" "ok store/identity — 1 current revisions, 0 share a resource (resource_sha256 · canonical URL v1); unkeyed 0 (non-url legacy)" "I2: the pair of legacy duplicates is superseded — only the managed revision is current"
+doc --json
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=[x for x in d["checks"] if x["name"]=="store/supersedes"][0]; print(c["counts"]["edges"], c["counts"]["fan_out"], c["counts"]["current_incomplete"])')" "2 0 False" "I4 JSON: two edges, no fan-out, current complete"
+doc --brief
+assert_contains "$out" "3 sources (1 managed · 1 current · 2 superseded)" "the brief counts both superseded revisions"
+
 echo "--- Q4: the denominator and the coverage; the threshold is strict ---"
 fresh_vault q4
 mk_legacy 2026-09-01_q0000001 350; mk_extract 2026-09-01_q0000001 8

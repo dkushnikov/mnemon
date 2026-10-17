@@ -12,7 +12,8 @@ Behavior:
     ` — <index_note>` — `index_note:` of extract.md (one line, the §4.4 serialization subset,
       decoded and display-escaped like a title): the place for a durable annotation;
     ` ⤳ superseded by [[Sources/<new>/extract|<new title>]]` — derived from every source.md's
-      `supersedes:` (`<revision>` or `Sources/<revision>/extract`), one marker per successor
+      `supersedes:` (`<revision>` or `Sources/<revision>/extract`; one scalar, or a YAML block
+      list when one re-capture supersedes several revisions), one marker per successor
       (fan-out lists each; a successor without extract.md links its source; a cycle is reported
       on stderr and not marked; a `supersedes:` naming a folder that no longer exists is counted
       as dangling and marks nothing). Nothing is ever written into source.md or extract.md.
@@ -51,6 +52,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Iterator
 
 HEADER_CAP = 256 * 1024          # §12 A2: the whole header, never a silent truncation
 NOTE_SEP = ' — '                 # the index_note suffix
@@ -123,22 +125,25 @@ def read_header(path: Path) -> tuple[str | None, str]:
     return None, 'malformed'
 
 
-def field_in_block(block: str, key: str) -> str | None:
-    """A top-level 'key: value' of a frontmatter block (nested, indented keys never match).
-
-    A double-quoted value decodes `\\"` and `\\\\` and nothing else (no tilde expansion,
-    no other escapes — the serialization subset of spec §4.4); a single-quoted value is
-    taken as it is; an unquoted value is trimmed.
-    """
-    m = re.search(rf'^{re.escape(key)}:[ \t]*(.*)$', block, re.M)
-    if not m:
-        return None
-    v = m.group(1).strip()
+def decode_scalar(raw: str) -> str | None:
+    """A frontmatter scalar as written: a double-quoted value decodes `\\"` and `\\\\` and nothing
+    else (no tilde expansion, no other escapes — the serialization subset of spec §4.4); a
+    single-quoted value is taken as it is; an unquoted value is trimmed. Empty → None."""
+    v = raw.strip()
     if len(v) >= 2 and v.startswith('"') and v.endswith('"'):
         v = decode_dq(v[1:-1])
     elif len(v) >= 2 and v.startswith("'") and v.endswith("'"):
         v = v[1:-1]
     return v or None
+
+
+def field_in_block(block: str, key: str) -> str | None:
+    """A top-level 'key: value' of a frontmatter block (nested, indented keys never match),
+    decoded by `decode_scalar`."""
+    m = re.search(rf'^{re.escape(key)}:[ \t]*(.*)$', block, re.M)
+    if not m:
+        return None
+    return decode_scalar(m.group(1))
 
 
 def parse_field(text: str, key: str) -> str | None:
@@ -192,6 +197,109 @@ def supersedes_target(value: str | None) -> str | None:
             break
     v = v.strip('/')
     return v or None
+
+
+def supersedes_values(block: str) -> list[str]:
+    """The values a header's `supersedes:` carries, as written: the scalar on the key's line, or —
+    when the key has no value on its line — the `  - <value>` items of the block list that follows
+    it (through the next unindented line; other indented lines are ignored). Each value is decoded
+    by `decode_scalar`; empty values are dropped."""
+    m = re.search(r'^supersedes:[ \t]*(.*)$', block, re.M)
+    if not m:
+        return []
+    if m.group(1).strip():
+        v = decode_scalar(m.group(1))
+        return [v] if v else []
+    out: list[str] = []
+    for line in block[m.end():].split('\n')[1:]:
+        if not line.strip():
+            continue
+        if line[0] not in ' \t':
+            break
+        item = re.match(r'^[ \t]+-[ \t]*(.*)$', line)
+        if item:
+            v = decode_scalar(item.group(1))
+            if v:
+                out.append(v)
+    return out
+
+
+def supersedes_targets(block: str) -> list[str]:
+    """The folders a header's `supersedes:` names — one value or a block list, each in either form
+    (`supersedes_target`) — in the order written, without repeats."""
+    out: list[str] = []
+    for v in supersedes_values(block):
+        t = supersedes_target(v)
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def cycle_components(edges: dict[str, list[str]]) -> tuple[set[tuple[str, str]], list[list[str]]]:
+    """(the edges that lie on a cycle, the cycles) of a `new → [old…]` graph: Tarjan's strongly
+    connected components, iterative (a chain of any length never recurses); a component of two or
+    more nodes is a cycle, listed from its smallest node along its edges — the order a simple cycle
+    is walked — with any node the walk did not reach appended sorted. Self-edges are not part of
+    this graph (the scan drops them; the vault store counts them apart)."""
+    index: dict[str, int] = {}
+    low: dict[str, int] = {}
+    on_stack: set[str] = set()
+    stack: list[str] = []
+    comps: list[list[str]] = []
+    for root in sorted(edges):
+        if root in index:
+            continue
+        index[root] = low[root] = len(index)
+        stack.append(root)
+        on_stack.add(root)
+        work: list[tuple[str, Iterator[str]]] = [(root, iter(edges.get(root, [])))]
+        while work:
+            node, it = work[-1]
+            pushed = False
+            for nxt in it:
+                if nxt not in index:
+                    index[nxt] = low[nxt] = len(index)
+                    stack.append(nxt)
+                    on_stack.add(nxt)
+                    work.append((nxt, iter(edges.get(nxt, []))))
+                    pushed = True
+                    break
+                if nxt in on_stack:
+                    low[node] = min(low[node], index[nxt])
+            if pushed:
+                continue
+            work.pop()
+            if work:
+                parent = work[-1][0]
+                low[parent] = min(low[parent], low[node])
+            if low[node] == index[node]:
+                comp: list[str] = []
+                while True:
+                    w = stack.pop()
+                    on_stack.discard(w)
+                    comp.append(w)
+                    if w == node:
+                        break
+                if len(comp) >= 2:
+                    comps.append(comp)
+    cycle_edges: set[tuple[str, str]] = set()
+    cycles: list[list[str]] = []
+    for comp in comps:
+        members = set(comp)
+        for u in comp:
+            for v in edges.get(u, []):
+                if v in members:
+                    cycle_edges.add((u, v))
+        walk = [min(comp)]
+        while True:
+            nxt = sorted(v for v in edges.get(walk[-1], []) if v in members and v not in walk)
+            if not nxt:
+                break
+            walk.append(nxt[0])
+        walk += sorted(members - set(walk))
+        cycles.append(walk)
+    cycles.sort()
+    return cycle_edges, cycles
 
 
 def folder_title(folder: Path) -> tuple[str, str]:
@@ -255,10 +363,10 @@ def index_note(folder: Path) -> str | None:
 
 def scan_sources(all_dirs: list[Path]) -> dict:
     """One whole-header scan of every Sources/*/source.md (§12 A2): the supersedes map
-    old → [new…] (sorted), the dangling targets, the cycles, the legacy placeholders and the
-    malformed headers."""
+    old → [new…] (sorted), the dangling targets, the cycles (and the number of edges on them),
+    the legacy placeholders and the malformed headers."""
     names = {d.name for d in all_dirs}
-    edges: dict[str, str] = {}          # new → old (one supersedes: per source.md)
+    edges: dict[str, list[str]] = {}    # new → [old…] (a supersedes: names one or several revisions)
     legacy: set[str] = set()
     malformed: list[str] = []
     for d in all_dirs:
@@ -271,42 +379,29 @@ def scan_sources(all_dirs: list[Path]) -> dict:
             continue
         if block is None:
             continue
-        target = supersedes_target(field_in_block(block, 'supersedes'))
-        if target and target != d.name:
-            edges[d.name] = target
+        targets = [t for t in supersedes_targets(block) if t != d.name]
+        if targets:
+            edges[d.name] = targets
         if (field_in_block(block, 'status') or '') == 'bookmark' or \
            (field_in_block(block, 'fetch_status') or '') == 'failed':
             legacy.add(d.name)
 
-    # cycles: each folder has at most one outgoing edge, so follow the chain from every node
-    cycle_edges: set[tuple[str, str]] = set()
-    cycles: list[list[str]] = []
-    seen_in_cycle: set[str] = set()
-    for start in sorted(edges):
-        path: list[str] = []
-        node: str | None = start
-        while node is not None and node in edges and node not in path:
-            path.append(node)
-            node = edges[node]
-        if node is not None and node in path:
-            cyc = path[path.index(node):]
-            if not any(n in seen_in_cycle for n in cyc):
-                cycles.append(cyc)
-                seen_in_cycle.update(cyc)
-            for i, n in enumerate(cyc):
-                cycle_edges.add((n, cyc[(i + 1) % len(cyc)]))
+    # cycles: a folder may have several outgoing edges, so the cycles are the strongly connected
+    # components of the graph; an edge inside one marks nothing
+    cycle_edges, cycles = cycle_components(edges)
 
     successors: dict[str, list[str]] = {}
     dangling: list[tuple[str, str]] = []
-    for new, old in sorted(edges.items()):
-        if (new, old) in cycle_edges:
-            continue
-        if old not in names:
-            dangling.append((new, old))
-            continue
-        successors.setdefault(old, []).append(new)
+    for new, olds in sorted(edges.items()):
+        for old in olds:
+            if (new, old) in cycle_edges:
+                continue
+            if old not in names:
+                dangling.append((new, old))
+                continue
+            successors.setdefault(old, []).append(new)
     return {'successors': successors, 'dangling': dangling, 'cycles': cycles,
-            'legacy': legacy, 'malformed': malformed}
+            'cycle_edges': len(cycle_edges), 'legacy': legacy, 'malformed': malformed}
 
 
 def build_row(folder: Path, successors: dict[str, list[str]], sources_dir: Path) -> str | None:

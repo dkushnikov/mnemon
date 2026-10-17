@@ -268,6 +268,7 @@ def read_folder(sources: str, name: str, snapshot: dict) -> dict:
     folder = os.path.join(sources, name)
     sp = os.path.join(folder, "source.md")
     ep = os.path.join(folder, "extract.md")
+    src_block: Optional[str] = None
 
     if os.path.isfile(sp):
         rec["has_source"] = True
@@ -278,6 +279,7 @@ def read_folder(sources: str, name: str, snapshot: dict) -> dict:
             block, state = _header(sp, data, snapshot)
             rec["source_state"] = state
             if block is not None:
+                src_block = block
                 rec["src"], rec["src_nested"], rec["src_keys"] = parse_block(block)
             body = body_bytes(data)
             if body is not None:
@@ -331,7 +333,10 @@ def read_folder(sources: str, name: str, snapshot: dict) -> dict:
     rec["canonical_url"] = src.get("canonical_url") or None
     rec["canonical"] = canonical_of(rec["canonical_url"] or rec["url"])
     rec["resource_sha256"] = src.get("resource_sha256") or None
-    rec["supersedes"] = kr.supersedes_target(src.get("supersedes"))
+    # the revisions this one supersedes — one value or a block list, both forms — read by the
+    # reindexer's rule; `supersedes` keeps the first of them for the consumers that expect one
+    rec["supersedes_list"] = kr.supersedes_targets(src_block) if src_block is not None else []
+    rec["supersedes"] = rec["supersedes_list"][0] if rec["supersedes_list"] else None
     rec["archive"] = src.get("archive") if "archive" in src else None
     rec["source_type"] = (ex.get("source_type") or src.get("source_type") or "").strip().lower() or None
     rec["status"] = (ex.get("status") or "").strip()
@@ -391,11 +396,11 @@ def scan_sources(vault: str, snapshot: dict) -> Tuple[List[dict], dict]:
     snapshot["folders_scanned"] = len(records)
 
     ks = kr.scan_sources([Path(sources) / n for n in names]) if names else \
-        {"successors": {}, "dangling": [], "cycles": [], "legacy": set(), "malformed": []}
+        {"successors": {}, "dangling": [], "cycles": [], "cycle_edges": 0, "legacy": set(), "malformed": []}
     by_name = {r["name"]: r for r in records}
     # a revision naming itself in `supersedes:` — the reindexer drops that edge when it renders,
     # the validation graph keeps it (a cycle of one; the revision stays current and is reported)
-    self_edges = sorted(r["name"] for r in records if r["supersedes"] and r["supersedes"] == r["name"])
+    self_edges = sorted(r["name"] for r in records if r["name"] in r["supersedes_list"])
     superseded = set(ks["successors"])
     for cyc in ks["cycles"]:
         superseded.update(cyc)
@@ -408,7 +413,7 @@ def scan_sources(vault: str, snapshot: dict) -> Tuple[List[dict], dict]:
                 cross.append((new, old))
             elif rel == "incomparable":
                 incomparable += 1
-    edges = sum(len(v) for v in ks["successors"].values()) + len(ks["dangling"]) + sum(len(c) for c in ks["cycles"]) + len(self_edges)
+    edges = sum(len(v) for v in ks["successors"].values()) + len(ks["dangling"]) + ks["cycle_edges"] + len(self_edges)
     graph = {
         "successors": ks["successors"], "dangling": ks["dangling"], "cycles": ks["cycles"],
         "malformed": ks["malformed"], "edges": edges, "superseded": superseded,

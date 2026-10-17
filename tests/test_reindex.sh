@@ -197,6 +197,19 @@ assert_contains "$out" "Superseded=5" "a superseded folder without extract.md co
 assert_eq "$(row_of "$M")" "" "...and has no row"
 assert_eq "$(row_of "$N")" "- [[Sources/$N/extract|Nu]] (article, x, rating 5)" "...its successor is unmarked"
 
+echo "--- a block list: one re-capture supersedes several revisions (O9) ---"
+O=2026-10-15_oooo0015; P=2026-10-16_pppp0016; Q=2026-10-17_qqqq0017
+mk_source "$O" "Omicron";                                 mk_extract "$O" "Omicron" 6
+mk_source "$P" "Pi";                                      mk_extract "$P" "Pi" 6
+mk_source "$Q" "Rho" "supersedes:" "  - \"$O\"" "  - \"Sources/$P/extract\"" "  - \"2026-09-02_dead0001\""; mk_extract "$Q" "Rho" 8
+run_ri "$VAULT"
+assert_eq "$rc" "0" "reindex exits 0 with a block list"
+assert_eq "$(row_of "$O")" "- [[Sources/$O/extract|Omicron]] (article, x, rating 6) ⤳ superseded by [[Sources/$Q/extract|Rho]]" "the first listed predecessor carries the marker to the one successor"
+assert_eq "$(row_of "$P")" "- [[Sources/$P/extract|Pi]] (article, x, rating 6) ⤳ superseded by [[Sources/$Q/extract|Rho]]" "...and the second (the Sources/<rev>/extract form inside the list)"
+assert_eq "$(row_of "$Q")" "- [[Sources/$Q/extract|Rho]] (article, x, rating 8)" "the successor's own row is unmarked"
+assert_contains "$out" "Superseded=7" "both predecessors count (5 + 2)"
+assert_contains "$out" "Dangling-supersedes=2" "a vanished folder inside the list is dangling and marks nothing (1 + 1)"
+
 echo "--- the dispatcher passes --no-hand-edit-report through (under the vault lock) ---"
 CFG="$TEST_TMPDIR/instance.yaml"
 printf 'instance: ri\nvault_path: %s\nreader_context_path: %s/reader-context.md\nsearch_provider: grep\ndefault_model: sonnet\n' "$VAULT" "$VAULT" > "$CFG"
@@ -204,7 +217,7 @@ printf 'reader\n' > "$VAULT/reader-context.md"
 set_row "$D" "- [[Sources/$D/extract|Delta]] (article, x, rating 9) — hand edit five"
 rc=0; out="$("$MNEMON" --config "$CFG" reindex --no-hand-edit-report 2>"$TEST_TMPDIR/err")" || rc=$?; err="$(cat "$TEST_TMPDIR/err")"
 assert_eq "$rc" "0" "mnemon reindex --no-hand-edit-report exits 0"
-assert_contains "$out" "reindex: vault — Sources=14" "...and rebuilt the index"
+assert_contains "$out" "reindex: vault — Sources=17" "...and rebuilt the index"
 assert_eq "$(grep -c -- "— hand edit five" "$REPORT")" "0" "...without preserving (the flag reached the script)"
 rc=0; out="$("$MNEMON" --config "$CFG" reindex 2>"$TEST_TMPDIR/err")" || rc=$?
 assert_eq "$rc" "0" "mnemon reindex exits 0"
