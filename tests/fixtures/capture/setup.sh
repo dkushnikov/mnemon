@@ -347,8 +347,12 @@ esac
 STUB
 cat > "$STUBS/pdftotext" <<'STUB'
 #!/usr/bin/env bash
-# pdftotext -layout <pdf> <out>; STUB_PDFTOTEXT: ok (default) | empty
+# pdftotext -layout <pdf> <out>; STUB_PDFTOTEXT: ok (default) | empty. Like the real tool, -v / -h
+# answer on stderr and write nothing — `mnemon doctor` probes `pdftotext -v`, and a stub that took
+# -v for the output path left a file named `-v` in the caller's working directory
+case "${1:-}" in -v|-h|--help) printf 'pdftotext version 0.0-stub\n' >&2; exit 0 ;; esac
 out="${@: -1}"
+case "$out" in ""|-*) printf 'pdftotext stub: no output file in %s\n' "$*" >&2; exit 99 ;; esac
 case "${STUB_PDFTOTEXT:-ok}" in
   ok) printf 'PDF text page one\n\fPDF text page two\n' > "$out" ;;
   *)  printf '\n\f\n' > "$out" ;;

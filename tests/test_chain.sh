@@ -101,7 +101,12 @@ printf '#!/bin/sh\nexit 11\n' > "$STUBS/render-url.sh"
 printf '#!/bin/sh\nprintf %%s "{\\"applied\\": false, \\"reason\\": \\"stub\\"}"\n' > "$STUBS/kb-depth-fold.py"
 cat > "$STUBS/pdftotext" <<'STUB'
 #!/bin/sh
+# pdftotext [-layout] <pdf> <out>; like the real tool, -v / -h answer on stderr and write nothing —
+# `mnemon doctor` probes `pdftotext -v`, and a stub that took -v for the output path left a file
+# named `-v` in the caller's working directory
+case "${1:-}" in -v|-h|--help) printf 'pdftotext version 0.0-stub\n' >&2; exit 0 ;; esac
 out=""; for a in "$@"; do out="$a"; done
+case "$out" in ""|-*) printf 'pdftotext stub: no output file in %s\n' "$*" >&2; exit 99 ;; esac
 printf 'PDF text page one\n' > "$out"
 STUB
 printf '#!/bin/sh\nprintf "Title: Stub Paper\\nPages: 3\\n"\n' > "$STUBS/pdfinfo"

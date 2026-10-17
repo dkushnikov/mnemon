@@ -80,6 +80,22 @@ assert_contains "$out" "run-suites: 4 suite run(s) · 2 passed · 2 failed · 0 
 run "$RUNNER" --suites-dir "$MID" --keep-going
 assert_eq "$rc" "1" "--keep-going is the long form of -k"
 
+echo "--- a suite that writes into the caller's working directory ---"
+LEAK="$TEST_TMPDIR/leak"; mkdir -p "$LEAK"
+mk_suite "$LEAK" test_a.sh 2 0
+# passes on its own terms, but leaves `-v` and a scratch file in whatever directory it was started from
+printf '#!/usr/bin/env bash\necho "=== Fake leak ==="\nprintf x > ./-v\nprintf y > scratch.tmp\necho "  ✓ fine"\necho ""\necho "Results: 1 passed, 0 failed"\n' > "$LEAK/test_b.sh"
+CALLER="$TEST_TMPDIR/caller"; mkdir -p "$CALLER"
+run bash -c 'cd "$1" && "$2" --suites-dir "$3" --logs "$4" -k' _ "$CALLER" "$RUNNER" "$LEAK" "$TEST_TMPDIR/logs-leak"
+assert_eq "$rc" "1" "a suite that leaves files in its working directory fails the run"
+assert_contains "$(row_of current test_a.sh)" "passed         2       0" "...the clean suite passes"
+assert_contains "$(row_of current test_b.sh)" "failed         1       0" "...the leaking suite is failed although its own Results line is clean"
+assert_contains "$out" "the suite left file(s) in its working directory (kept in $TEST_TMPDIR/logs-leak/cwd.current.test_b.sh): -v scratch.tmp" "...naming the files and where they were kept"
+assert_eq "$(/bin/ls -A "$CALLER" | wc -l | tr -d ' ')" "0" "the caller's working directory stays untouched — every suite runs in a private one"
+assert_file_exists "$TEST_TMPDIR/logs-leak/cwd.current.test_b.sh/-v" "the leaked file is kept for inspection"
+[[ -d "$TEST_TMPDIR/logs-leak/cwd.current.test_a.sh" ]] && fail "a clean suite's working directory is removed" "still there" || pass "a clean suite's working directory is removed"
+assert_contains "$(cat "$TEST_TMPDIR/logs-leak/current.test_b.sh.log")" "run-suites: test_b.sh left file(s) in its working directory: -v scratch.tmp" "...and the log records the leak"
+
 echo "--- suites in python unittest's format ---"
 run "$RUNNER" --suites-dir "$UT" -k
 assert_eq "$rc" "1" "exit 1 when a unittest-format suite failed"

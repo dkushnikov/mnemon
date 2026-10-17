@@ -20,6 +20,10 @@
 # returns the status of `break` — 0 — after a failing suite (GH #15). Each suite is honest on its
 # own (`summary` exits 1 on a failure); this runner keeps that honesty across the set.
 #
+# Every suite runs in a private, empty working directory under the logs dir; a suite that leaves
+# a file there is reported as failed (the file is kept for inspection) — suites must not depend
+# on, or write into, the caller's cwd.
+#
 # Exit codes: 0 every suite passed · 1 a suite failed or was not run · 2 usage error, no suites,
 # or the legacy toolchain is not available. Runs under bash 3.2.
 
@@ -82,7 +86,7 @@ SUITES_DIR="$(cd "$SUITES_DIR" && pwd -P)"
 SUITES=()
 if [[ ${#SELECTED[@]} -gt 0 ]]; then
   for s in "${SELECTED[@]}"; do
-    case "$s" in */*) f="$s" ;; *) f="$SUITES_DIR/$s" ;; esac
+    case "$s" in /*) f="$s" ;; */*) f="$PWD/$s" ;; *) f="$SUITES_DIR/$s" ;; esac
     [[ -f "$f" ]] || die2 "no such suite: $s"
     SUITES+=("$f")
   done
@@ -166,9 +170,22 @@ for tc in $TOOLCHAINS; do
       continue
     fi
     log="$LOG_DIR/$tc.$name.log"
+    # every suite runs in a private, empty working directory: a suite must not depend on the
+    # caller's cwd, and anything it leaves there is a leak the caller would otherwise find in
+    # their own directory (a stub that took `pdftotext -v` for an output path once left a file
+    # named `-v` wherever the suites were started from)
+    cwd="$LOG_DIR/cwd.$tc.$name"
+    rm -rf "$cwd"; mkdir -p "$cwd"
     start=$(date +%s)
-    if env PATH="$tc_path" bash "$suite" >"$log" 2>&1; then rc=0; else rc=$?; fi
+    if (cd "$cwd" && env PATH="$tc_path" bash "$suite") >"$log" 2>&1; then rc=0; else rc=$?; fi
     secs=$(( $(date +%s) - start ))
+    leftovers="$(cd "$cwd" && find . -mindepth 1 -maxdepth 1 | sed 's#^\./##' | sort | tr '\n' ' ' | sed 's/ $//')"
+    if [[ -n "$leftovers" ]]; then
+      printf 'run-suites: %s left file(s) in its working directory: %s\n' "$name" "$leftovers" >>"$log"
+      [[ $rc -eq 0 ]] && rc=98
+    else
+      rmdir "$cwd" 2>/dev/null || true
+    fi
     # the counts: the helper's last `Results: N passed, M failed` line, else python unittest's
     # `Ran N tests` with `OK` / `FAILED (failures=a, errors=b)`; a suite with neither shows —.
     # The verdict is the exit status either way.
@@ -193,7 +210,12 @@ for tc in $TOOLCHAINS; do
       row '✗' "$tc" "$name" failed "$passed" "$failed" "${secs}s"
       n_fail=$((n_fail + 1))
       FAILED_LOGS="$FAILED_LOGS $log"
-      if [[ -z "$results" ]]; then
+      if [[ -n "$leftovers" ]]; then
+        printf '    the suite left file(s) in its working directory (kept in %s): %s\n' "$cwd" "$leftovers"
+      fi
+      if [[ $rc -eq 98 ]]; then
+        : # the suite itself passed; the leak is the failure, said above
+      elif [[ -z "$results" ]]; then
         printf '    exit %s and no "Results:" line — the suite did not finish or reports in its own format; last lines of %s:\n' "$rc" "$log"
         tail -n 15 "$log" | sed 's/^/    | /'
       elif grep -qF '✗' "$log"; then
