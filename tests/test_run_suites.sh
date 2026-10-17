@@ -96,6 +96,15 @@ assert_file_exists "$TEST_TMPDIR/logs-leak/cwd.current.test_b.sh/-v" "the leaked
 [[ -d "$TEST_TMPDIR/logs-leak/cwd.current.test_a.sh" ]] && fail "a clean suite's working directory is removed" "still there" || pass "a clean suite's working directory is removed"
 assert_contains "$(cat "$TEST_TMPDIR/logs-leak/current.test_b.sh.log")" "run-suites: test_b.sh left file(s) in its working directory: -v scratch.tmp" "...and the log records the leak"
 
+echo "--- a suite whose verdict line and exit status disagree ---"
+DIS="$TEST_TMPDIR/disagree"; mkdir -p "$DIS"
+# counts two failures, exits 0 anyway (a `summary` that lost its exit, a trailing command that reset $?)
+printf '#!/usr/bin/env bash\necho "=== Fake disagree ==="\necho "  ✗ bad 1: x"\necho "  ✗ bad 2: y"\necho ""\necho "Results: 3 passed, 2 failed"\ntrue\n' > "$DIS/test_a.sh"
+run "$RUNNER" --suites-dir "$DIS"
+assert_eq "$rc" "1" "a suite that counts failures but exits 0 fails the run"
+assert_contains "$(row_of current test_a.sh)" "failed         3       2" "...its row says failed with its own counts"
+assert_contains "$out" "the suite exited 0 but its verdict line counts 2 failure(s)" "...and the disagreement is named"
+
 echo "--- suites in python unittest's format ---"
 run "$RUNNER" --suites-dir "$UT" -k
 assert_eq "$rc" "1" "exit 1 when a unittest-format suite failed"

@@ -40,21 +40,25 @@ For one line with the vault store's health (counters plus the data doctor's `fai
 
 ## Display Format
 
+The engine's output, line for line, with one line added after the header:
+
 ```
-=== Mnemon Knowledge Library ===
-Instance: <name>
+=== Mnemon Status ===
+Instance: <name>                 ← the one added line (from `config get instance`)
 Vault: <path>
-Total sources: N · Extracted: M
+
+Total sources: N
+Extracted: M
 By status: extracted X · dismissed Y · legacy words Z · empty E · unknown U
-Superseded: S · Chunked: C
+Superseded: S
+Chunked: C
 
 Recent additions:
   2026-04-04_abc12345 — Article Title
   2026-04-03_def67890 — Video Title
-  ...
 ```
 
-Keep the engine's numbers and wording; only the `Instance:` line is added.
+Keep the engine's numbers, wording and line breaks; do not rename the header or join lines.
 
 ## If the command fails
 

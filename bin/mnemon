@@ -1558,7 +1558,7 @@ cmd_version() {
   if git -C "$MNEMON_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     # the nearest release tag (release/YYYY-MM-DD[-n], written by `mnemon release`), else the
     # older v* tags, else the commit — `release/2026-10-17` on a released engine,
-    # `release/2026-10-17-3-g<sha>` three commits past it, `<sha>` before the first release tag;
+    # `release/2026-10-17-3-g<sha>` three commits past it, the older v* describe before the first release tag;
     # the same describe stamps extractor.engine in extract.md (mnemon-config.sh)
     desc="$(mnemon_engine_describe "$MNEMON_ROOT")"; [[ -n "$desc" ]] || desc="unknown"
     branch="$(git -C "$MNEMON_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"

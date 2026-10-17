@@ -21,7 +21,7 @@ The frontmatter is written by the gateway before any model runs; the model never
 | `capture_id` | string | Yes | The capture operation's id (a feeder's `--capture-id`, else generated); the receipt in the vault's ledger is keyed by it |
 | `resource_kind` | enum | Yes | `url`, `text`, `file`, `ref` |
 | `resource_sha256` | string | Yes | **The identity**: `sha256("<kind>:" + key)` — a URL's canonical form, a text's hash, a file's hash, a reference's path |
-| `resource_id` | string | Yes | The first 8 hex characters of `resource_sha256` — the folder label, never the identity |
+| `resource_id` | string | Yes | The first 8 hex characters of `sha256(key)` (the key alone, without the kind prefix) — the folder label `hash8`, never the identity; two resources may share it |
 | `revision` | string | Yes | The folder name, `YYYY-MM-DD_<hash8>[-n]` |
 | `supersedes` | string or list | Re-captures | The revision(s) this one replaces — one as a scalar, several (one re-capture resolving a group of duplicates) as a YAML block list; `mnemon reindex` marks them `⤳ superseded` |
 | `archive` | string | When the raw is archived | The raw's file name in the instance's `archive_dir` (`<revision>.<ext>`) |

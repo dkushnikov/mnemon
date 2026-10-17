@@ -853,7 +853,8 @@ assert_contains "$out" "check:     git -C $RWT var GIT_COMMITTER_IDENT   → yes
 assert_contains "$out" "3. fetch:  git -C $REPO fetch origin --tags" "dry-run fetches tags too (a name taken on origin is seen before it is chosen)"
 run env MNEMON_RELEASE_DATE="$FROZEN" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --dry-run
 assert_contains "$out" "ignoring MNEMON_RELEASE_DATE" "MNEMON_RELEASE_DATE without MNEMON_TEST_HOOKS=1 is ignored, with a notice"
-assert_contains "$out" "6. tag:    git -C $RWT tag -a release/$(date +%Y-%m-%d)" "...and the real date names the tag"
+real_line="$(printf '%s\n' "$out" | grep '^  6. tag:' || true)"
+[[ "$real_line" =~ tag\ -a\ release/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\  && "$real_line" != *"$FROZEN"* ]] && pass "...and the real date names the tag" || fail "...and the real date names the tag" "line: '$real_line'"
 run hooked env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --dry-run   # back to the frozen date for the assertions below
 assert_contains "$out" "7. push:   git -C $RWT push --atomic origin release refs/tags/$TODAY_TAG   (the branch and the tag together)" "dry-run prints the push of the branch and the tag together"
 smoke_at=$(printf '%s\n' "$out" | grep -n ' smoke:' | head -1 | cut -d: -f1)
@@ -910,6 +911,20 @@ assert_not_contains "$out" "release: lock" "...before taking the lock (G3)"
 assert_not_contains "$out" "drain" "...and before the drain"
 [[ -e "$LOCK" ]] && fail "a dirty-tree refusal leaves no lock file" "lock exists" || pass "a dirty-tree refusal leaves no lock file"
 g "$REPO" checkout -q -- tests/test-helper.sh
+
+# no tagger identity: refused before the lock (an annotated tag needs one). user.useConfigOnly stops
+# git from guessing one from the account and the hostname, so the refusal is deterministic
+git -C "$REPO" config user.useConfigOnly true
+git -C "$REPO" config --unset user.name; git -C "$REPO" config --unset user.email
+run env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --dry-run
+assert_contains "$out" "check:     git -C $RWT var GIT_COMMITTER_IDENT   → NO — git has no committer identity" "dry-run reports a missing tagger identity"
+run env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
+assert_eq "$rc" "1" "release refuses without a committer identity"
+assert_contains "$out" "git has no committer identity for the release tag — set user.name and user.email" "...naming the fix"
+assert_not_contains "$out" "release: lock" "...before taking the lock"
+[[ -e "$LOCK" ]] && fail "an identity refusal leaves no lock file" "lock exists" || pass "an identity refusal leaves no lock file"
+git -C "$REPO" config user.name "mnemon test"; git -C "$REPO" config user.email "mnemon-test@example.invalid"
+git -C "$REPO" config --unset user.useConfigOnly
 
 # success: a new commit on main is promoted; required deps the smoke doctor
 # needs are stubbed only when this machine lacks them
@@ -970,6 +985,20 @@ PREV_FULL=$(git -C "$RWT" rev-parse HEAD)
 printf '# second change\n' >> "$REPO/tests/test-helper.sh"
 g "$REPO" commit -q -am "second change on main"
 NEW_MAIN=$(git -C "$REPO" rev-parse --short main)
+# the tag step itself can fail after a green smoke (here: tag.gpgsign with a gpg that fails) — exit 1
+# with git's own message, nothing pushed, no tag, the rollback printed; the engine stays at the new commit
+printf '#!/bin/sh\necho "gpg-stub: no secret key" >&2\nexit 2\n' > "$STUBBIN/gpg-fail"; chmod +x "$STUBBIN/gpg-fail"
+git -C "$REPO" config tag.gpgsign true; git -C "$REPO" config gpg.program "$STUBBIN/gpg-fail"
+run hooked env PATH="$STUBBIN:$PATH" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
+assert_eq "$rc" "1" "a tag that cannot be created fails the release"
+assert_contains "$out" "could not create the tag $TODAY_TAG-2 on $NEW_MAIN — nothing was pushed; the engine stands at $NEW_MAIN" "...saying what happened and where the engine is"
+assert_contains "$out" "  git: " "...with git's own message"
+assert_contains "$out" "mnemon release --rollback $TODAY_TAG   # = $PREV_REL" "...and the rollback"
+assert_eq "$(git -C "$REPO" tag -l 'release/*')" "$TODAY_TAG" "...no tag was created"
+assert_eq "$(git -C "$ORIGIN" rev-parse release)" "$PREV_FULL" "...origin/release did not move"
+[[ -e "$LOCK" ]] && fail "lock removed after a failed tag" "lock exists" || pass "lock removed after a failed tag"
+git -C "$REPO" config --unset tag.gpgsign; git -C "$REPO" config --unset gpg.program
+git -C "$RWT" reset -q --hard "$PREV_FULL"
 run hooked env MNEMON_SMOKE_CMD=false MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
 assert_eq "$rc" "1" "a failing smoke fails the release"
 assert_contains "$out" "MNEMON_SMOKE_CMD override (MNEMON_TEST_HOOKS=1): false" "the smoke override is honoured with MNEMON_TEST_HOOKS=1"

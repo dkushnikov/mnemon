@@ -21,7 +21,7 @@ Personal knowledge extraction vault. Sources are captured and extracted by the e
 
 1. **source.md is immutable.** Once published, never modified — its body is the captured text byte for byte, and its `capture.text_sha256` lets the engine detect an edit (`integrity-error`). Re-capture = new folder (`mnemon add --recapture`), the old one stays and is named in `supersedes:`.
 2. **The engine extracts; the owner synthesizes.** The engine publishes `source.md` (what was captured) and `extract.md` (validated model output). A Synthesis note is the owner's thinking. An agent asked to help writes a `seed` or a `draft` with `drafted_by: <agent>` and leaves `status: stable` to the owner — ratification is a human act, never a default.
-3. **The radius bounds agent production.** Unratified drafts and open seeds are counted by `mnemon doctor --data` against the charter's `## Radius` (`seeds: N open · D days`, `drafts: N unratified · D days`, `queues: D days`). An agent that drafts faster than the owner ratifies is producing debt, not knowledge: before adding a draft, look at `mnemon status --brief` — when the radius is crossed, propose ratification or pruning instead.
+3. **The radius bounds agent production.** Unratified drafts and open seeds are counted by `mnemon doctor --data` against the charter's `## Radius` (`seeds: N open · D days`, `drafts: N unratified · D days`, `queues: D days`). An agent that drafts faster than the owner ratifies is producing debt, not knowledge: before adding a draft, look at `mnemon doctor --data` (`human/ratification`, `human/seeds` say whether the radius is crossed; `mnemon status --brief` shows the counts and the warn total) — when it is crossed, propose ratification or pruning instead.
 4. **Key Ideas are atomic.** Each one stands alone, domain-tagged, max 16 words.
 5. **Extraction is personal.** Every extract is framed by the reader context file `reader_context_path` names — not generic. Edit that file, not a copy at another path: the engine reads exactly one.
 
@@ -137,4 +137,4 @@ A note links the revisions it builds on as `[[Sources/<revision>/extract]]` — 
 - Don't edit `extract.md` outside the curation subset (`status`, `index_note`, `title`, `tags`, `domains`, `people`, `visibility`, `rating`)
 - Don't edit `index.md` — run `mnemon reindex`
 - Don't write outside the doors above; don't touch the archive or the ledger
-- Don't let the radius silently fill: when `mnemon status --brief` reports the drafts or seeds radius crossed, surface it before adding more
+- Don't let the radius silently fill: when `mnemon doctor --data` reports `human/ratification` or `human/seeds` as warn, surface it before adding more

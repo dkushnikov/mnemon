@@ -208,6 +208,12 @@ for tc in $TOOLCHAINS; do
     else
       passed='—'; failed='—'
     fi
+    # a suite whose own verdict line counts failures but which exited 0 is failed too — the exit
+    # status is the verdict, the counts must agree with it
+    if [[ $rc -eq 0 && "$failed" != '—' && "$failed" -gt 0 ]]; then
+      printf 'run-suites: %s exited 0 but its verdict line counts %s failure(s)\n' "$name" "$failed" >>"$log"
+      rc=97
+    fi
     if [[ $rc -eq 0 ]]; then
       row '✓' "$tc" "$name" passed "$passed" "$failed" "${secs}s"
       n_pass=$((n_pass + 1))
@@ -219,6 +225,8 @@ for tc in $TOOLCHAINS; do
       fi
       if [[ $rc -eq 98 ]]; then
         : # the suite itself passed; the leak is the failure, said above
+      elif [[ $rc -eq 97 ]]; then
+        printf '    the suite exited 0 but its verdict line counts %s failure(s) — see %s\n' "$failed" "$log"
       elif [[ -z "$results" ]]; then
         printf '    exit %s and no "Results:" line — the suite did not finish or reports in its own format; last lines of %s:\n' "$rc" "$log"
         tail -n 15 "$log" | sed 's/^/    | /'

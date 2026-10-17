@@ -75,16 +75,35 @@ jobs:
 
       - name: the tools the engine and the suites expect on PATH
         # pandoc is the one optional engine dependency the suites use for real (the .md file capture, the
-        # defuddle → pandoc fallback, the converter fixtures); the runner images do not ship it. The rest
-        # is stubbed or present (jq, shasum, pgrep, git, python3).
+        # defuddle → pandoc fallback, the converter fixtures); the runner images do not ship it. Two rules:
+        # (1) the version is pinned to the one the engine is developed and tested against — brew's newest
+        #     (3.11 on the first run) escapes `[TABLE]` inside a code example and the fixtures fail; bump
+        #     PANDOC_VERSION deliberately, with the suites;
+        # (2) it must live OUTSIDE /usr/bin:/bin — two tests simulate "no pandoc" with exactly that PATH
+        #     (a fixture marked without_pandoc, the doctor's "pandoc missing" line), so apt's /usr/bin/pandoc
+        #     made them fail on the first run. The official release archive goes under $RUNNER_TEMP on both
+        #     hosts. The rest is stubbed or present (jq, shasum, pgrep, git, python3).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PANDOC_VERSION: 3.9.0.2
         run: |
           set -eu
           if [ "$RUNNER_OS" = Linux ]; then
-            sudo apt-get update -q
-            sudo apt-get install -y -q pandoc jq || { echo "apt-get install pandoc jq failed"; exit 1; }
+            command -v jq >/dev/null 2>&1 || { sudo apt-get update -q && sudo apt-get install -y -q jq; } || { echo "apt-get install jq failed"; exit 1; }
+            asset="pandoc-${PANDOC_VERSION}-linux-amd64.tar.gz"
           else
-            brew list --versions pandoc >/dev/null 2>&1 || brew install -q pandoc || { echo "brew install pandoc failed"; exit 1; }
+            asset="pandoc-${PANDOC_VERSION}-arm64-macOS.zip"
           fi
+          mkdir -p "$RUNNER_TEMP/pandoc"
+          gh release download "$PANDOC_VERSION" --repo jgm/pandoc --pattern "$asset" --dir "$RUNNER_TEMP/pandoc" || { echo "pandoc $PANDOC_VERSION ($asset) download failed"; exit 1; }
+          case "$asset" in *.tar.gz) tar -xzf "$RUNNER_TEMP/pandoc/$asset" -C "$RUNNER_TEMP/pandoc" ;; *.zip) unzip -q "$RUNNER_TEMP/pandoc/$asset" -d "$RUNNER_TEMP/pandoc" ;; esac
+          pandoc_bin="$(find "$RUNNER_TEMP/pandoc" -type f -name pandoc -perm -u+x | head -1)"
+          [ -n "$pandoc_bin" ] || { echo "no pandoc binary inside $asset"; exit 1; }
+          chmod +x "$pandoc_bin"
+          echo "$(dirname "$pandoc_bin")" >> "$GITHUB_PATH"
+          export PATH="$(dirname "$pandoc_bin"):$PATH"
+          case "$(command -v pandoc)" in /usr/bin/*|/bin/*) echo "pandoc at $(command -v pandoc) would defeat the suites' no-pandoc PATH"; exit 1 ;; esac
+          pandoc --version | head -1 | grep -q "pandoc ${PANDOC_VERSION}" || { echo "pandoc on PATH is not ${PANDOC_VERSION}: $(pandoc --version | head -1)"; exit 1; }
           missing=0
           for t in git bash python3 jq shasum pgrep pandoc; do
             if command -v "$t" >/dev/null 2>&1; then printf '%-8s %s\n' "$t" "$(command -v "$t")"; else echo "MISSING: $t"; missing=1; fi
