@@ -11,7 +11,7 @@ The extract file contains AI-generated structured knowledge from a source. It is
 | `content_format` | enum | Yes | Matches source.md |
 | `origin` | enum | Yes | Matches source.md |
 | `visibility` | enum | Yes | `personal`, `public`, `company`, `private` |
-| `status` | enum | Yes | `captured`, `extracted`, `integrated` |
+| `status` | enum | Yes | stored: `extracted` (the engine's default) or `dismissed` (the owner's judgement, phase 3); `captured`, `superseded`, `integrated` are derived from the files, never stored — older words are legacy, counted by the doctor (`docs/specs/2026-10-16-vault-store.md` §4) |
 | `title` | string | Yes | Source title |
 | `author` | string | No | Source author |
 | `url` | string | No | Source URL |

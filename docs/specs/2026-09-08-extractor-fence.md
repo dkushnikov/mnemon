@@ -1,6 +1,8 @@
 # Extractor fence — run the gateway's `claude -p` with the least tools it needs
 
-**Status:** proposed · 2026-09-08 · owner: maintainer (separate session) · scope: `bin/knowledge-gateway.sh`, `tests/test_gateway.sh`
+> **Superseded (2026-10-15).** The fence that ships is Contract B of [`2026-10-15-capture-contracts.md`](2026-10-15-capture-contracts.md) (extractor fence v2): the extractor runs with **no tools at all** — `claude -p --restricted --tools "" --permission-prompts none --strict-mcp-config --no-session-persistence --json-schema …`, prompt on stdin — and returns structured output that the gateway validates and publishes; the gateway, not the model, acquires the content and writes `source.md`. The per-origin tool tables and the `Write` confinement below were withdrawn after the probes of its §4.6 (path-scoped `Write` allow rules are not honoured under `--restricted`). This document stays as the record of the problem statement and of the first design; nothing in it is normative. The chronology is in §Status.
+
+**Status:** superseded · written 2026-09-08 · owner: maintainer · scope then: `bin/knowledge-gateway.sh`, `tests/test_gateway.sh`
 
 ## Resume prompt
 
