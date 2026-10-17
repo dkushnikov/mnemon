@@ -5,7 +5,7 @@ description: Add a source to your Mnemon knowledge library — articles, YouTube
 
 # /source-add — Capture a Source
 
-Add a source to the knowledge library. The engine fetches the content, applies the extraction template for its source type, and writes `source.md` + `extract.md` under `Sources/` in the vault of the selected instance.
+Add a source to the knowledge library. The engine acquires the content itself, publishes it as `source.md` under `Sources/` in the vault of the selected instance, then runs the fenced extractor and publishes `extract.md`. This session is a caller: it never fetches, never writes into the vault, never extracts.
 
 ## Usage Examples
 
@@ -16,8 +16,8 @@ Add a source to the knowledge library. The engine fetches the content, applies t
 /source-add --origin idea --title "My insight about X"
 /source-add --origin book --title "Book Title" --author "Author Name"
 /source-add --url https://spa-site.com/ --render     # JS-heavy SPA: pre-render via headless Chrome
-/source-add --file ~/Downloads/paper.pdf             # local PDF: auto-detected, Read tool extracts
-/source-add --url https://arxiv.org/pdf/2401.12345.pdf   # remote PDF: auto-detected, downloaded first
+/source-add --file ~/Downloads/paper.pdf             # local PDF: auto-detected, text via pdftotext
+/source-add --url https://arxiv.org/pdf/2401.12345.pdf   # arXiv: resolved to the paper, full text of the pinned version
 /source-add --instance work https://example.com/post # capture into another instance's vault
 ```
 
@@ -25,17 +25,19 @@ Add a source to the knowledge library. The engine fetches the content, applies t
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
-| `--url <url>` | For URL sources | — | Source URL (YouTube / .pdf auto-detected) |
-| `--file <path>` | For local files | — | Local file path (audio or PDF, auto-detected by extension) |
-| `--origin <type>` | Auto-detected | From URL/file | `url`, `youtube`, `audio`, `pdf`, `text`, `book`, `idea` |
-| `--title <title>` | For text/book/idea | Inferred | Source title |
-| `--author <name>` | No | Inferred | Source author |
+| `--url <url>` | For URL sources | — | Source URL (YouTube / .pdf / arXiv auto-detected) |
+| `--file <path>` | For local files | — | Local file path (audio, PDF or a document, auto-detected by extension) |
+| `--origin <type>` | Auto-detected | From URL/file | `url`, `youtube`, `audio`, `pdf`, `file`, `text`, `book`, `idea` |
+| `--title <title>` | For text/book/idea | Acquired | Source title |
+| `--author <name>` | No | Acquired | Source author |
 | `--source-type <type>` | No | From origin | `article`, `video`, `podcast`, `book`, `paper`, `idea`, `conversation` |
 | `--intent <text>` | No | none | Why the reader is capturing this |
-| `--context <label>` | No | `personal` | Capture-context label recorded in the source frontmatter |
+| `--context <label>` | No | the charter's default | Capture context — one of the contexts the instance charter declares (`_meta/charter.md`, section `## Contexts`); an undeclared value is refused (exit 2). The default is `personal` when the charter declares it, else the first declared context; a vault without a charter accepts `personal` only. Never invent a context — pass one only when the user names it |
 | `--depth <mode>` | No | `auto` | Depth-aware capture — fold in the richer same-entity artifact a URL fronts (e.g. the repository a post links to): `auto`, `off`, `force` |
-| `--render` | No | off | Pre-render the URL via Chrome headless (SPAs / client-side-rendered pages). Requires Google Chrome or Chromium |
-| `--dry-run` | No | off | Show the assembled prompt without extracting or writing anything |
+| `--render` | No | off | Force the rendered stage (headless Chrome) for SPAs / client-side-rendered pages. Requires Google Chrome or Chromium |
+| `--recapture` | No | off | A new revision of a resource that is already in the library (the new `source.md` names the old revision in `supersedes:`) |
+| `--resume <revision>` | No | — | Finish a capture whose source was published but whose extract was not (`RESULT:status=captured`, exit 4) |
+| `--dry-run` | No | off | Show what would happen — the resolved request, the extractor argv and the prompt — without fetching, extracting or writing anything |
 | `--instance <name>` | No | default instance | Which Mnemon instance (vault) receives the source — see "Instance selection" |
 
 ## Instance selection
@@ -48,25 +50,25 @@ A vault that should always capture into its own instance sets the variable in it
 { "env": { "MNEMON_INSTANCE": "<name>" } }
 ```
 
-Sessions started in that vault then never need `--instance`. Add it only when the user names another library explicitly.
+Claude Code sessions started in that vault then never need `--instance`. Add it only when the user names another library explicitly.
+
+**Scripts, jobs and callers other than Claude Code** (a cron job, a producer, a shell alias, another agent runtime): the `.claude/settings.json` binding is read by Claude Code sessions only — nothing else sees it. Such a caller passes `--instance <name>` or `--config <path>` before the command on every invocation (`mnemon --instance work add --url …`), or exports `MNEMON_INSTANCE` itself; without a selector the engine falls back to `~/.config/mnemon/default`, which may be another library.
 
 ## PDF capture
 
-Both local PDFs (`--file paper.pdf`) and remote PDFs (`--url https://.../x.pdf`) auto-detect as `origin=pdf` (source_type=paper). Remote PDFs are downloaded to a temporary location first; the original URL stays canonical in frontmatter.
+Both local PDFs (`--file paper.pdf`) and remote PDFs (`--url https://.../x.pdf`) auto-detect as `origin=pdf` (source_type=paper). Remote PDFs are fetched under the engine's network policy; the original URL stays canonical in frontmatter.
 
-Extraction uses Claude Code's native `Read` tool — no pypdf/pdftotext preprocessing. This handles text, layout, tables, and image/OCR content that CLI tools would miss. No `--render` / `--whisper` needed.
-
-Page count lands in frontmatter (`pages: N`). For PDFs with heavy image/figure content, the extract describes the visual layout where relevant.
+The text comes from `pdftotext -layout` (Poppler) and is published as `source.md` **byte for byte**; the extractor reads that text and nothing else. There is no OCR and no visual reading of pages: a scanned PDF without a text layer fails as `no-text` (`RESULT:status=failed`, nothing published), figures are absent, and tables survive only as the text layout `pdftotext` produces. `pdftotext` and `pdfinfo` must be installed (`brew install poppler`); without them the capture is refused before anything is published (`error_class=environment`). The page count lands in frontmatter (`pages: N`) when `pdfinfo` is available. Completeness of a PDF capture is `unknown` — there is no page to check the text against.
 
 ## When to use `--render`
 
-A plain HTTP fetch returns an empty `<div id="root">` for client-side-rendered apps (React/Vue/Svelte SPAs). Symptoms that call for a retry with `--render`:
+A plain HTTP fetch returns an empty `<div id="root">` for client-side-rendered apps (React/Vue/Svelte SPAs). The engine's chain already tries the rendered stage on its own when the direct fetch comes back as a JavaScript shell (`RESULT:acquisition=js-shell`); pass `--render` when you see SPA symptoms the chain did not catch:
 
 - Extract is suspiciously short (hero/tagline only, no body content)
 - Source is a landing page, docs site, or dashboard built as a SPA
 - The page looks fine in a browser but the extract is mostly meta tags
 
-Pass `--render` and Mnemon pre-renders via Chrome headless (~2-5s latency), keeping the URL canonical in frontmatter. Falls back with a clear error if Chrome/Chromium isn't installed.
+Pass `--render` and the engine renders via Chrome headless (~2-5s latency), keeping the URL canonical in frontmatter. It fails with a clear error (`environment`) if Chrome/Chromium isn't installed.
 
 Do NOT use `--render` reflexively — the default fast path is fine for 90% of web content. Use it when you see SPA symptoms.
 
@@ -77,27 +79,38 @@ Do NOT use `--render` reflexively — the default fast path is fine for 90% of w
 2. Run the dispatcher via the Bash tool. This is the only path form to use — never a dev checkout, never a script bundled with this plugin:
 
 ```bash
-"${MNEMON_HOME:-$HOME/.local/share/mnemon/engine}/bin/mnemon" [--instance <name>] add --url "<url>" [--origin <origin>] [--title "<title>"] [--author "<author>"] [--intent "<intent>"] [--depth <mode>] [--render]
+"${MNEMON_HOME:-$HOME/.local/share/mnemon/engine}/bin/mnemon" [--instance <name>] add --url "<url>" [--origin <origin>] [--title "<title>"] [--author "<author>"] [--intent "<intent>"] [--depth <mode>] [--render] [--recapture]
 ```
 
-3. Parse the `RESULT:` lines from the output:
-   - `RESULT:path=Sources/<folder>/` — created source path, relative to the instance's vault
-   - `RESULT:status=extracted` — extraction status (`skipped-duplicate` when the canonical URL already exists in the library)
-   - `RESULT:title=<title>` — extracted title
+3. Read the `RESULT:` lines and the exit code. The engine computes both from the files it published — **never report a full capture from exit 0 alone**: exit 0 also means `skipped-duplicate`, and `RESULT:status` is the fact.
 
-4. Show the user a concise summary:
+| `RESULT:status=` | Exit | What happened | What to tell the user |
+|---|---|---|---|
+| `extracted` | 0 | `source.md` and `extract.md` are published under `RESULT:path=` | Added — title, path, and the completeness (below) |
+| `captured` | 4 | `source.md` is published, `extract.md` is not: the extractor failed, its output was invalid, or it refused (`RESULT:error_class=`, e.g. `fence-unprobed`, `unsupported-size`, `budget-exhausted`) | Captured, not yet extracted. Finish it with `mnemon [--instance <name>] add --resume <RESULT:revision>`; when the class is `fence-unprobed`, `mnemon fence-probe` first |
+| `skipped-duplicate` | 0 | The resource is already in the library (same canonical URL, text or file hash); `RESULT:path=` is the existing revision | Already in the library at that path — nothing new was written. A newer version of the page is a `--recapture` |
+| `failed` | 1 | Nothing was published: acquisition failed (`RESULT:error_class=` fetch, bot-wall, paywall, no-text, timeout, environment…; `RESULT:retryable=` says whether a later try may succeed) | Not captured, with the class; suggest `--render` for a `js-shell`, a retry later for a retryable class, nothing for a paywall |
+| `integrity-error` | 1 | A previously published `source.md` is missing or was edited (`capture.text_sha256` no longer matches) | An operator problem with the existing revision, not a capture failure — report it, do not retry |
+| — | 2 | Usage or contract: an undeclared `--context`, conflicting selectors, `--resume` of a complete capture, `--supersedes` of a missing revision | The engine's message, verbatim |
+| — | 3 | The extractor environment is missing before publication: no `claude`, too old for `--restricted`, or no fence record for its version | `mnemon fence-probe` (once per Claude Code version), then retry |
+| — | 75 | The vault or the engine is locked (another capture, an ingest pass or a `mnemon release` is running) | Retry in a moment |
+
+`RESULT:completeness=` (URL captures) says how much of the fetched page the conversion kept — `complete`, `partial` (something was lost), `blocked` (a paywall teaser: only the text before the wall), `unknown` (nothing to check against: PDFs, media, plain text). It is a diagnostic, not a gate: a `partial` or `blocked` source **is** published — say so, the reader must know what they are reading. `RESULT:acquisition=` (`ok`, `thin`, `js-shell`, `bot-wall`, `paywall`, …) says what the fetch got. Other lines: `RESULT:revision=` (the folder name, the argument of `--resume`), `RESULT:title=`, `RESULT:canonical_url=`.
+
+4. Show the user a concise summary — one block, the facts from the `RESULT:` lines:
 
 ```
-Added: <title>
-Path: <path>
-Status: <status>
+Added: <RESULT:title>
+Path: <RESULT:path>
+Status: <RESULT:status> · completeness <RESULT:completeness>   (when printed)
+Next: <only when the status calls for one — the --resume command, fence-probe, --recapture>
 ```
 
-5. If the command fails, show the error message. Common issues:
+5. If the command fails before any `RESULT:` line, show the error message. Common issues:
    - `No such file or directory` on the dispatcher path → the engine is not installed at `$MNEMON_HOME` (default `~/.local/share/mnemon/engine`); follow `docs/install.md` in the Mnemon repository
    - no instance / config not found → `mnemon init <name> --vault <path>` creates one (add `--default` to make it the default), or set `MNEMON_INSTANCE`
    - "Vault not found" → run `mnemon doctor`, then check `vault_path` in `~/.config/mnemon/instances/<name>.yaml`
-   - media extraction failed → `mnemon doctor` reports the missing optional dependency (`yt-dlp`, `ffmpeg`, `whisper`)
+   - `environment` on a PDF → `brew install poppler`; on media → `mnemon doctor` reports the missing optional dependency (`yt-dlp`, `ffmpeg`, `whisper`); on `--render` → Google Chrome or Chromium
 
 ## For text/idea origins
 

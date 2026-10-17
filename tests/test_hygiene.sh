@@ -33,7 +33,7 @@ PJ="$MNEMON_ROOT/plugins/mnemon/plugin.json"
 python3 -m json.tool "$MP" >/dev/null 2>&1 && pass "marketplace.json is valid JSON" || fail "marketplace.json is valid JSON" "python3 -m json.tool failed"
 python3 -m json.tool "$PJ" >/dev/null 2>&1 && pass "plugin.json is valid JSON" || fail "plugin.json is valid JSON" "python3 -m json.tool failed"
 jq_() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))' "$1" "$2"; }
-assert_eq "$(jq_ "$PJ" 'd["version"]')" "0.2.0" "plugin.json version is 0.2.0"
+assert_eq "$(jq_ "$PJ" 'd["version"]')" "0.2.1" "plugin.json version is 0.2.1"
 assert_eq "$(jq_ "$PJ" 'd["name"]')" "mnemon" "plugin.json name is mnemon"
 assert_eq "$(jq_ "$MP" 'd["name"]')" "mnemon" "marketplace name is mnemon"
 assert_eq "$(jq_ "$MP" 'len(d["plugins"])')" "1" "marketplace lists one plugin"
@@ -53,6 +53,9 @@ for skill in "$MNEMON_ROOT"/plugins/mnemon/skills/*/SKILL.md; do
   stray=$(grep -F 'bin/mnemon' "$skill" | grep -vF "$ONE_FORM" || true)
   assert_eq "$stray" "" "$name never names bin/mnemon outside the one path form"
   assert_eq "$(sed -n '2p' "$skill")" "name: $name" "$name frontmatter name matches its directory"
+  # skills carry no logic (CLAUDE.md): nothing they tell a session to run scans the vault's files —
+  # every number comes from the engine (#9: source-status used to count origins/domains in shell)
+  assert_eq "$(grep -cE 'for [A-Za-z_]+ in .*(Sources|VAULT_PATH)' "$skill" || true)" "0" "$name does not loop over the vault's files in shell"
 done
 
 # --- 4. python sources compile cleanly: a SyntaxWarning (e.g. an invalid escape
