@@ -141,7 +141,8 @@ Working on the engine itself:
 
 ```bash
 git -C ~/Code/mnemon switch -c feat/p1-<slug>         # branch from main
-for t in ~/Code/mnemon/tests/test_*.sh; do bash "$t" || break; done
+~/Code/mnemon/tests/run-suites.sh --both               # every suite under the current and the legacy toolchain:
+                                                      #   one table, exit 1 on any failure (-k: keep going after one)
 ~/Code/mnemon/bin/mnemon --config /path/to/test-instance.yaml status   # run the dev tree explicitly, against a test instance
 ```
 

@@ -34,11 +34,13 @@ Mnemon is the tool; the plugin is a thin door into it.
 ## Development
 
 ```bash
-# Run all tests — the suite never touches your Claude Code plugin registry:
-# tests/test-helper.sh exports MNEMON_SKIP_PLUGIN=1 and setup.sh skips its plugin
-# step under it; the two tests of that step (tests/test_setup.sh) run it in a temp
-# HOME — one with no `claude` on PATH, one against a logging stub `claude`
-for t in tests/test_*.sh; do bash "$t" || break; done
+# Run every suite — one table (passed / failed / not run), exit 1 on any failure; --both adds
+# the legacy toolchain (the system bash 3.2 + python 3.9, PATH=/usr/bin:/bin first), -k keeps
+# going after a failing suite. The suites never touch your Claude Code plugin registry:
+# tests/test-helper.sh exports MNEMON_SKIP_PLUGIN=1 and setup.sh skips its plugin step under
+# it; the two tests of that step (tests/test_setup.sh) run it in a temp HOME — one with no
+# `claude` on PATH, one against a logging stub `claude`
+tests/run-suites.sh --both
 
 # Dry-run a capture through the dispatcher against an explicit instance file
 ./bin/mnemon --config /path/to/instance.yaml add --url https://example.com --dry-run
