@@ -20,8 +20,10 @@ Test hooks, honoured only under `MNEMON_TEST_HOOKS=1`: `MNEMON_POLICY_ALLOW_LOOP
 server; `MNEMON_FETCH_URL_REWRITE="https://arxiv.org=http://127.0.0.1:PORT;…"` rewrites the prefix of the
 transport URL (the logical URL, the hops and the identity are untouched); `MNEMON_EXTERNAL_FETCH_CMD` is read
 by the fetch chain; `MNEMON_TEST_CONVERT_HANG` and `MNEMON_TEST_MAP_HANG` make the conversion and the map
-worker hang in C code (proc.hang — the supervisor's kill is the proof). Without the master switch the hooks
-are ignored and a warning names them.
+worker hang in C code (proc.hang — the supervisor's kill is the proof); `MNEMON_TEST_WORKER_START_DELAY` delays
+the conversion worker's start after it touched `MNEMON_TEST_WORKER_START_FILE` (the race of a supervisor killed
+before the worker looked at its parent, reproduced on purpose). Without the master switch the hooks are
+ignored and a warning names them.
 Stdlib only, python 3.9.
 """
 from __future__ import annotations
@@ -49,7 +51,7 @@ ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 RETRYABLE_KINDS = ("timeout", "connection", "tls")
 HOOK_VARS = ("MNEMON_POLICY_ALLOW_LOOPBACK", "MNEMON_FETCH_URL_REWRITE", "MNEMON_EXTERNAL_FETCH_CMD", "MNEMON_TEST_CONVERT_HANG",
-             "MNEMON_TEST_MAP_HANG")
+             "MNEMON_TEST_MAP_HANG", "MNEMON_TEST_WORKER_START_DELAY", "MNEMON_TEST_WORKER_START_FILE")
 CHUNK = 65536
 
 _warned = False
