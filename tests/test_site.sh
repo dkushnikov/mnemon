@@ -27,8 +27,7 @@ assert_contains "$err" "disallowed by robots.txt" "...naming the rule"
 jq '.caps.max_pages = 2' "$PLAN" > "$TEST_TMPDIR/cap-plan.json"
 run_gw --url "$LANDING" --site "$TEST_TMPDIR/cap-plan.json" --capture-id sr-3
 assert_eq "$rc" "2" "a plan whose included pages exceed its cap → exit 2"
-sed 's/^instance: captest/instance: captest-cap/; $a\
-site_max_pages: 2' "$CONFIG" > "$TEST_TMPDIR/cap.yaml"
+sed 's/^instance: captest/instance: captest-cap/' "$CONFIG" | awk '1; END { print "site_max_pages: 2" }' > "$TEST_TMPDIR/cap.yaml"
 rc=0; "$GW" source-add --config "$TEST_TMPDIR/cap.yaml" --url "$LANDING" --site "$PLAN" --capture-id sr-4 >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
 assert_eq "$rc" "2" "...and the instance's site_max_pages caps a plan too"
 run_gw --url "$LANDING" --site "$TEST_TMPDIR/missing-plan.json" --capture-id sr-5

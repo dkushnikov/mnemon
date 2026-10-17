@@ -141,8 +141,7 @@ assert_file_exists "$VAULT/Sources/$(result revision)/source.md" "...source.md p
 write_probe_record
 
 # inline limit
-sed 's/^instance: captest/instance: captest-small/; $a\
-extract_inline_max_bytes: 100' "$CONFIG" > "$TEST_TMPDIR/small.yaml"
+sed 's/^instance: captest/instance: captest-small/' "$CONFIG" | awk '1; END { print "extract_inline_max_bytes: 100" }' > "$TEST_TMPDIR/small.yaml"
 head -c 300 /dev/zero | tr '\0' 'x' > "$TEST_TMPDIR/big.txt"
 rc=0; "$GW" source-add --config "$TEST_TMPDIR/small.yaml" --origin text --capture-id big-1 < "$TEST_TMPDIR/big.txt" >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
 out="$(cat "$TEST_TMPDIR/run.out")"

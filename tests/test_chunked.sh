@@ -11,8 +11,7 @@ source "$MNEMON_ROOT/tests/fixtures/capture/setup.sh"
 echo "=== Chunked Extraction Tests ==="
 
 # the instance: inline limit 300 000 bytes
-sed 's/^instance: captest/instance: captest-chunk/; $a\
-extract_inline_max_bytes: 300000' "$CONFIG" > "$TEST_TMPDIR/chunk.yaml"
+sed 's/^instance: captest/instance: captest-chunk/' "$CONFIG" | awk '1; END { print "extract_inline_max_bytes: 300000" }' > "$TEST_TMPDIR/chunk.yaml"
 CONFIG="$TEST_TMPDIR/chunk.yaml"
 
 # a ~1 MB fixture: 12 `## ` sections of ~85 KB, a fenced block spanning a heading-looking line
@@ -150,8 +149,7 @@ stub_reset
 run_gw_stdin "$TEST_TMPDIR/span.txt" --origin text --capture-id ch-span
 assert_eq "$rc $(result status) $(result error_class) $(result retryable)" "4 captured unsupported-size false" "a single unsplittable span above the limit → unsupported-size (the capture retained)"
 assert_eq "$(part_calls) $(main_calls)" "0 0" "...no call made"
-sed 's/^instance: captest-chunk/instance: captest-2parts/; $a\
-extract_max_parts: 2' "$CONFIG" > "$TEST_TMPDIR/two.yaml"
+sed 's/^instance: captest-chunk/instance: captest-2parts/' "$CONFIG" | awk '1; END { print "extract_max_parts: 2" }' > "$TEST_TMPDIR/two.yaml"
 rc=0; "$GW" source-add --config "$TEST_TMPDIR/two.yaml" --origin text --capture-id ch-2parts --recapture < "$TEST_TMPDIR/big.md" >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
 out="$(cat "$TEST_TMPDIR/run.out")"
 assert_eq "$rc $(result error_class)" "4 unsupported-size" "extract_max_parts: 2 for a text needing more → unsupported-size"
@@ -199,8 +197,7 @@ PYC
 
 # ---------------------------------------------------------------------------------------------
 echo "--- 4. the budget (A3): --max-budget-usd per call, budget-exhausted, unknown costs ---"
-sed 's/^instance: captest-chunk/instance: captest-budget/; $a\
-extract_max_usd: 0.03' "$CONFIG" > "$TEST_TMPDIR/budget.yaml"
+sed 's/^instance: captest-chunk/instance: captest-budget/' "$CONFIG" | awk '1; END { print "extract_max_usd: 0.03" }' > "$TEST_TMPDIR/budget.yaml"
 stub_reset
 rc=0; "$GW" source-add --config "$TEST_TMPDIR/budget.yaml" --origin text --capture-id ch-budget --recapture < "$TEST_TMPDIR/big.md" >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
 out="$(cat "$TEST_TMPDIR/run.out")"

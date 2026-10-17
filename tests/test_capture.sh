@@ -955,8 +955,7 @@ r.update({"resource_sha256": rsha, "resource_id": rid, "revision": rev, "vault":
           "error_class": "transient", "error": "simulated", "retryable": True})
 json.dump(r, open(out, "w"), indent=1)
 PY
-sed 's/^instance: captest/instance: captest-p1budget/; $a\
-extract_max_usd: 0.3' "$CONFIG" > "$TEST_TMPDIR/p1budget.yaml"
+sed 's/^instance: captest/instance: captest-p1budget/' "$CONFIG" | awk '1; END { print "extract_max_usd: 0.3" }' > "$TEST_TMPDIR/p1budget.yaml"
 stub_reset
 rc=0; "$GW" source-add --config "$TEST_TMPDIR/p1budget.yaml" --capture-id p1-spent >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
 out="$(cat "$TEST_TMPDIR/run.out")"
@@ -1097,11 +1096,7 @@ assert_contains "$line" '"thin_words":60' "...the --policy JSON carries thin_wor
 assert_contains "$line" '"connect_timeout":15' "...and the fetch_timeout split"
 assert_contains "$line" '--kind page' "...and the URL's kind"
 assert_eq "$(rget m-flags '.request.render') $(rget m-flags '.request.external')" "off off" "...the receipt binds render off / external off"
-sed 's/^instance: captest/instance: captest-ext/; $a\
-external_fetch: auto\
-external_fetchers: jina,firecrawl\
-fetch_user_agent: "test-agent/1.0"\
-acquire_timeout: 45' "$CONFIG" > "$TEST_TMPDIR/ext.yaml"
+sed 's/^instance: captest/instance: captest-ext/' "$CONFIG" | awk '1; END { print "external_fetch: auto"; print "external_fetchers: jina,firecrawl"; print "fetch_user_agent: \"test-agent/1.0\""; print "acquire_timeout: 45" }' > "$TEST_TMPDIR/ext.yaml"
 stub_reset
 "$GW" source-add --config "$TEST_TMPDIR/ext.yaml" --url "https://example.com/ext-auto" --capture-id m-extauto >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || true
 out="$(cat "$TEST_TMPDIR/run.out")"

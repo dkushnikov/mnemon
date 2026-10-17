@@ -21,8 +21,7 @@ assert_eq "$(file_mode "$VSTATE/captures")" "700" "captures dir mode 0700"
 assert_eq "$(python3 "$LOCK" --vault "$VAULT" --probe)" "free" "the lock is free after the capture"
 
 # writer_host mismatch → exit 2 before any write
-sed 's/^instance: captest/instance: captest-writer/; $a\
-writer_host: not-this-host' "$CONFIG" > "$TEST_TMPDIR/writer.yaml"
+sed 's/^instance: captest/instance: captest-writer/' "$CONFIG" | awk '1; END { print "writer_host: not-this-host" }' > "$TEST_TMPDIR/writer.yaml"
 n0="$(nfolders)"; r0="$(ls "$VSTATE/captures" | wc -l | tr -d ' ')"
 rc=0; "$GW" source-add --config "$TEST_TMPDIR/writer.yaml" --url "https://example.com/w1" --capture-id w-1 >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
 assert_eq "$rc" "2" "writer_host mismatch → exit 2"
