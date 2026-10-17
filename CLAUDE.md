@@ -51,6 +51,8 @@ tests/run-suites.sh --both
 ./setup.sh /tmp/test-vault --non-interactive --skip-qmd --skip-plugin
 ```
 
+CI (`.github/workflows/ci.yml`, staged 2026-10-17): a lint job (`bash -n` on every shell script, `python -m py_compile` on every python source, the hygiene suite) and the suites through `tests/run-suites.sh` on macOS under the legacy toolchain (bash 3.2 + system python 3.9) and on ubuntu under its current one. Not a required check until a week of green runs; releases stay manual.
+
 ### Branch model
 
 `main` is the integration branch; the installed engine follows `release`.

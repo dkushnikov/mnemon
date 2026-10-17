@@ -1,0 +1,93 @@
+# CI — staged (2026-10-17): a lint job and the suites on two hosts. Not a required check yet:
+# that comes after a week of green runs (maintainer decision). Releases stay manual (`mnemon release`).
+name: ci
+
+on:
+  push:
+    branches: [main, release]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint (bash -n · py_compile · hygiene)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bash -n on every shell script (by shebang)
+        run: |
+          set -eu
+          n=0
+          while IFS= read -r f; do
+            bash -n "$f"
+            n=$((n + 1))
+          done < <(git ls-files | while IFS= read -r f; do
+                     [ -f "$f" ] || continue
+                     case "$(head -c 64 "$f" | head -n 1)" in '#!'*bash*|'#!/bin/sh'*) printf '%s\n' "$f" ;; esac
+                   done)
+          echo "bash -n: $n scripts parse"
+          [ "$n" -gt 20 ] || { echo "too few scripts found ($n) — the detection broke"; exit 1; }
+
+      - name: python -m py_compile on every python source (-W error)
+        run: |
+          set -eu
+          git ls-files '*.py' | grep -v '/__pycache__/' > /tmp/py-files
+          n="$(wc -l < /tmp/py-files | tr -d ' ')"
+          xargs python3 -W error -m py_compile < /tmp/py-files
+          echo "py_compile: $n sources compile"
+          [ "$n" -gt 20 ] || { echo "too few python sources found ($n)"; exit 1; }
+
+      - name: hygiene suite (public-repo gates, manifests, skill path form, fixtures)
+        run: bash tests/test_hygiene.sh
+
+  suites:
+    name: suites (${{ matrix.os }} · ${{ matrix.toolchain }})
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # the oldest toolchain the engine supports: the system bash 3.2 and python 3.9 of macOS,
+          # selected by run-suites.sh --legacy (PATH=/usr/bin:/bin first; every suite asserts it)
+          - os: macos-latest
+            toolchain: legacy
+            args: --legacy -k
+          # a current toolchain on another OS: the distribution's bash 5 and python 3
+          - os: ubuntu-latest
+            toolchain: current
+            args: -k
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: the tools the engine and the suites expect on PATH
+        run: |
+          set -u
+          for t in git bash python3 jq shasum pgrep; do
+            if command -v "$t" >/dev/null 2>&1; then printf '%-8s %s\n' "$t" "$(command -v "$t")"; else echo "MISSING: $t"; fi
+          done
+          if ! command -v jq >/dev/null 2>&1 && [ "$RUNNER_OS" = Linux ]; then sudo apt-get update -q && sudo apt-get install -y -q jq; fi
+          echo "---"; bash --version | head -1; python3 --version
+          if [ "$RUNNER_OS" = macOS ]; then /bin/bash --version | head -1; /usr/bin/python3 --version; fi
+
+      - name: run every suite
+        run: tests/run-suites.sh ${{ matrix.args }} --logs "$RUNNER_TEMP/suite-logs"
+
+      - name: keep the suite logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suite-logs-${{ matrix.os }}-${{ matrix.toolchain }}
+          path: ${{ runner.temp }}/suite-logs
+          if-no-files-found: ignore
+          retention-days: 14
