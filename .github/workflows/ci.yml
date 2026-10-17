@@ -74,16 +74,22 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: the tools the engine and the suites expect on PATH
+        # pandoc is the one optional engine dependency the suites use for real (the .md file capture, the
+        # defuddle → pandoc fallback, the converter fixtures); the runner images do not ship it. The rest
+        # is stubbed or present (jq, shasum, pgrep, git, python3).
         run: |
           set -eu
-          if ! command -v jq >/dev/null 2>&1 && [ "$RUNNER_OS" = Linux ]; then
-            sudo apt-get update -q && sudo apt-get install -y -q jq || { echo "jq install failed"; exit 1; }
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q pandoc jq || { echo "apt-get install pandoc jq failed"; exit 1; }
+          else
+            brew list --versions pandoc >/dev/null 2>&1 || brew install -q pandoc || { echo "brew install pandoc failed"; exit 1; }
           fi
           missing=0
-          for t in git bash python3 jq shasum pgrep; do
+          for t in git bash python3 jq shasum pgrep pandoc; do
             if command -v "$t" >/dev/null 2>&1; then printf '%-8s %s\n' "$t" "$(command -v "$t")"; else echo "MISSING: $t"; missing=1; fi
           done
-          echo "---"; bash --version | head -1; python3 --version
+          echo "---"; bash --version | head -1; python3 --version; pandoc --version | head -1
           if [ "$RUNNER_OS" = macOS ]; then /bin/bash --version | head -1; /usr/bin/python3 --version; fi
           [ "$missing" -eq 0 ] || { echo "a required tool is missing — the suites would fail on it"; exit 1; }
 
