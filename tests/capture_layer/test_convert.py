@@ -499,28 +499,29 @@ class CaptureTextCLI(unittest.TestCase):
         raw = os.path.join(self.dir, "raw.html")
         shutil.copy(os.path.join(HTML_FIX, "cookie.html"), raw)
         out, rep = os.path.join(self.dir, "orphan3.md"), os.path.join(self.dir, "orphan3.json")
-        env = clean_env({"MNEMON_TEST_CONVERT_HANG": "sleep", "MNEMON_TEST_WORKER_START_DELAY": "1.5"})
+        mark = os.path.join(self.dir, "worker-started")
+        env = clean_env({"MNEMON_TEST_CONVERT_HANG": "sleep", "MNEMON_TEST_WORKER_START_DELAY": "4",
+                         "MNEMON_TEST_WORKER_START_FILE": mark})
         sup = subprocess.Popen([PY, CT, raw, "--url", "https://example.com/orphan3", "--out", out, "--report", rep,
                                 "--raw-kind", "rendered", "--timeout", "120"], env=env,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         worker_pid = None
         try:
-            end = time.monotonic() + 15
-            while worker_pid is None and time.monotonic() < end:
-                ps = subprocess.run(["pgrep", "-f", "capture-text.py --_worker %s" % raw], capture_output=True)
-                pids = [int(p) for p in ps.stdout.split()]
-                if pids:
-                    worker_pid = pids[0]
-                else:
-                    time.sleep(0.05)
-            self.assertIsNotNone(worker_pid, "the worker did not start")
-            killed_at = time.monotonic()
+            # the handshake: the worker touches the mark file, then sleeps 4 s before looking at its parent —
+            # a kill after the mark lands inside that window whatever the scheduler does (no timing assumed)
+            end = time.monotonic() + 30
+            while not os.path.exists(mark) and time.monotonic() < end:
+                time.sleep(0.02)
+            self.assertTrue(os.path.exists(mark), "the worker did not reach its start delay")
+            ps = subprocess.run(["pgrep", "-f", "capture-text.py --_worker %s" % raw], capture_output=True)
+            pids = [int(p) for p in ps.stdout.split()]
+            self.assertTrue(pids, "the worker is not visible to pgrep")
+            worker_pid = pids[0]
             os.kill(sup.pid, signal.SIGKILL)        # inside the worker's start delay: it has not looked yet
             sup.wait(timeout=5)
-            bound = 10.0 if os.environ.get("CI") else 4.0
+            bound = 15.0 if os.environ.get("CI") else 8.0     # the 4 s delay plus the immediate check
             self.assertTrue(wait_gone(worker_pid, bound),
                             "a worker whose supervisor died before it looked outlived it by more than %g s" % bound)
-            self.assertGreater(time.monotonic() - killed_at, 0.5, "the kill landed inside the start delay (sanity)")
             self.assertFalse(os.path.exists(out))
         finally:
             if worker_pid is not None and pid_alive(worker_pid):
@@ -550,6 +551,18 @@ class CaptureTextCLI(unittest.TestCase):
         self.assertFalse(os.path.exists(out), "...and converts nothing")
         r = subprocess.run(base + ["--_parent", str(os.getpid())], env=clean_env(), capture_output=True, timeout=120)
         self.assertEqual(r.returncode, 0, "with the real parent's pid the worker converts: %s" % r.stderr.decode("utf-8", "replace")[-300:])
+        self.assertTrue(os.path.exists(out))
+
+    def test_the_supervisor_forwards_an_end_of_options_marker(self):
+        """`capture-text.py --url … -- <raw>` is a valid call (the marker ends the options); the supervisor's
+        internal `--_parent` must land before the marker, or the worker reads it as two positionals (exit 2)."""
+        raw = os.path.join(self.dir, "raw.html")
+        shutil.copy(os.path.join(HTML_FIX, "cookie.html"), raw)
+        out, rep = os.path.join(self.dir, "dashdash.md"), os.path.join(self.dir, "dashdash.json")
+        r = subprocess.run([PY, CT, "--url", "https://example.com/dashdash", "--out", out, "--report", rep,
+                            "--raw-kind", "rendered", "--timeout", "120", "--", raw],
+                           env=clean_env(), capture_output=True, timeout=120)
+        self.assertEqual(r.returncode, 0, "the worker converted: %s" % r.stderr.decode("utf-8", "replace")[-300:])
         self.assertTrue(os.path.exists(out))
 
     def test_bounded_markdown_regexes_are_linear(self):

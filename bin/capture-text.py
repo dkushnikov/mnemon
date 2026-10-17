@@ -34,7 +34,8 @@ Test hook (honoured only under MNEMON_TEST_HOOKS=1): MNEMON_TEST_CONVERT_HANG=1 
 C code that no signal handler interrupts, the shape of a quadratic scan — the proof that the supervisor's
 kill, not the worker's cooperation, ends the conversion; MNEMON_TEST_CONVERT_HANG=sleep makes it wait in
 interruptible python code instead — the proof of the parent watch; MNEMON_TEST_WORKER_START_DELAY=<s> delays the
-worker's start so a test can kill the supervisor before the worker has looked at its parent. Stdlib only, python 3.9.
+worker's start (MNEMON_TEST_WORKER_START_FILE=<path> is touched first — the handshake) so a test can kill the
+supervisor while the worker has not yet looked at its parent. Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
@@ -54,9 +55,14 @@ EXIT_TIMEOUT = 124
 def worker(args) -> int:
     """The conversion itself, in the child process."""
     # test hook: a slow start, so a test can kill the supervisor before the worker has looked at its parent
-    # (the race a loaded runner produces on its own)
+    # (the race a loaded runner produces on its own); MNEMON_TEST_WORKER_START_FILE is touched first, the
+    # handshake that tells the test the worker is now inside its delay
     start_delay = policymod.hook("MNEMON_TEST_WORKER_START_DELAY")
     if start_delay:
+        mark = policymod.hook("MNEMON_TEST_WORKER_START_FILE")
+        if mark:
+            with open(mark, "w"):
+                pass
         time.sleep(float(start_delay))
     proc.watch_parent(parent_pid=args.parent_pid)   # a SIGKILLed supervisor leaves no worker behind
     deadline = proc.Deadline(args.timeout)
@@ -136,8 +142,17 @@ def supervise(args) -> int:
     """Run the conversion in a worker process under the deadline; kill the group on expiry (G25)."""
     timeout = float(args.timeout)
     # --_parent: the supervisor's pid, so the worker's parent watch compares against the real supervisor
-    # from its first instant (appended last: the `capture-text.py --_worker <raw>` shape stays greppable)
-    argv = [sys.executable, os.path.abspath(__file__), "--_worker"] + sys.argv[1:] + ["--_parent", str(os.getpid())]
+    # from its first instant. Appended after the user arguments — the `capture-text.py --_worker <raw>`
+    # shape stays greppable — but before a `--` end-of-options marker, which argparse would otherwise
+    # make swallow the option as positionals
+    user_args = sys.argv[1:]
+    parent = ["--_parent", str(os.getpid())]
+    if "--" in user_args:
+        i = user_args.index("--")
+        user_args = user_args[:i] + parent + user_args[i:]
+    else:
+        user_args = user_args + parent
+    argv = [sys.executable, os.path.abspath(__file__), "--_worker"] + user_args
     res = proc.run(argv, timeout=timeout, deadline=proc.Deadline(timeout))
     if res.stdout:
         sys.stdout.buffer.write(res.stdout)
