@@ -71,9 +71,10 @@ Commands:
                              Resolved configuration (keys: the scalar keys and defaults)
   release [--dry-run] [--now] [--drain-timeout <s>] [--rollback <ref>]
                              Maintainer: promote main → release → installed engine
-                             (lock → drain → ff-merge → smoke → push); --rollback resets
-                             the engine to <ref> under the same lock
-  version                    Engine version, branch, commit and root
+                             (lock → drain → ff-merge → smoke → tag release/YYYY-MM-DD[-n]
+                             → push the branch and the tag together); --rollback resets the
+                             engine to <ref> — a commit or a release tag — under the same lock
+  version                    Engine version (the nearest release tag), branch, commit and root
   help                       This text
   scan | monitor             Reserved (program phase 4)
 
@@ -1332,6 +1333,25 @@ _release_smoke() {
   $ok
 }
 
+# The name of a release: release/YYYY-MM-DD (the maintainer's local date), -2, -3… for further
+# releases on the same day — the suffix rule of revision folders. Tags are repository-wide (the
+# dev tree and the engine worktree share one object store), so one lookup sees them all.
+_release_tag_name() {   # <repo dir> → the next free release/<today>[-n]
+  local day base name n=2
+  day="$(date +%Y-%m-%d)"
+  base="release/$day"; name="$base"
+  while git -C "$1" rev-parse -q --verify "refs/tags/$name^{commit}" >/dev/null 2>&1; do
+    name="$base-$n"; n=$((n + 1))
+  done
+  printf '%s' "$name"
+}
+
+# The release tag pointing at a commit (the last one when several do), else nothing — the name
+# a rollback hint uses instead of a bare sha.
+_release_tag_of() {   # <repo dir> <commit>
+  git -C "$1" tag -l 'release/*' --points-at "$2" 2>/dev/null | tail -1
+}
+
 cmd_release() {
   local dry=false now=false rollback="" drain_timeout=120
   while [[ $# -gt 0 ]]; do
@@ -1384,7 +1404,11 @@ cmd_release() {
   else
     target_sha="$main_sha"
   fi
-  local rollback_cmds="  mnemon release --rollback $prev
+  # the rollback hint names the previous release by its tag when it has one
+  local prev_tag tag_next
+  prev_tag="$(_release_tag_of "$home" "$prev")"
+  tag_next="$(_release_tag_name "$home")"
+  local rollback_cmds="  mnemon release --rollback ${prev_tag:-$prev}${prev_tag:+   (= $prev)}
     = git -C $home reset --hard $prev
       git -C $home push --force-with-lease origin release   (only if origin/release had already moved)"
 
@@ -1411,8 +1435,9 @@ cmd_release() {
       echo "  3. fetch:  git -C $MNEMON_ROOT fetch origin   (a warning when offline)"
       echo "  4. merge:  git -C $home merge --ff-only main   ($prev → $main_sha)"
       echo "  5. smoke:  $home/bin/mnemon config path · $home/bin/mnemon version (reports $main_sha) · bash $home/tests/test_config.sh · $home/bin/mnemon doctor (exit 0, or 1 with no fail other than deps/qmd/writer)"
-      echo "  6. push:   git -C $home push origin release   (only after a green smoke)"
-      if $now; then echo "  7. ping:   node ping not implemented (program phase 4)"; fi
+      echo "  6. tag:    git -C $home tag -a $tag_next -m 'mnemon release $tag_next' $main_sha   (only after a green smoke)"
+      echo "  7. push:   git -C $home push --atomic origin release refs/tags/$tag_next   (the branch and the tag together)"
+      if $now; then echo "  8. ping:   node ping not implemented (program phase 4)"; fi
       echo "  unlock:    rm $lock"
       echo "  rollback:"
       echo "$rollback_cmds"
@@ -1438,7 +1463,7 @@ cmd_release() {
 
   # --- rollback: reset under the lock, print the push ---
   if [[ -n "$rollback" ]]; then
-    echo "release: rollback $home  $prev → $target_sha"
+    echo "release: rollback $home  $prev → $target_sha (ref $rollback)"
     git -C "$home" reset --hard "$rollback"
     echo "rolled back $home to $(git -C "$home" rev-parse --short HEAD); origin/release was not touched — publish the rollback by hand if it had been pushed:"
     echo "  git -C $home push --force-with-lease origin release"
@@ -1462,18 +1487,32 @@ cmd_release() {
     } >&2
     exit 1
   fi
-  # --- 6. push: the local release stands either way, but nodes pull origin/release ---
-  local new_sha
+  # --- 6. tag: the release's name, annotated, on the released commit (the name is chosen now,
+  #        after the smoke — a release that fails its smoke leaves no tag) ---
+  local new_sha tag
   new_sha="$(git -C "$home" rev-parse --short HEAD)"
-  if ! git -C "$home" push origin release >/dev/null 2>&1; then
+  tag="$(_release_tag_name "$home")"
+  if ! git -C "$home" tag -a "$tag" -m "mnemon release $tag: $prev → $new_sha" "$new_sha" >/dev/null 2>&1; then
+    {
+      echo "mnemon release: could not create the tag $tag on $new_sha — nothing was pushed; the engine stands at $new_sha"
+      echo "  create it by hand and push both: git -C $home tag -a $tag -m 'mnemon release $tag' $new_sha && git -C $home push --atomic origin release refs/tags/$tag"
+      echo "  or roll back with:"
+      echo "$rollback_cmds"
+    } >&2
+    exit 1
+  fi
+  echo "release: tag $tag → $new_sha"
+  # --- 7. push: the branch and the tag together (--atomic: both move or neither); the local
+  #        release stands either way, but nodes pull origin/release ---
+  if ! git -C "$home" push --atomic origin release "refs/tags/$tag" >/dev/null 2>&1; then
     {
       echo "mnemon release: released locally to $home, push failed: nodes will not see $new_sha"
-      echo "  origin/release did not move (offline? no access?) — push by hand before nodes pull: git -C $home push origin release"
+      echo "  origin/release and the tag $tag did not move (offline? no access?) — push by hand before nodes pull: git -C $home push --atomic origin release refs/tags/$tag"
     } >&2
     exit 3
   fi
   if $now; then echo "node ping not implemented (program phase 4)"; fi
-  echo "released $new_sha → $home"
+  echo "released $new_sha → $home ($tag)"
 }
 
 # ---------------------------------------------------------------------------
@@ -1483,7 +1522,10 @@ cmd_release() {
 cmd_version() {
   local desc branch sha
   if git -C "$MNEMON_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    desc="$(git -C "$MNEMON_ROOT" describe --tags --always --dirty 2>/dev/null || echo unknown)"
+    # the nearest release tag (release/YYYY-MM-DD[-n], written by `mnemon release`), else the
+    # older v* tags, else the commit — `release/2026-10-17` on a released engine,
+    # `release/2026-10-17-3-g<sha>` three commits past it, `<sha>` before the first release tag
+    desc="$(git -C "$MNEMON_ROOT" describe --tags --always --dirty --match 'release/*' --match 'v*' 2>/dev/null || echo unknown)"
     branch="$(git -C "$MNEMON_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
     sha="$(git -C "$MNEMON_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   else

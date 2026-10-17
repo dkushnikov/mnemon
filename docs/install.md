@@ -151,9 +151,10 @@ git -C ~/Code/mnemon switch -c feat/p1-<slug>         # branch from main
 Branch model: `feat/p<N>-<slug>` → PR → `main` → `mnemon release`. Run it from the dev tree (`~/Code/mnemon/bin/mnemon release`, or `mnemon release` when `~/.local/bin/mnemon` points at a dev checkout) with `MNEMON_HOME` set to the installed engine worktree on branch `release`; it refuses to run from the installed engine itself.
 
 ```bash
-mnemon release --dry-run                 # print every step with real paths and shas; nothing changes
-mnemon release [--drain-timeout <s>]     # tree checks → lock → drain → ff-merge main into release → smoke → push origin release
-mnemon release --rollback <ref>          # reset the engine worktree to <ref> under the same lock + drain
+mnemon release --dry-run                 # print every step with real paths, shas and the tag it would create; nothing changes
+mnemon release [--drain-timeout <s>]     # tree checks → lock → drain → ff-merge main into release → smoke → tag → push branch + tag
+mnemon release --rollback <ref>          # reset the engine worktree to <ref> — a commit or a release tag — under the same lock + drain
+mnemon version                           # release/2026-10-17 (release, 394da7b) ~/.local/share/mnemon/engine — the nearest release tag
 ```
 
 What a release does, in order:
@@ -164,9 +165,12 @@ What a release does, in order:
 3. **Fetch** — `git fetch origin` (a warning when offline; the merge reads local branches).
 4. **Fast-forward** — `git -C "$MNEMON_HOME" merge --ff-only main`: the `release` branch and the engine worktree move together; `release` never carries commits that are not on `main`.
 5. **Smoke on the updated worktree** — engine health only: `mnemon config path` resolves, `mnemon version` reports the new commit, `tests/test_config.sh` passes, and `mnemon doctor` exits 0, or exits 1 with no `fail` line other than `deps`, `qmd` or `writer` (a maintainer laptop that is a reader of the default instance, or lacks an optional tool, can still release). Any other doctor exit — a crash, a usage error, a missing binary — fails the smoke whatever the output says. A failing smoke never publishes: the release exits 1, nothing is pushed, and it prints the rollback — `mnemon release --rollback <previous sha>`, which is `git -C "$MNEMON_HOME" reset --hard <previous sha>` plus, only if `origin/release` had already moved, `git -C "$MNEMON_HOME" push --force-with-lease origin release`.
-6. **Push** — `git -C "$MNEMON_HOME" push origin release`, only after a green smoke. A failed push (offline, no access) exits **3** with `released locally to <engine>, push failed: nodes will not see <sha>`: the local engine stays on the new commit and `origin/release` has not moved — push by hand before nodes pull.
-7. `--now` prints `node ping not implemented (program phase 4)` — nodes still pull by hand or from a job: `git -C ~/.local/share/mnemon/engine pull --ff-only`.
+6. **Tag** — an annotated tag `release/YYYY-MM-DD` (the maintainer's local date; `-2`, `-3`… for further releases on the same day) on the released commit, created only after a green smoke: a release that fails its smoke leaves no tag. The tag is the release's name — `mnemon version` reports the nearest one (`release/2026-10-17` on a released engine, `release/2026-10-17-3-g<sha>` three commits past it, the bare commit before the first release tag), `--rollback` accepts it, and a failing smoke's rollback hint names the previous release by it.
+7. **Push** — `git -C "$MNEMON_HOME" push --atomic origin release refs/tags/<tag>`: the branch and the tag move together or not at all, only after a green smoke. A failed push (offline, no access) exits **3** with `released locally to <engine>, push failed: nodes will not see <sha>`: the local engine stays on the new commit and neither `origin/release` nor the tag has moved — push both by hand before nodes pull (the command is printed).
+8. `--now` prints `node ping not implemented (program phase 4)` — nodes still pull by hand or from a job: `git -C ~/.local/share/mnemon/engine pull --ff-only` (tags on the fetched commits come along).
 
-`--rollback <ref>` skips the tree checks (a rollback must work from any dev tree), runs steps 1–2, then `git -C "$MNEMON_HOME" reset --hard <ref>` and prints (does not run) the `push --force-with-lease` that publishes the rollback.
+`--rollback <ref>` skips the tree checks (a rollback must work from any dev tree), runs steps 1–2, then `git -C "$MNEMON_HOME" reset --hard <ref>` and prints (does not run) the `push --force-with-lease` that publishes the rollback. `<ref>` is any commit-ish — a sha or a release tag (`mnemon release --rollback release/2026-10-16`). A rollback creates no tag and deletes none: the tags stay the record of what was released when.
+
+Releases made before the tags existed can be named after the fact with `git tag -a release/<date>[-n] -m 'mnemon release …' <sha>` from the dev tree and `git push origin --tags`; `mnemon version` picks them up at once.
 
 **First release ever.** The worktree recipes above assume `origin` already has a `release` branch. Create it once from the dev tree: `git -C ~/Code/mnemon branch release main && git -C ~/Code/mnemon push -u origin release`, then add the worktree.

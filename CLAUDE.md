@@ -57,9 +57,9 @@ tests/run-suites.sh --both
 
 1. Branch from `main`: `feat/p<N>-<slug>` (phase N of the program), or `fix/…`, `docs/…`.
 2. Open a PR, review, merge into `main`.
-3. `mnemon release` (from the dev tree) takes the engine maintenance lock — other engine commands exit 75 meanwhile — drains running engine processes, fast-forwards `main` → `release` so the engine worktree at `$MNEMON_HOME` follows, smokes the updated worktree (engine health only) and pushes `origin/release` only when the smoke is green; `mnemon release --rollback <ref>` is the way back.
+3. `mnemon release` (from the dev tree) takes the engine maintenance lock — other engine commands exit 75 meanwhile — drains running engine processes, fast-forwards `main` → `release` so the engine worktree at `$MNEMON_HOME` follows, smokes the updated worktree (engine health only), and only when the smoke is green tags the released commit `release/YYYY-MM-DD[-n]` (annotated; `-2`, `-3`… on the same day) and pushes `origin/release` and the tag together (`--atomic`); `mnemon version` reports the nearest release tag; `mnemon release --rollback <ref>` — a sha or a release tag — is the way back.
 
-Never commit to `release` directly; never force-push `main`. `release` moves only through `mnemon release` (a fast-forward of `main`) and `mnemon release --rollback <ref>`, which prints — never runs — the `git push --force-with-lease origin release` that publishes a rollback. Conventional commit prefixes (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`) — `git log --oneline` is the audit trail.
+Never commit to `release` directly; never force-push `main`. `release` moves only through `mnemon release` (a fast-forward of `main`) and `mnemon release --rollback <ref>`, which prints — never runs — the `git push --force-with-lease origin release` that publishes a rollback. Release tags are written by `mnemon release` only (a failed smoke leaves none) and never deleted. Conventional commit prefixes (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`) — `git log --oneline` is the audit trail.
 
 ### Dev vs installed
 

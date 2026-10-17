@@ -838,10 +838,14 @@ assert_contains "$out" "2. drain:  wait up to 120s for processes matching: pgrep
 assert_contains "$out" "git -C $RWT merge --ff-only main" "dry-run prints the ff-merge step with real paths"
 assert_contains "$out" "$RWT/bin/mnemon doctor" "dry-run prints the smoke step"
 assert_contains "$out" "$RWT/bin/mnemon version (reports $(git -C "$REPO" rev-parse --short main))" "dry-run names the commit the smoke expects"
-assert_contains "$out" "6. push:   git -C $RWT push origin release   (only after a green smoke)" "dry-run prints the push step after the smoke"
+TODAY_TAG="release/$(date +%Y-%m-%d)"
+assert_contains "$out" "6. tag:    git -C $RWT tag -a $TODAY_TAG -m 'mnemon release $TODAY_TAG' $(git -C "$REPO" rev-parse --short main)   (only after a green smoke)" "dry-run prints the tag step with today's release name, after the smoke"
+assert_contains "$out" "7. push:   git -C $RWT push --atomic origin release refs/tags/$TODAY_TAG   (the branch and the tag together)" "dry-run prints the push of the branch and the tag together"
 smoke_at=$(printf '%s\n' "$out" | grep -n ' smoke:' | head -1 | cut -d: -f1)
+tag_at=$(printf '%s\n' "$out" | grep -n ' tag:' | head -1 | cut -d: -f1)
 push_at=$(printf '%s\n' "$out" | grep -n ' push:' | head -1 | cut -d: -f1)
-[[ -n "$smoke_at" && -n "$push_at" && "$smoke_at" -lt "$push_at" ]] && pass "dry-run orders smoke before push" || fail "dry-run orders smoke before push" "smoke line $smoke_at, push line $push_at"
+[[ -n "$smoke_at" && -n "$tag_at" && -n "$push_at" && "$smoke_at" -lt "$tag_at" && "$tag_at" -lt "$push_at" ]] && pass "dry-run orders smoke before tag before push" || fail "dry-run orders smoke before tag before push" "smoke line $smoke_at, tag line $tag_at, push line $push_at"
+assert_eq "$(git -C "$REPO" tag -l 'release/*' | wc -l | tr -d ' ')" "0" "dry-run creates no tag"
 # G3: the tree checks (dirty dev tree, release ⊂ main) need no lock — they are
 # listed, and run, before the lock and the drain
 check_at=$(printf '%s\n' "$out" | grep -n ' check: ' | head -1 | cut -d: -f1)
@@ -927,6 +931,23 @@ assert_not_contains "$out" "warn engine-lock" "release smoke: no warn engine-loc
 assert_contains "$out" "Results: " "release smoke ran test_config.sh"
 assert_contains "$out" "release: lock removed ($LOCK)" "release removes the lock last"
 [[ -e "$LOCK" ]] && fail "lock removed after a successful release" "lock exists" || pass "lock removed after a successful release"
+# the release tag: release/<today>, annotated, on the released commit, pushed with the branch
+REL1_SHORT="$(git -C "$REPO" rev-parse --short main)"
+assert_eq "$(git -C "$REPO" tag -l 'release/*')" "$TODAY_TAG" "release creates the tag release/<today> — and no other"
+assert_eq "$(git -C "$REPO" cat-file -t "$TODAY_TAG")" "tag" "...annotated"
+assert_eq "$(git -C "$REPO" rev-parse "$TODAY_TAG^{commit}")" "$(git -C "$REPO" rev-parse main)" "...on the released commit"
+assert_contains "$(git -C "$REPO" tag -l -n1 "$TODAY_TAG")" "mnemon release $TODAY_TAG: " "...with the release message"
+assert_eq "$(git -C "$ORIGIN" rev-parse "refs/tags/$TODAY_TAG^{commit}")" "$(git -C "$REPO" rev-parse main)" "...pushed to origin with the branch"
+assert_contains "$out" "release: tag $TODAY_TAG → $REL1_SHORT" "release prints the tag it created"
+assert_contains "$out" "released $REL1_SHORT → $RWT ($TODAY_TAG)" "...and names it in the last line"
+tag_line=$(printf '%s\n' "$out" | grep -n '^release: tag ' | head -1 | cut -d: -f1)
+smoke_line=$(printf '%s\n' "$out" | grep -n '^release: smoke — ' | tail -1 | cut -d: -f1)
+[[ -n "$tag_line" && -n "$smoke_line" && "$smoke_line" -lt "$tag_line" ]] && pass "the tag is created after the smoke" || fail "the tag is created after the smoke" "smoke line $smoke_line, tag line $tag_line"
+run env MNEMON_HOME="$RWT" "$RWT/bin/mnemon" version
+assert_eq "$rc" "0" "mnemon version on the released engine exits 0"
+assert_contains "$out" "mnemon $TODAY_TAG (release, $REL1_SHORT) $RWT" "mnemon version shows the release tag, the branch and the commit"
+run "$REPO/bin/mnemon" version
+assert_contains "$out" "mnemon $TODAY_TAG (main, $REL1_SHORT) $REPO" "the dev tree at the same commit shows the same tag"
 
 # a failing smoke never publishes: nothing pushed, rollback printed, lock removed
 PREV_REL=$(git -C "$RWT" rev-parse --short HEAD)
@@ -938,11 +959,14 @@ run env MNEMON_TEST_HOOKS=1 MNEMON_SMOKE_CMD=false MNEMON_HOME="$RWT" "$REPO/bin
 assert_eq "$rc" "1" "a failing smoke fails the release"
 assert_contains "$out" "MNEMON_SMOKE_CMD override (MNEMON_TEST_HOOKS=1): false" "the smoke override is honoured with MNEMON_TEST_HOOKS=1"
 assert_contains "$out" "smoke failed on $RWT @ $NEW_MAIN. Nothing was pushed" "smoke failure says nothing was pushed"
-assert_contains "$out" "mnemon release --rollback $PREV_REL" "smoke failure prints the rollback command"
+assert_contains "$out" "mnemon release --rollback $TODAY_TAG   (= $PREV_REL)" "smoke failure prints the rollback command, naming the previous release by its tag"
 assert_contains "$out" "git -C $RWT reset --hard $PREV_REL" "smoke failure prints the reset"
 assert_contains "$out" "git -C $RWT push --force-with-lease origin release" "smoke failure prints the force-with-lease push"
 assert_eq "$(git -C "$ORIGIN" rev-parse release)" "$PREV_FULL" "a failing smoke does not move origin/release"
 assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$(git -C "$REPO" rev-parse main)" "the worktree stays at the new commit until an explicit rollback"
+assert_eq "$(git -C "$REPO" tag -l 'release/*')" "$TODAY_TAG" "a failing smoke creates no tag"
+run env MNEMON_HOME="$RWT" "$RWT/bin/mnemon" version
+assert_contains "$out" "mnemon $TODAY_TAG-1-g$NEW_MAIN (release, $NEW_MAIN) $RWT" "mnemon version past a release tag: the tag, the distance and the commit"
 [[ -e "$LOCK" ]] && fail "lock removed after a failed smoke" "lock exists" || pass "lock removed after a failed smoke"
 
 # --rollback <ref>: reset under the lock, print (not run) the force-with-lease push
@@ -958,6 +982,17 @@ assert_eq "$rc" "1" "--rollback with an unknown ref fails"
 assert_contains "$out" "unknown ref 'nosuchref'" "...and names it"
 run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --rollback "$PREV_REL" --dry-run
 assert_contains "$out" "3. reset:  git -C $RWT reset --hard $PREV_REL" "--rollback --dry-run prints the reset step"
+
+# --rollback <tag>: a release tag is a ref like any other
+git -C "$RWT" merge -q --ff-only main
+assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$(git -C "$REPO" rev-parse main)" "fixture: the engine worktree moved forward again"
+run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --rollback "$TODAY_TAG"
+assert_eq "$rc" "0" "release --rollback <release tag> exits 0"
+assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$PREV_FULL" "--rollback by tag resets the engine worktree to the tagged commit"
+assert_contains "$out" "release: rollback $RWT  $NEW_MAIN → $PREV_REL (ref $TODAY_TAG)" "--rollback names the ref it was given"
+run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --rollback "$TODAY_TAG" --dry-run
+assert_contains "$out" "3. reset:  git -C $RWT reset --hard $TODAY_TAG" "--rollback <tag> --dry-run prints the reset with the tag"
+assert_eq "$(git -C "$REPO" tag -l 'release/*')" "$TODAY_TAG" "a rollback creates no tag and deletes none"
 
 # drain: an engine process still running from $MNEMON_HOME/bin/ blocks the release until --drain-timeout
 printf '#!/bin/sh\nsleep 3\n' > "$RWT/bin/busy.sh"
@@ -1047,13 +1082,22 @@ g "$REPO" checkout -q -- tests/test-helper.sh
 rm -f "$RWT/bin/busy.sh" "$TEST_TMPDIR/eng.ine"
 
 # with the engine idle again, the pending main commit releases cleanly; a stray
-# MNEMON_SMOKE_CMD without MNEMON_TEST_HOOKS=1 is ignored (F5), the real smoke runs
+# MNEMON_SMOKE_CMD without MNEMON_TEST_HOOKS=1 is ignored (F5), the real smoke runs.
+# It is the second release of the day: the tag is release/<today>-2
+run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --dry-run
+assert_contains "$out" "6. tag:    git -C $RWT tag -a $TODAY_TAG-2 -m 'mnemon release $TODAY_TAG-2' $NEW_MAIN" "dry-run names the next free tag: -2 on a day that already has a release"
 run env PATH="$STUBBIN:$PATH" MNEMON_SMOKE_CMD=false MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
 assert_eq "$rc" "0" "release succeeds once the engine is idle (MNEMON_SMOKE_CMD without MNEMON_TEST_HOOKS is ignored)"
 assert_contains "$out" "ignoring MNEMON_SMOKE_CMD" "...with a one-line notice"
 assert_contains "$out" "release: smoke — $RWT/bin/mnemon config path" "...and the real smoke ran"
 assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$(git -C "$REPO" rev-parse main)" "release worktree at the new main"
 assert_eq "$(git -C "$ORIGIN" rev-parse release)" "$(git -C "$REPO" rev-parse main)" "origin/release pushed after the green smoke"
+assert_eq "$(git -C "$REPO" tag -l 'release/*' | sort)" "$(printf '%s\n%s' "$TODAY_TAG" "$TODAY_TAG-2")" "the second release of the day is tagged release/<today>-2 beside release/<today>"
+assert_eq "$(git -C "$REPO" rev-parse "$TODAY_TAG-2^{commit}")" "$(git -C "$REPO" rev-parse main)" "...on the released commit"
+assert_eq "$(git -C "$ORIGIN" rev-parse "refs/tags/$TODAY_TAG-2^{commit}")" "$(git -C "$REPO" rev-parse main)" "...pushed with the branch"
+assert_contains "$out" "released $NEW_MAIN → $RWT ($TODAY_TAG-2)" "...and the last line names the -2 tag"
+run env MNEMON_HOME="$RWT" "$RWT/bin/mnemon" version
+assert_contains "$out" "mnemon $TODAY_TAG-2 (release, $NEW_MAIN) $RWT" "mnemon version shows the -2 tag"
 
 # F5: a failed push is not a warning — the local release stands but nodes will not see it: exit 3
 printf '# third change\n' >> "$REPO/tests/test-helper.sh"
@@ -1064,10 +1108,12 @@ git -C "$REPO" remote set-url origin "$TEST_TMPDIR/no-such-origin.git"
 run env PATH="$STUBBIN:$PATH" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
 assert_eq "$rc" "3" "a failed push exits 3"
 assert_contains "$out" "released locally to $RWT, push failed: nodes will not see $THIRD_MAIN" "push failure names the engine and the sha nodes will miss"
-assert_contains "$out" "git -C $RWT push origin release" "push failure prints the push to retry by hand"
+assert_contains "$out" "git -C $RWT push --atomic origin release refs/tags/$TODAY_TAG-3" "push failure prints the push of the branch and the tag to retry by hand"
 assert_not_contains "$out" "released $THIRD_MAIN →" "push failure does not claim a release"
 assert_eq "$(git -C "$RWT" rev-parse HEAD)" "$(git -C "$REPO" rev-parse main)" "the local release stays after a failed push"
 assert_eq "$(git -C "$ORIGIN" rev-parse release)" "$BEFORE_PUSH" "origin/release did not move"
+assert_eq "$(git -C "$REPO" rev-parse "$TODAY_TAG-3^{commit}")" "$(git -C "$REPO" rev-parse main)" "the tag of the local release exists (it stands with the local release)"
+assert_eq "$(git -C "$ORIGIN" rev-parse -q --verify "refs/tags/$TODAY_TAG-3" 2>/dev/null || echo none)" "none" "...and did not reach origin (atomic push: neither the branch nor the tag)"
 [[ -e "$LOCK" ]] && fail "lock removed after a failed push" "lock exists" || pass "lock removed after a failed push"
 git -C "$REPO" remote set-url origin "$ORIGIN"
 
@@ -1090,7 +1136,8 @@ assert_eq "$rc" "1" "a crashing doctor (exit 9) fails the smoke"
 assert_contains "$out" "doctor: simulated crash" "the smoke shows doctor's output"
 assert_contains "$out" "doctor exited 9" "...and names the unexpected exit code"
 assert_contains "$out" "smoke failed on $RWT @ $CRASH_MAIN. Nothing was pushed" "a crashing doctor publishes nothing"
-assert_contains "$out" "mnemon release --rollback $THIRD_REL" "...and prints the rollback"
+assert_contains "$out" "mnemon release --rollback $TODAY_TAG-3   (= $THIRD_REL)" "...and prints the rollback, naming the previous release by its (local) tag"
+assert_eq "$(git -C "$REPO" tag -l 'release/*' | wc -l | tr -d ' ')" "3" "a crashing doctor creates no tag"
 assert_eq "$(git -C "$ORIGIN" rev-parse release)" "$BEFORE_CRASH" "a crashing doctor does not move origin/release"
 [[ -e "$LOCK" ]] && fail "lock removed after a crashing doctor" "lock exists" || pass "lock removed after a crashing doctor"
 run env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --rollback "$THIRD_REL"

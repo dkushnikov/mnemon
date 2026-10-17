@@ -127,7 +127,7 @@ claude plugin marketplace update mnemon && claude plugin update mnemon@mnemon   
 mnemon fence-probe                                                              # after a Claude Code update: the gate is per version
 ```
 
-Maintainers publish with `mnemon release`: under an engine-wide maintenance lock (other engine commands exit 75 with `engine is being updated, retry later` for its duration) it waits for running engine processes to finish, fast-forwards `main` → `release` so the engine worktree follows, runs an engine-health smoke on the updated worktree, and only then pushes `origin/release`; a failing smoke publishes nothing and prints the `mnemon release --rollback <sha>` command (see [`docs/install.md`](docs/install.md)).
+Maintainers publish with `mnemon release`: under an engine-wide maintenance lock (other engine commands exit 75 with `engine is being updated, retry later` for its duration) it waits for running engine processes to finish, fast-forwards `main` → `release` so the engine worktree follows, runs an engine-health smoke on the updated worktree, and only then tags the released commit `release/YYYY-MM-DD[-n]` and pushes `origin/release` and the tag together; a failing smoke publishes nothing and prints the `mnemon release --rollback <tag or sha>` command; `mnemon version` names the nearest release tag (see [`docs/install.md`](docs/install.md)).
 
 ### Plugin moved in-tree
 
