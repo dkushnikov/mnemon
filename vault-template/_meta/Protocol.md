@@ -1,4 +1,4 @@
-<!-- mnemon_guide: 2 -->
+<!-- mnemon_guide: 3 -->
 # Mnemon Vault Protocol
 
 The store mechanics are defined once, in the engine: `$MNEMON_HOME/docs/specs/2026-10-16-vault-store.md` (entities, ownership, state axes, invariants, the data doctor). This file is the short form a session reads; where the two differ, the spec wins. `mnemon doctor --data` executes the invariants named below.

@@ -28,7 +28,10 @@ THIS_HOST="$(hostname -s 2>/dev/null || hostname)"; THIS_HOST="${THIS_HOST%%.*}"
 out=""; err=""; rc=0
 run() { rc=0; out="$("$@" 2>"$TEST_TMPDIR/err")" || rc=$?; err="$(cat "$TEST_TMPDIR/err")"; }
 # doc [args…]: the doctor on $VAULT with the fixed clock and the engine guide pinned at 2
-doc() { run python3 "$DOCTOR" --vault "$VAULT" --today "$TODAY" --guide-version 2 "$@"; }
+# the engine's own Guide version (the stamp of vault-template/CLAUDE.md) — the fixtures are stamped with it, the
+# tool is pinned to it, and the one literal lives in the stamp assertion at the end of this suite
+ENGINE_GUIDE="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import lib_vault; print(lib_vault.engine_guide_version())' "$MNEMON_ROOT/bin")"
+doc() { run python3 "$DOCTOR" --vault "$VAULT" --today "$TODAY" --guide-version "$ENGINE_GUIDE" "$@"; }
 line_of() { printf '%s\n' "$out" | grep -E "^(ok|warn|fail) $1 — " || true; }
 status_of() { line_of "$1" | cut -d' ' -f1; }
 count_status() { printf '%s\n' "$out" | grep -c "^$1 \(store\|data\|human\)/" || true; }   # the 19 checks
@@ -337,7 +340,7 @@ assert_contains "$(line_of store/extract-consistency)" "1 url differ ($M16)" "I1
 assert_contains "$(line_of store/extract-consistency)" "1 without sections ($L4)" "I10: an extract without any of the five sections warns"
 assert_contains "$(line_of store/extract-consistency)" "1 managed without status ($MS)" "I10: a managed extract.md without status is a schema failure"
 assert_eq "$(status_of store/guide-version)" "warn" "I11 warn"
-assert_contains "$(line_of store/guide-version)" "vault CLAUDE.md unstamped, _meta/Protocol.md 1 (behind) (engine guide 2)" "I11: unstamped and behind, against the engine's guide version"
+assert_contains "$(line_of store/guide-version)" "vault CLAUDE.md unstamped, _meta/Protocol.md 1 (behind) (engine guide $ENGINE_GUIDE)" "I11: unstamped and behind, against the engine's guide version"
 assert_eq "$(status_of data/thin)" "warn" "Q1 warn"
 assert_contains "$(line_of data/thin)" "8 current bodies < 300 words (landing/stub 3 · article-short 1 · arxiv-abstract 1 · media 1 · unknown 1 · website/repo/document 1)" "Q1: the suspected classes (unarchivable/stub → arxiv → media → site types → article-short; conflicting → unknown)"
 assert_contains "$(line_of data/thin)" "2 rated ≥ 7 — top: $T1 ★9 200w, $T3 ★7 150w" "Q1: rated ≥ 7 first, by rating then words"
@@ -435,7 +438,7 @@ assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.s
 echo "--- a stalled worker is killed at the deadline: the parent never waits past the budget ---"
 PIDFILE="$TEST_TMPDIR/worker.pid"; rm -f "$PIDFILE"
 t0=$(date +%s)
-rc=0; out="$(MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_STALL=30 MNEMON_TEST_DOCTOR_PIDFILE="$PIDFILE" python3 "$DOCTOR" --vault "$DIRTY" --today "$TODAY" --guide-version 2 --brief --budget 1 2>"$TEST_TMPDIR/err")" || rc=$?
+rc=0; out="$(MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_STALL=30 MNEMON_TEST_DOCTOR_PIDFILE="$PIDFILE" python3 "$DOCTOR" --vault "$DIRTY" --today "$TODAY" --guide-version "$ENGINE_GUIDE" --brief --budget 1 2>"$TEST_TMPDIR/err")" || rc=$?
 t1=$(date +%s)
 assert_eq "$rc" "0" "exit 0 when the worker is killed at the deadline"
 assert_eq "$out" "Dirty · data: not probed (budget 1 s exceeded)" "the line says the budget was exceeded"
@@ -443,15 +446,15 @@ assert_eq "$out" "Dirty · data: not probed (budget 1 s exceeded)" "the line say
 assert_file_exists "$PIDFILE" "the stalled worker wrote its pid (test hook)"
 wpid="$(cat "$PIDFILE" 2>/dev/null || echo 0)"
 if kill -0 "$wpid" 2>/dev/null; then fail "no worker survives the parent" "pid $wpid still alive"; kill -9 "$wpid" 2>/dev/null || true; else pass "no worker survives the parent (pid $wpid is gone)"; fi
-rc=0; out="$(MNEMON_TEST_DOCTOR_STALL=30 python3 "$DOCTOR" --vault "$DIRTY" --today "$TODAY" --guide-version 2 --brief --budget 1 2>/dev/null)" || rc=$?
+rc=0; out="$(MNEMON_TEST_DOCTOR_STALL=30 python3 "$DOCTOR" --vault "$DIRTY" --today "$TODAY" --guide-version "$ENGINE_GUIDE" --brief --budget 1 2>/dev/null)" || rc=$?
 assert_contains "$out" " sources (" "the stall hook is ignored without MNEMON_TEST_HOOKS=1"
 echo "--- an exception inside one check: that check not probed, a fail diagnostic, the other 18 still run ---"
-rc=0; out="$(MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_RAISE=store/index python3 "$DOCTOR" --vault "$DIRTY" --today "$TODAY" --guide-version 2 --archive "$ARCHIVE" --state-dir "$LEDGER" 2>/dev/null)" || rc=$?
+rc=0; out="$(MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_RAISE=store/index python3 "$DOCTOR" --vault "$DIRTY" --today "$TODAY" --guide-version "$ENGINE_GUIDE" --archive "$ARCHIVE" --state-dir "$LEDGER" 2>/dev/null)" || rc=$?
 assert_eq "$rc" "0" "the tool still exits 0 (the dispatcher derives its exit from the fail line)"
 assert_eq "$(line_of store/index)" "warn store/index — not probed: error: RuntimeError: test hook" "the broken check is not probed, with the error as its reason"
 assert_eq "$(line_of doctor/error)" "fail doctor/error — store/index: RuntimeError: test hook" "...and a fail-level error diagnostic names it"
 assert_eq "$((TEXT_OK + TEXT_WARN + TEXT_FAIL))" "$(( $(count_status ok) + $(count_status warn) + $(count_status fail) ))" "still 19 check lines"
-rc=0; out="$(MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_RAISE=store/index python3 "$DOCTOR" --vault "$DIRTY" --today "$TODAY" --guide-version 2 --archive "$ARCHIVE" --state-dir "$LEDGER" --json 2>/dev/null)" || rc=$?
+rc=0; out="$(MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_RAISE=store/index python3 "$DOCTOR" --vault "$DIRTY" --today "$TODAY" --guide-version "$ENGINE_GUIDE" --archive "$ARCHIVE" --state-dir "$LEDGER" --json 2>/dev/null)" || rc=$?
 assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["snapshot"]["complete"], d["summary"]["probed"], d["summary"]["not_probed"], d["summary"]["diagnostics_fail"], [x["code"] for x in d["diagnostics"]])')" "False 18 1 1 ['radius-parse', 'unreadable', 'error']" "--json: snapshot incomplete, 18 probed, the error diagnostic next to the radius and unreadable ones"
 doc --archive "$ARCHIVE" --state-dir "$LEDGER" --brief --json
 assert_contains "$out" '"schema": "mnemon-doctor-data/1"' "--brief --json carries the schema"
@@ -521,8 +524,8 @@ mk_synth "Seed" seed atlas 2026-10-10
 mk_queue inbox 'type: queue' 'since: 2026-10-10'
 printf '# Charter\n\n## Contexts\n\n### personal\n\n## Radius\nseeds: 10 open · 30 days\ndrafts: 5 unratified · 45 days\nqueues: 30 days\n' > "$VAULT/_meta/charter.md"
 printf -- '---\nsynced: 2026-10-10\nstaleness_threshold_days: 14\n---\n# me\n' > "$VAULT/_meta/reader-context.md"
-printf -- '---\nmnemon_guide: 2\n---\n# Vault\n' > "$VAULT/CLAUDE.md"
-printf '<!-- mnemon_guide: 2 -->\n# Protocol\n' > "$VAULT/_meta/Protocol.md"
+printf -- '---\nmnemon_guide: %s\n---\n# Vault\n' "$ENGINE_GUIDE" > "$VAULT/CLAUDE.md"
+printf '<!-- mnemon_guide: %s -->\n# Protocol\n' "$ENGINE_GUIDE" > "$VAULT/_meta/Protocol.md"
 run python3 "$REINDEX" "$VAULT" --no-hand-edit-report
 assert_eq "$rc" "0" "the clean vault's index.md is generated by reindex"
 CLEAN="$VAULT"
@@ -533,7 +536,7 @@ assert_eq "$(count_status warn) $(count_status fail)" "0 0" "no warn, no fail"
 assert_eq "$(line_of store/source-integrity)" "ok store/source-integrity — 3 managed bodies match text_sha256; 0 damaged; 0 legacy headers closed, bodies present, no \`_\` keys" "I1 ok line"
 assert_eq "$(line_of store/index)" "ok store/index — 0 rows differ, 0 missing, 0 extra; no hand-edits report" "I3 ok: the regenerated rows equal reindex's"
 assert_eq "$(line_of store/ledger)" "ok store/ledger — 3 managed revisions, 3 receipts consistent; 0 incomplete" "I7 ok line"
-assert_eq "$(line_of store/guide-version)" "ok store/guide-version — vault CLAUDE.md and _meta/Protocol.md stamped 2 (engine guide 2)" "I11 ok: both copies at the engine's version"
+assert_eq "$(line_of store/guide-version)" "ok store/guide-version — vault CLAUDE.md and _meta/Protocol.md stamped $ENGINE_GUIDE (engine guide $ENGINE_GUIDE)" "I11 ok: both copies at the engine's version"
 assert_eq "$(line_of store/extract-consistency)" "ok store/extract-consistency — 3 extracts have a source; 3 managed pairs agree on capture_id/revision; 0 without sections" "I10 ok line"
 assert_eq "$(line_of data/rating-scale)" "ok data/rating-scale — 0 % of rated current revisions ≥ 7 (0/3, coverage 3/3); threshold 20 %" "Q4 ok line"
 assert_eq "$(line_of human/queues)" "ok human/queues — 1 declared queues, oldest 6 d; untyped 0; pending-writes legacy 0 (radius 30 d)" "H3 ok line"
@@ -841,8 +844,17 @@ assert_eq "$(printf '%s' "$unr_json" | python3 -c 'import json,sys; d=json.load(
 assert_contains "$unr_brief" "(unreadable 1)" "the brief carries the unreadable count"
 
 echo "--- the engine's own guide stamp ---"
-assert_eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import lib_vault; print(lib_vault.engine_guide_version())' "$MNEMON_ROOT/bin")" "2" "vault-template/CLAUDE.md is stamped mnemon_guide: 2"
-assert_eq "$(head -1 "$MNEMON_ROOT/vault-template/_meta/Protocol.md")" "<!-- mnemon_guide: 2 -->" "vault-template/_meta/Protocol.md starts with the stamp comment"
+assert_eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import lib_vault; print(lib_vault.engine_guide_version())' "$MNEMON_ROOT/bin")" "3" "vault-template/CLAUDE.md is stamped mnemon_guide: 3"
+assert_eq "$(head -1 "$MNEMON_ROOT/vault-template/_meta/Protocol.md")" "<!-- mnemon_guide: 3 -->" "vault-template/_meta/Protocol.md starts with the same stamp"
+# Guide 3 (2026-10-17): the Guide says what _meta/Protocol.md and the spec's §3.2 say — an agent writes
+# Synthesis only on request, as seed/draft marked drafted_by; stable is the owner's; the doors and the radius
+G="$MNEMON_ROOT/vault-template/CLAUDE.md"
+assert_contains "$(cat "$G")" "drafted_by: <agent>" "Guide: agent notes carry drafted_by"
+assert_contains "$(cat "$G")" "\`stable\` is the owner's act" "Guide: stable is the owner's"
+assert_contains "$(cat "$G")" "## Radius" "Guide: names the charter's radius"
+assert_not_contains "$(cat "$G")" "never auto-generated" "Guide: no longer claims Synthesis is never agent-written"
+assert_not_contains "$(cat "$G")" "Only the user creates Synthesis notes" "Guide: no longer contradicts Protocol.md on Synthesis"
+assert_not_contains "$(cat "$G")" "Don't create files outside Sources/ and Synthesis/" "Guide: the doors (_inputs, _meta, Bases) replace the two-folder rule"
 
 chmod 644 "$DIRTY/Sources/$U1/source.md" 2>/dev/null || true
 cd /

@@ -1,6 +1,6 @@
 # Vault store — entities, ownership, states, invariants (2026-10-16)
 
-Status: **proposed** (v1.3 — two external document reviews, then the first live run and two code reviews folded in) · Scope: how a Mnemon vault is modelled as a data store, and the observational data doctor (`mnemon doctor --data`, `mnemon status --brief`) that executes the model's invariants. Builds on [`2026-10-15-capture-contracts.md`](2026-10-15-capture-contracts.md) (persistence and isolation, v4.1) and [`2026-10-15-capture-layer.md`](2026-10-15-capture-layer.md) (capture layer, v2.1). Guide version: **2** (the `mnemon_guide` stamp carried by `vault-template/`).
+Status: **proposed** (v1.3 — two external document reviews, then the first live run and two code reviews folded in) · Scope: how a Mnemon vault is modelled as a data store, and the observational data doctor (`mnemon doctor --data`, `mnemon status --brief`) that executes the model's invariants. Builds on [`2026-10-15-capture-contracts.md`](2026-10-15-capture-contracts.md) (persistence and isolation, v4.1) and [`2026-10-15-capture-layer.md`](2026-10-15-capture-layer.md) (capture layer, v2.1). Guide version: **3** (the `mnemon_guide` stamp carried by `vault-template/`; 3 = the Guide aligned with §3.2 — agent `seed`/`draft` with `drafted_by` on request, doors per D1, the radius — 2026-10-17).
 
 ## 1. Problem
 
