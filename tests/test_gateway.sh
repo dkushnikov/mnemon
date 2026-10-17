@@ -465,16 +465,18 @@ echo "--- phase 2: status counts superseded and chunked (§3.9) ---"
 output=$("$GW" status --config "$CONFIG" 2>&1)
 s0="$(printf '%s\n' "$output" | sed -n 's/^Superseded: //p')"; c0="$(printf '%s\n' "$output" | sed -n 's/^Chunked: //p')"
 [[ "$s0" =~ ^[0-9]+$ && "$c0" =~ ^[0-9]+$ ]] && pass "status prints Superseded: and Chunked: counts" || fail "status counts" "'$s0' '$c0'"
-mkdir -p "$VAULT/Sources/2026-04-04_aaaa0001" "$VAULT/Sources/2026-04-05_aaaa0001" "$VAULT/Sources/2026-04-06_bbbb0002"
+mkdir -p "$VAULT/Sources/2026-04-04_aaaa0001" "$VAULT/Sources/2026-04-05_aaaa0001" "$VAULT/Sources/2026-04-06_bbbb0002" "$VAULT/Sources/2026-04-07_cccc0003"
 printf -- '---\ntype: source\norigin: text\n---\nold\n' > "$VAULT/Sources/2026-04-04_aaaa0001/source.md"
 printf -- '---\ntype: source\norigin: text\nsupersedes: "2026-04-04_aaaa0001"\n---\nnew\n' > "$VAULT/Sources/2026-04-05_aaaa0001/source.md"
 printf -- '---\ntype: extract\nstatus: extracted\ntitle: "New"\nextraction: chunked\nparts: 3\n---\n' > "$VAULT/Sources/2026-04-05_aaaa0001/extract.md"
 printf -- '---\ntype: source\norigin: text\nsupersedes: "Sources/2026-04-04_aaaa0001/extract"\n---\nnewer\n' > "$VAULT/Sources/2026-04-06_bbbb0002/source.md"
 printf -- '---\ntype: extract\nstatus: extracted\ntitle: "Newer"\nextraction: single\n---\n' > "$VAULT/Sources/2026-04-06_bbbb0002/extract.md"
+# a block list naming two more folders (O9): both count
+printf -- '---\ntype: source\norigin: text\nsupersedes:\n  - "2026-04-05_aaaa0001"\n  - "Sources/2026-04-06_bbbb0002/extract"\n---\nnewest\n' > "$VAULT/Sources/2026-04-07_cccc0003/source.md"
 output=$("$GW" status --config "$CONFIG" 2>&1)
-assert_contains "$output" "Superseded: $((s0 + 1))" "status counts the folders named in any supersedes: (both forms name one folder → +1)"
+assert_contains "$output" "Superseded: $((s0 + 3))" "status counts the folders named in any supersedes: (both scalar forms name one folder → +1; a block list names two more → +3)"
 assert_contains "$output" "Chunked: $((c0 + 1))" "...and the extract.md files with extraction: chunked (+1)"
-rm -rf "$VAULT/Sources/2026-04-04_aaaa0001" "$VAULT/Sources/2026-04-05_aaaa0001" "$VAULT/Sources/2026-04-06_bbbb0002"
+rm -rf "$VAULT/Sources/2026-04-04_aaaa0001" "$VAULT/Sources/2026-04-05_aaaa0001" "$VAULT/Sources/2026-04-06_bbbb0002" "$VAULT/Sources/2026-04-07_cccc0003"
 
 cleanup_capture_test
 summary

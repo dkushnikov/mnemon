@@ -46,7 +46,8 @@ Options:
                         id replays or resumes from its receipt; an unknown id starts a fresh capture
   --resume <rev|id>     Finish an incomplete revision or capture (exit 2 when complete or missing)
   --recapture           New revision of an already captured resource (--force is an alias)
-  --supersedes <rev>    The revision the new one supersedes (implies --recapture; must exist)
+  --supersedes <rev>[,<rev>…]  The revision(s) the new one supersedes (implies --recapture; each must
+                        exist; repeatable — one re-capture can resolve a group of duplicate revisions)
   --keep-run            Keep the attempt directory after a successful extraction
   --import-source <s>   Import source label (apple-notes, safari, telegram-saved, a producer id…)
   --import-ref <id>     The envelope id when the capture came through an inbox
@@ -143,7 +144,7 @@ while [[ $# -gt 0 ]]; do
     --ref-id|--capture-id) _need "$@"; CAPTURE_ID="$2"; CAPTURE_ID_GIVEN=true; shift 2 ;;
     --resume)        _need "$@"; RESUME="$2"; shift 2 ;;
     --recapture|--force) RECAPTURE=true; BOUND_GIVEN=true; shift ;;
-    --supersedes)    _need "$@"; SUPERSEDES="$2"; RECAPTURE=true; BOUND_GIVEN=true; shift 2 ;;
+    --supersedes)    _need "$@"; SUPERSEDES="${SUPERSEDES:+$SUPERSEDES,}$2"; RECAPTURE=true; BOUND_GIVEN=true; shift 2 ;;
     --keep-run)      KEEP_RUN=true; shift ;;
     --manifest)      _need "$@"; MANIFEST="$2"; shift 2 ;;
     --import-source) _need "$@"; IMPORT_SOURCE="$2"; shift 2 ;;
@@ -286,8 +287,13 @@ cap_contract_checks() {
     CONTEXT="$(cap_default_context)"
   fi
   if $CAPTURE_ID_GIVEN; then cap_validate_capture_id "$CAPTURE_ID"; fi
-  if [[ -n "$SUPERSEDES" && ! -d "$VAULT_PATH/Sources/$SUPERSEDES" ]]; then
-    cap_die2 "--supersedes names a revision that does not exist: Sources/$SUPERSEDES/"
+  if [[ -n "$SUPERSEDES" ]]; then
+    # one or several revisions (comma-separated; the flag is repeatable): the set, sorted, each existing
+    SUPERSEDES="$(cap_supersedes_normalize "$SUPERSEDES")"
+    [[ -n "$SUPERSEDES" ]] || cap_die2 "--supersedes names no revision"
+    while IFS= read -r _sup_rev; do
+      [[ -d "$VAULT_PATH/Sources/$_sup_rev" ]] || cap_die2 "--supersedes names a revision that does not exist: Sources/$_sup_rev/"
+    done <<< "$(cap_supersedes_lines "$SUPERSEDES")"
   fi
   if [[ -n "$RESUME" && $CAPTURE_ID_GIVEN == true ]]; then
     cap_die2 "--resume and --capture-id are exclusive (a replay is --capture-id alone)"
@@ -353,7 +359,7 @@ cap_dry_run() {
   echo "Revision: $(cap_today)_<resource_id> (allocated under the vault lock at run time)"
   [[ -n "$FILE_PATH" ]] && echo "Origin path: $FILE_PATH"
   echo "Raw store: $raw_note"
-  $RECAPTURE && echo "Recapture: yes (supersedes ${SUPERSEDES:-the latest revision})"
+  $RECAPTURE && echo "Recapture: yes (supersedes $(printf '%s' "${SUPERSEDES:-the latest revision}" | sed 's/,/, /g'))"
   if [[ "$SITE_MODE" == "file" ]]; then
     cap_py site-plan-summary "$SITE_PLAN_FILE"
   elif [[ "$SITE_MODE" == "auto" ]]; then
@@ -415,7 +421,7 @@ cap_restore_from_receipt() {   # globals from the receipt's request + metadata (
     def s(v): ((if v == null then "" else v end) | tostring | @sh);
     "ORIGIN=" + s(.request.origin), "URL=" + s(.request.url), "REF_PATH=" + s(.request.ref_path),
     "CONTEXT=" + s(.request.context), "SOURCE_TYPE=" + s(.request.source_type // "article"),
-    "RECAPTURE=" + s(.request.recapture), "SUPERSEDES=" + s(.request.supersedes), "RENDER=" + s(.request.render),
+    "RECAPTURE=" + s(.request.recapture), "SUPERSEDES=" + s(.request.supersedes | if type == "array" then join(",") else . end), "RENDER=" + s(.request.render),
     "DEPTH=" + s(.request.depth), "RESOURCE_KIND=" + s(.request.resource_kind), "RESOURCE_KEY=" + s(.request.resource_key),
     "INPUT_SHA256=" + s(.request.input_sha256), "RESOURCE_SHA256=" + s(.resource_sha256), "RESOURCE_ID=" + s(.resource_id),
     "REQUEST_JSON=" + s(.request | tojson), "REQUEST_SHA256=" + s(.request_sha256), "INPUT_PATH=" + s(.input_path),
@@ -486,7 +492,7 @@ cap_binding_check() {
   fi
   cap_resource_identity
   # --recapture resolves `supersedes` to the latest revision at capture time; the receipt wins.
-  if $RECAPTURE && [[ -z "$SUPERSEDES" ]]; then SUPERSEDES="$(cap_receipt_get "$CAPTURE_ID" '.request.supersedes // ""')"; fi
+  if $RECAPTURE && [[ -z "$SUPERSEDES" ]]; then SUPERSEDES="$(cap_receipt_get "$CAPTURE_ID" '.request.supersedes | if type == "array" then join(",") else (. // "") end')"; fi
   cap_canonical_request
   [[ -n "${tmp:-}" ]] && rm -f "$tmp"
   CAP_BIND_SCHEMA=""
@@ -866,7 +872,7 @@ cap_restore_folder_request() {
   INPUT_SHA256=""
   TITLE="$(_mnemon_yaml_literal title "$f")"
   AUTHOR="$(_mnemon_yaml_literal author "$f")"
-  SUPERSEDES="$(_mnemon_yaml_literal supersedes "$f")"
+  SUPERSEDES="$(cap_py supersedes-of "$f")"   # the scalar, or the block list comma-joined
   cap_canonical_request
 }
 
@@ -1044,7 +1050,8 @@ case "$ACTION" in
     vc="$(python3 "$SCRIPT_DIR/lib_vault.py" --vault "$VAULT_PATH" --status-counts 2>/dev/null || true)"
     _vc() { printf '%s\n' "$vc" | awk -F= -v k="$1" '$1 == k { print $2; exit }'; }
     extracted="$(_vc extracted)"; extracted="${extracted:-0}"
-    # §3.9: superseded = folders named in any published source.md's supersedes: (both forms);
+    # §3.9: superseded = folders named in any published source.md's supersedes: (both forms, one
+    # value or a block list);
     # chunked = extract.md files with extraction: chunked
     counts="$(cap_py status-counts "$VAULT_PATH/Sources" 2>/dev/null || echo 'superseded=0 chunked=0')"
     echo "Total sources: $total"

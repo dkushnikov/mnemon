@@ -492,6 +492,27 @@ assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" supersedes)" "\"$r
 run_gw --url "https://example.com/cross2" --supersedes "2020-01-01_deadbeef" --capture-id cross-2
 assert_eq "$rc" "2" "--supersedes of a missing revision → exit 2"
 
+# --supersedes naming several revisions (O9): comma-separated or repeated → a block list in source.md
+# and a JSON array in the receipt; one revision stays the scalar; each must exist; the dry-run shows them
+fml() { sed -n '/^supersedes:$/,/^[^ ]/p' "$1" | sed -n 's/^  - //p' | tr -d '"' | paste -s -d, -; }   # the block list, comma-joined
+pair="$(printf '%s\n' "$rev" "$rev0" | LC_ALL=C sort | paste -s -d, -)"
+run_gw --url "https://example.com/multi" --supersedes "$rev0,$rev" --capture-id multi-1
+assert_eq "$rc" "0" "--supersedes a,b exits 0"
+mrev="$(result revision)"
+assert_eq "$(fm "$VAULT/Sources/$mrev/source.md" supersedes)" "" "...source.md carries no scalar supersedes:"
+assert_eq "$(fml "$VAULT/Sources/$mrev/source.md")" "$pair" "...but a block list of both revisions, sorted"
+assert_eq "$(rget multi-1 '.request.supersedes | type + " " + join(",")')" "array $pair" "...the receipt's request.supersedes is a JSON array of them"
+run_gw --url "https://example.com/multi" --supersedes "$rev" --supersedes "$rev0" --capture-id multi-1
+assert_eq "$rc $(result replayed) $(result revision)" "0 true $mrev" "the flag repeated, in the other order, binds the same request → replayed"
+run_gw --url "https://example.com/multi2" --supersedes "$rev,$rev" --capture-id multi-2
+assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" supersedes)" "\"$rev\"" "a revision named twice collapses to the scalar form"
+assert_eq "$(rget multi-2 '.request.supersedes | type')" "string" "...and to a string in the receipt"
+run_gw --url "https://example.com/multi3" --supersedes "$rev,2020-01-01_deadbeef" --capture-id multi-3
+assert_eq "$rc" "2" "a list with a missing revision → exit 2"
+assert_contains "$err" "Sources/2020-01-01_deadbeef/" "...naming it"
+run_gw --url "https://example.com/multi4" --supersedes "$rev0,$rev" --dry-run
+assert_contains "$out" "Recapture: yes (supersedes ${pair//,/, })" "the dry-run shows the list"
+
 # hash8 collision: two resources sharing the folder label
 read -r colA colB <<< "$(python3 - <<'PY'
 import hashlib

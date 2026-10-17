@@ -39,7 +39,9 @@
 #
 # ─── Canonical request (§3.1) ───────────────────────────────────────────────────────────────────
 #   mnemon-request/1 = {"schema","origin","resource_kind","resource_key","input_sha256"|null,
-#   "url"|null,"ref_path"|null,"context","source_type"|null,"recapture":bool,"supersedes"|null,
+#   "url"|null,"ref_path"|null,"context","source_type"|null,"recapture":bool,"supersedes"|null
+#   (the revision name; a sorted array of them when --supersedes names several — one name stays
+#   the scalar, byte for byte as before),
 #   "render":bool,"depth":"auto"|"off"|"force"} serialized with keys sorted, no whitespace,
 #   UTF-8 unescaped (jq -cS ≡ json.dumps(sort_keys=True, separators=(",",":"),
 #   ensure_ascii=False)); request_sha256 = sha256 of those bytes. These are the bound fields: a
@@ -133,8 +135,20 @@ CAP_TEXT_CMD="${MNEMON_CAPTURE_TEXT_CMD:-$_LIB_CAPTURE_DIR/capture-text.py}"
 # Embedded python helper: the few things bash cannot do atomically or byte-exactly.
 # ---------------------------------------------------------------------------------------------
 read -r -d '' CAP_PY <<'PY' || true
-import hashlib, json, os, shutil, sys
+import hashlib, json, os, re, shutil, sys
 cmd, a = sys.argv[1], sys.argv[2:]
+def yaml_literal(v):
+    # a frontmatter scalar as the engine reads it (§4.4): a double-quoted value decodes \" and \\
+    # only; a single-quoted one is verbatim to its closing quote; `#…` is empty; an unquoted one
+    # loses a trailing ` # comment` and surrounding whitespace
+    v = v.strip()
+    if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
+        return v[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+    if v.startswith("'"):
+        return v[1:].split("'", 1)[0]
+    if v.startswith("#"):
+        return ""
+    return re.sub(r"\s#.*$", "", v).rstrip()
 def fsync_path(p):
     fd = os.open(p, os.O_RDONLY)
     try:
@@ -244,18 +258,10 @@ elif cmd == "revision-candidates":
     # (whatever its label; it takes the managed path), else legacy. The head = the candidate not
     # named in another candidate's supersedes: (both forms), greatest (captured date, numeric
     # suffix, folder name); every candidate superseded by another = a cycle (no head).
-    import re, subprocess
+    import subprocess
     sources, rsha, canon, fetch_cmd = a[0], a[1], a[2], a[3]
     CAP = 256 * 1024
-    def literal(v):
-        v = v.strip()
-        if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
-            return v[1:-1].replace('\\"', '"').replace("\\\\", "\\")
-        if v.startswith("'"):
-            return v[1:].split("'", 1)[0]
-        if v.startswith("#"):
-            return ""
-        return re.sub(r"\s#.*$", "", v).rstrip()
+    literal = yaml_literal
     def header_of(path):
         with open(path, "rb") as fh:
             data = fh.read(CAP + 1)
@@ -280,7 +286,7 @@ elif cmd == "revision-candidates":
                 continue
             if header is None:
                 continue
-            top, aliases, folded = {}, [], []
+            top, aliases, folded, sup_items = {}, [], [], []
             section = None
             entry = None
             for line in header:
@@ -295,7 +301,12 @@ elif cmd == "revision-candidates":
                     elif sep:
                         top[key] = literal(value)
                     continue
-                if section == "folded_sources":
+                if section == "supersedes":
+                    # the block list of a revision that supersedes several (the key's own line is empty)
+                    m = re.match(r"^\s*-\s*(.*)$", line)
+                    if m and literal(m.group(1)):
+                        sup_items.append(literal(m.group(1)))
+                elif section == "folded_sources":
                     m = re.match(r"^\s*-\s*url:(.*)$", line)
                     if m:
                         entry = {"url": literal(m.group(1)), "disposition": None}
@@ -311,7 +322,7 @@ elif cmd == "revision-candidates":
             for e in folded:
                 if e["url"] and e["disposition"] in (None, "", "converted"):
                     aliases.append(e["url"])
-            folders.append({"folder": name, "top": top, "aliases": aliases})
+            folders.append({"folder": name, "top": top, "aliases": aliases, "sup_items": sup_items})
     todo = sorted({u for f in folders for u in f["aliases"]})
     canon_of = {}
     if todo and canon:
@@ -332,6 +343,14 @@ elif cmd == "revision-candidates":
         v = re.sub(r"^Sources/", "", v)
         v = re.sub(r"/(extract|source)(\.md)?$", "", v)
         return v.strip("/")
+    def sup_targets(f):
+        # the folders a source.md's supersedes: names — the scalar or the block list, both forms
+        out = []
+        for v in ([f["top"].get("supersedes")] if f["top"].get("supersedes") else []) + f["sup_items"]:
+            t = norm_sup(v)
+            if t and t not in out:
+                out.append(t)
+        return out
     cands = []
     for f in folders:
         top = f["top"]
@@ -341,10 +360,10 @@ elif cmd == "revision-candidates":
             continue
         m = re.match(r"^\d{4}-\d{2}-\d{2}_[0-9a-f]{8}-(\d+)$", f["folder"])
         cands.append({"folder": f["folder"], "managed": managed, "captured": top.get("captured") or f["folder"][:10],
-                      "suffix": int(m.group(1)) if m else 1, "supersedes": norm_sup(top.get("supersedes")),
+                      "suffix": int(m.group(1)) if m else 1, "supersedes": sup_targets(f),
                       "capture_id": top.get("capture_id") or "", "canonical_version": top.get("_canonical_version") or ""})
     names = {c["folder"] for c in cands}
-    superseded = {c["supersedes"] for c in cands if c["supersedes"] in names}
+    superseded = {s for c in cands for s in c["supersedes"] if s in names}
     heads = [c for c in cands if c["folder"] not in superseded]
     head = max(heads, key=lambda c: (c["captured"], c["suffix"], c["folder"])) if heads else None
     print(json.dumps({"candidates": cands, "head": head, "cycle": bool(cands) and head is None}, ensure_ascii=False))
@@ -438,8 +457,7 @@ elif cmd == "published-choice":
     print(json.dumps(eligible, ensure_ascii=False))
 elif cmd == "status-counts":
     # <Sources dir>: `superseded=N chunked=N` — folders named in any source.md's supersedes:
-    # (both forms) and extract.md files with `extraction: chunked` (§3.9)
-    import re
+    # (both forms; one value or a block list) and extract.md files with `extraction: chunked` (§3.9)
     sources = a[0]
     superseded, chunked = set(), 0
     if os.path.isdir(sources):
@@ -453,18 +471,56 @@ elif cmd == "status-counts":
                     lines = fh.read(256 * 1024).split("\n")
                 if not lines or lines[0] != "---":
                     continue
+                in_sup = False
                 for line in lines[1:]:
                     if line in ("---", "..."):
                         break
-                    if fname == "source.md" and line.startswith("supersedes:"):
-                        v = line.split(":", 1)[1].strip().strip('"')
-                        v = re.sub(r"^Sources/", "", v)
-                        v = re.sub(r"/(extract|source)(\.md)?$", "", v)
-                        if v:
-                            superseded.add(v)
-                    if fname == "extract.md" and line.strip() == "extraction: chunked":
-                        chunked += 1
+                    if fname == "extract.md":
+                        if line.strip() == "extraction: chunked":
+                            chunked += 1
+                        continue
+                    v = ""
+                    if line.startswith("supersedes:"):
+                        v = line.split(":", 1)[1].strip()
+                        in_sup = not v              # an empty key: the block list follows
+                    elif in_sup and line[:1] in (" ", "\t"):
+                        m = re.match(r"^\s*-\s*(.*)$", line)
+                        v = m.group(1).strip() if m else ""
+                    elif line.strip():
+                        in_sup = False
+                    v = re.sub(r"^Sources/", "", v.strip('"'))
+                    v = re.sub(r"/(extract|source)(\.md)?$", "", v)
+                    if v:
+                        superseded.add(v)
     print("superseded=%d chunked=%d" % (len(superseded), chunked))
+elif cmd == "supersedes-of":
+    # <source.md>: the values of the header's `supersedes:` — the scalar on the key's line, or the
+    # `  - value` items of the block list under an empty key — each read as a frontmatter literal,
+    # comma-joined on one line (empty when the key is absent); the recovery of a request from a
+    # published folder (cap_restore_folder_request)
+    vals = []
+    try:
+        with open(a[0], "rb") as fh:
+            lines = fh.read(256 * 1024 + 1).decode("utf-8", errors="replace").split("\n")
+    except OSError:
+        lines = []
+    in_sup = False
+    for line in (lines[1:] if lines and lines[0] == "---" else []):
+        if line in ("---", "..."):
+            break
+        v = ""
+        if line.startswith("supersedes:"):
+            v = line.split(":", 1)[1]
+            in_sup = not v.strip()
+        elif in_sup and line[:1] in (" ", "\t"):
+            m = re.match(r"^\s*-\s*(.*)$", line)
+            v = m.group(1) if m else ""
+        elif line.strip():
+            in_sup = False
+        v = yaml_literal(v)
+        if v:
+            vals.append(v)
+    print(",".join(vals))
 elif cmd == "site-plan-check":
     # <plan> <canonical landing> <max pages> <fetch cmd>: the refusals of `mnemon add --site`
     # (§3.6, D9) — a landing that differs from --url, more included pages than the cap, an included
@@ -645,6 +701,14 @@ cap_q() {
 }
 # §3.3 normalizer for metadata that never comes from the model (title 300, author 200).
 cap_norm() { python3 "$_LIB_CAPTURE_DIR/extract-publish.py" normalize --max "${2:-300}" -- "$1"; }
+# The revisions --supersedes names (the flag is repeatable and each value may be a comma-separated
+# list) as the set the request binds: trimmed, non-empty, without repeats, in byte order,
+# comma-joined. One revision stays the scalar it always was (source.md, the receipt); several are
+# a block list in source.md and a JSON array in the receipt.
+cap_supersedes_normalize() {   # <value> → stdout
+  printf '%s' "$1" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | awk 'NF' | LC_ALL=C sort -u | paste -s -d, -
+}
+cap_supersedes_lines() { printf '%s' "$1" | tr ',' '\n'; }   # <value> → one revision per line
 # An identifier-like value (fetch method, converter, acquisition outcome) written plain when it is
 # safe unquoted ([A-Za-z0-9][A-Za-z0-9_./-]*, not a YAML reserved word), else double-quoted.
 cap_plain() {
@@ -860,9 +924,10 @@ cap_canonical_request() {
       --arg input "$INPUT_SHA256" --arg url "$URL" --arg ref "$REF_PATH" --arg context "$CONTEXT" \
       --arg st "$SOURCE_TYPE" --argjson recapture "$recapture" --arg sup "$SUPERSEDES" --argjson render "$render" --arg depth "$DEPTH" \
       'def nz: if . == "" then null else . end;
+       def sup: if . == "" then null else (split(",") | if length == 1 then .[0] else . end) end;
        {schema:$schema, origin:$origin, resource_kind:$kind, resource_key:$key, input_sha256:($input|nz),
         url:($url|nz), ref_path:($ref|nz), context:$context, source_type:($st|nz), recapture:$recapture,
-        supersedes:($sup|nz), render:$render, depth:$depth}')"
+        supersedes:($sup|sup), render:$render, depth:$depth}')"
   else
     cap_request_fields
     REQUEST_JSON="$(jq -cS -n \
@@ -871,9 +936,10 @@ cap_canonical_request() {
       --arg st "$SOURCE_TYPE" --argjson recapture "$recapture" --arg sup "$SUPERSEDES" --arg depth "$DEPTH" \
       --arg render "$REQ_RENDER" --arg external "$REQ_EXTERNAL" --arg site "$REQ_SITE" --arg rv "$REQ_RV" \
       'def nz: if . == "" then null else . end;
+       def sup: if . == "" then null else (split(",") | if length == 1 then .[0] else . end) end;
        {schema:$schema, origin:$origin, resource_kind:$kind, resource_key:$key, input_sha256:($input|nz),
         url:($url|nz), ref_path:($ref|nz), context:$context, source_type:($st|nz), recapture:$recapture,
-        supersedes:($sup|nz), render:$render, external:$external, site:($site|nz),
+        supersedes:($sup|sup), render:$render, external:$external, site:($site|nz),
         requested_version:(if $rv == "" then null else ($rv|tonumber) end), canonical_version:1, depth:$depth}')"
   fi
   REQUEST_SHA256="$(cap_sha256_str "$REQUEST_JSON")"
@@ -2053,7 +2119,7 @@ cap_reconvert() {
 # source.md (§3.3) — gateway-owned frontmatter + capture-text bytes, published by directory rename
 # ---------------------------------------------------------------------------------------------
 cap_source_frontmatter() {   # > stdout
-  local title="${TITLE:-}" author="${AUTHOR:-}" archive_name="" sup="$SUPERSEDES" manifest="-"
+  local title="${TITLE:-}" author="${AUTHOR:-}" archive_name="" sup="$SUPERSEDES" sup_item manifest="-"
   [[ -z "$title" && -n "${ACQ_TITLE:-}" ]] && title="$ACQ_TITLE"
   [[ -n "$title" ]] && title="$(cap_norm "$title" 300)"
   [[ -z "$author" && -n "${ACQ_AUTHOR:-}" ]] && author="$ACQ_AUTHOR"
@@ -2077,7 +2143,13 @@ cap_source_frontmatter() {   # > stdout
   printf 'resource_sha256: %s\n' "$(cap_q "$RESOURCE_SHA256")"
   printf 'resource_id: %s\n' "$(cap_q "$RESOURCE_ID")"
   printf 'revision: %s\n' "$(cap_q "$REVISION")"
-  [[ -n "$sup" ]] && printf 'supersedes: %s\n' "$(cap_q "$sup")"
+  if [[ "$sup" == *,* ]]; then
+    # several predecessors (one re-capture resolving a group of duplicate revisions): a block list
+    printf 'supersedes:\n'
+    while IFS= read -r sup_item; do printf '  - %s\n' "$(cap_q "$sup_item")"; done <<< "$(cap_supersedes_lines "$sup")"
+  elif [[ -n "$sup" ]]; then
+    printf 'supersedes: %s\n' "$(cap_q "$sup")"
+  fi
   [[ -n "$archive_name" ]] && printf 'archive: %s\n' "$(cap_q "$archive_name")"
   [[ -n "$FILE_PATH" ]] && printf 'origin_path: %s\n' "$(cap_q "$FILE_PATH")"
   [[ -n "$REF_PATH" ]] && printf 'ref_path: %s\n' "$(cap_q "$REF_PATH")"
