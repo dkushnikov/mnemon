@@ -23,6 +23,9 @@ Behavior:
   deduplicated by (folder, sha256(row)) across that day's file, so a second edit on one day is
   kept too — and that file and its directory are fsynced first. If the file cannot be written
   the index is left untouched and the run exits 1. --no-hand-edit-report skips the step.
+- `## Collections` lists every `Collections/*.md` through the research reader (`lib_research.py`,
+  phase 3a): status, item count, the question; a document the reader fails is listed with its
+  first error. The Status table carries a Collections row.
 - index.md is written atomically (tmp + fsync + rename); counts Sources / Extracted / Synthesis /
   Superseded; the pending note names `mnemon add --resume <revision>` and counts legacy
   placeholders (`status: bookmark`, `fetch_status: failed` in source.md) apart; lists Synthesis/.
@@ -59,6 +62,42 @@ NOTE_SEP = ' — '                 # the index_note suffix
 SUPERSEDED_SEP = ' ⤳ superseded by '
 HAND_EDIT_MARK = '<!-- mnemon:hand-edit folder={folder} sha256={sha} -->'
 HAND_EDIT_RE = re.compile(r'^<!-- mnemon:hand-edit folder=(\S+) sha256=([0-9a-f]{64}) -->$', re.M)
+
+
+def _load_research():
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location("lib_research", os.path.join(here, "lib_research.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def collection_rows(vault: Path) -> list[str]:
+    """One row per `Collections/*.md` (sorted by name), from the research reader:
+    `- [[Collections/<name>|<name>]] (<status>, <n> items[, <k> excluded][, <m> malformed]) — <question>`;
+    a document whose schema fails: `(fail: <first error>)`. The folder absent → []."""
+    lr = _load_research()
+    rows: list[str] = []
+    existing = lr.existing_revisions(str(vault))
+    for rec in lr.scan_collections(str(vault), existing=existing):
+        name = rec["name"]
+        if rec["state"] == "unreadable":
+            rows.append(f"- [[Collections/{name}|{display_text(name)}]] (unreadable)")
+            continue
+        c = rec["counts"]
+        parts = [rec["status"] or "?", f"{c['items']} items"]
+        if c["excluded"]:
+            parts.append(f"{c['excluded']} excluded")
+        if c["malformed"]:
+            parts.append(f"{c['malformed']} malformed")
+        row = f"- [[Collections/{name}|{display_text(name)}]] ({', '.join(parts)})"
+        if rec["errors"]:
+            row += f" (fail: {rec['errors'][0]})"
+        if rec["question"]:
+            row += f" — {display_text(rec['question'])}"
+        rows.append(row)
+    return rows
 
 
 class PreservationError(Exception):
@@ -542,9 +581,15 @@ def reindex(vault: Path, hand_edit_report: bool = True) -> dict:
         title = m.group(1).strip() if m else f.stem
         syn_lines.append(f"- [[Synthesis/{f.stem}|{display_text(title)}]]")
 
+    collections_present = (vault / 'Collections').is_dir()
+    col_lines = collection_rows(vault) if collections_present else []
+    collections_block = (
+        f"## Collections\n\n{chr(10).join(col_lines)}\n\n" if collections_present else "")
+
     sources_count = len(all_source_dirs)
     extracted_count = len(extracted_dirs)
     synthesis_count = len(syn_files)
+    collections_count = len(col_lines)
     superseded_count = len(scan['successors'])
     today = datetime.date.today().isoformat()
 
@@ -578,6 +623,7 @@ Universal reference storage. Sources captured and extracted by AI, synthesis wri
 | Sources | {sources_count} |
 | Extracted | {extracted_count} |
 | Superseded | {superseded_count} |
+| Collections | {collections_count} |
 | Synthesis | {synthesis_count} |
 
 {pending_note}
@@ -586,7 +632,7 @@ Universal reference storage. Sources captured and extracted by AI, synthesis wri
 
 {chr(10).join(entries)}
 
-## Synthesis Notes
+{collections_block}## Synthesis Notes
 
 {chr(10).join(syn_lines)}
 
@@ -610,6 +656,7 @@ Universal reference storage. Sources captured and extracted by AI, synthesis wri
     except OSError:
         pass
     return {'sources': sources_count, 'extracted': extracted_count, 'synthesis': synthesis_count,
+            'collections': collections_count, 'collections_present': collections_present,
             'pending': len(pending), 'legacy': len(legacy), 'superseded': superseded_count,
             'dangling': len(scan['dangling']), 'preserved': preserved, 'malformed': len(scan['malformed'])}
 
@@ -639,6 +686,8 @@ def main(argv: list[str]) -> int:
 
     line = (f"reindex: {vault.name} — Sources={c['sources']}, Extracted={c['extracted']}, "
             f"Synthesis={c['synthesis']}, Superseded={c['superseded']}")
+    if c['collections_present']:
+        line += f", Collections={c['collections']}"
     for key, label in (('pending', 'Pending'), ('legacy', 'Legacy'), ('dangling', 'Dangling-supersedes'),
                        ('preserved', 'Preserved'), ('malformed', 'Malformed-frontmatter')):
         if c[key]:
