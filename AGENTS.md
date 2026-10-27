@@ -19,6 +19,7 @@ This is a pointer, not a second guide. The full developer guide is [`CLAUDE.md`]
 | Persistence (receipts, identity, `RESULT:`, exit codes) and the extractor fence | [`docs/specs/2026-10-15-capture-contracts.md`](docs/specs/2026-10-15-capture-contracts.md) |
 | The capture layer (fetch chain, converters, the network policy) | [`docs/specs/2026-10-15-capture-layer.md`](docs/specs/2026-10-15-capture-layer.md) |
 | What a vault is as a data store — entities, ownership, states, the data doctor | [`docs/specs/2026-10-16-vault-store.md`](docs/specs/2026-10-16-vault-store.md) |
+| The research layers — `Collections/` (schema `collection/1`, the `## Items` grammar, the reader records), the extended `filed`, the index section, the search JSON `mnemon-search/2`, the compatibility fixtures every branch must pass, the `Wiki/` contract reserved for phase 3b | [`docs/specs/2026-10-27-research-interface.md`](docs/specs/2026-10-27-research-interface.md) |
 | Installing, dev tree vs installed engine, instances, releasing | [`docs/install.md`](docs/install.md) |
 | Architecture, conventions, the branch model, the test runner, hygiene | [`CLAUDE.md`](CLAUDE.md) |
 | What the Claude Code skills promise | [`plugins/mnemon/skills/`](plugins/mnemon/skills/) — thin doors into the engine, no logic |

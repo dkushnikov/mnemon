@@ -1,0 +1,56 @@
+{
+ "configured_provider": null,
+ "count": 2,
+ "fallback_applied": false,
+ "fallback_token": null,
+ "provider": "grep",
+ "query": "trust",
+ "results": [
+  {
+   "author": "",
+   "created": "2026-01-10",
+   "domains": [
+    "learning",
+    "mc/ai"
+   ],
+   "file": "extract.md",
+   "path": "Sources/2026-01-10_aaaaaaaa/",
+   "rating": 7,
+   "result_type": "extract",
+   "snippet": "Alpha: trust from the price of action, not from identity.",
+   "status": "extracted",
+   "tags": [
+    "trust",
+    "identity"
+   ],
+   "tier": "full",
+   "title": "Alpha paper",
+   "url": ""
+  },
+  {
+   "author": "",
+   "created": "2026-09-21",
+   "domains": [
+    "learning",
+    "mc/ai"
+   ],
+   "file": "Trust without identity.md",
+   "path": "Collections/",
+   "rating": null,
+   "result_type": "collection",
+   "snippet": "# Trust without identity",
+   "status": "open",
+   "tags": [
+    "agent-identity",
+    "trust-design"
+   ],
+   "tier": null,
+   "title": "Trust without identity",
+   "url": ""
+  }
+ ],
+ "schema": "mnemon-search/2",
+ "tokens": [
+  "trust"
+ ]
+}

@@ -1,0 +1,459 @@
+{
+ "collections": [
+  {
+   "aliases": [],
+   "counts": {
+    "excluded": 0,
+    "items": 1,
+    "links_outside_items": 0,
+    "malformed": 0,
+    "unresolved": 0
+   },
+   "created": null,
+   "curated_by": "owner",
+   "domains": [],
+   "errors": [
+    "duplicate key `status`",
+    "nested mapping under `capture` (flat scalars and lists only)",
+    "missing required `question`",
+    "`created` is not an ISO date (YYYY-MM-DD)",
+    "`wiki` must be on|off (got 'maybe')",
+    "`tags` must be a list"
+   ],
+   "extra": {
+    "capture": ""
+   },
+   "file": "Collections/Bad frontmatter.md",
+   "items": [
+    {
+     "display": null,
+     "excluded": false,
+     "exists": true,
+     "file": "extract",
+     "fragment": null,
+     "line": 15,
+     "note": "",
+     "rev": "2026-01-10_aaaaaaaa",
+     "role": null
+    }
+   ],
+   "malformed": [],
+   "migrated_from": null,
+   "name": "Bad frontmatter",
+   "question": null,
+   "recusal": null,
+   "schema": "collection/1",
+   "sections": [
+    "Items"
+   ],
+   "source_of": null,
+   "state": "fail",
+   "status": "open",
+   "suppressed_pages": [],
+   "tags": [],
+   "updated": null,
+   "wiki": "on"
+  },
+  {
+   "aliases": [],
+   "counts": {
+    "excluded": 0,
+    "items": 2,
+    "links_outside_items": 0,
+    "malformed": 0,
+    "unresolved": 0
+   },
+   "created": "2026-07-01",
+   "curated_by": "owner",
+   "domains": [
+    "learning"
+   ],
+   "errors": [],
+   "extra": {},
+   "file": "Collections/Closed dossier.md",
+   "items": [
+    {
+     "display": null,
+     "excluded": false,
+     "exists": true,
+     "file": null,
+     "fragment": null,
+     "line": 19,
+     "note": "the bare revision form, trailing punctuation after the link",
+     "rev": "2026-01-10_aaaaaaaa",
+     "role": "answer (a)"
+    },
+    {
+     "display": "Beta",
+     "excluded": false,
+     "exists": true,
+     "file": "extract",
+     "fragment": null,
+     "line": 20,
+     "note": "the `.md` form and plain dashes",
+     "rev": "2026-02-11_bbbbbbbb",
+     "role": "answer (b)"
+    }
+   ],
+   "malformed": [],
+   "migrated_from": null,
+   "name": "Closed dossier",
+   "question": "Which captures covered trust before the dossier was closed?",
+   "recusal": "on",
+   "schema": "collection/1",
+   "sections": [
+    "Items"
+   ],
+   "source_of": null,
+   "state": "ok",
+   "status": "closed",
+   "suppressed_pages": [
+    "Trust — four answers"
+   ],
+   "tags": [],
+   "updated": "2026-08-01",
+   "wiki": "off"
+  },
+  {
+   "aliases": [],
+   "counts": {
+    "excluded": 0,
+    "items": 1,
+    "links_outside_items": 1,
+    "malformed": 0,
+    "unresolved": 0
+   },
+   "created": "2026-10-01",
+   "curated_by": "owner",
+   "domains": [],
+   "errors": [
+    "duplicate `## Items` heading (lines 9, 13)"
+   ],
+   "extra": {},
+   "file": "Collections/Duplicate heading.md",
+   "items": [
+    {
+     "display": null,
+     "excluded": false,
+     "exists": true,
+     "file": "extract",
+     "fragment": null,
+     "line": 11,
+     "note": "",
+     "rev": "2026-01-10_aaaaaaaa",
+     "role": null
+    }
+   ],
+   "malformed": [],
+   "migrated_from": null,
+   "name": "Duplicate heading",
+   "question": "Two Items headings",
+   "recusal": null,
+   "schema": "collection/1",
+   "sections": [
+    "Items",
+    "Items"
+   ],
+   "source_of": null,
+   "state": "fail",
+   "status": "open",
+   "suppressed_pages": [],
+   "tags": [],
+   "updated": null,
+   "wiki": "on"
+  },
+  {
+   "aliases": [],
+   "counts": {
+    "excluded": 0,
+    "items": 2,
+    "links_outside_items": 0,
+    "malformed": 0,
+    "unresolved": 1
+   },
+   "created": "2026-10-20",
+   "curated_by": "scanner:browser",
+   "domains": [],
+   "errors": [],
+   "extra": {},
+   "file": "Collections/Inbox minimal.md",
+   "items": [
+    {
+     "display": null,
+     "excluded": false,
+     "exists": true,
+     "file": "source",
+     "fragment": null,
+     "line": 9,
+     "note": "captured only, no extract yet",
+     "rev": "2026-04-13_dddddddd",
+     "role": null
+    },
+    {
+     "display": null,
+     "excluded": false,
+     "exists": false,
+     "file": "extract",
+     "fragment": null,
+     "line": 10,
+     "note": "a revision that is not in this vault",
+     "rev": "2026-05-01_eeeeeeee",
+     "role": "unresolved"
+    }
+   ],
+   "malformed": [],
+   "migrated_from": null,
+   "name": "Inbox minimal",
+   "question": "Proposed: what did the scanner find about trust?",
+   "recusal": null,
+   "schema": "collection/1",
+   "sections": [
+    "Items"
+   ],
+   "source_of": null,
+   "state": "ok",
+   "status": "inbox",
+   "suppressed_pages": [],
+   "tags": [],
+   "updated": null,
+   "wiki": "on"
+  },
+  {
+   "aliases": [],
+   "counts": {
+    "excluded": 0,
+    "items": 2,
+    "links_outside_items": 0,
+    "malformed": 11,
+    "unresolved": 0
+   },
+   "created": "2026-10-01",
+   "curated_by": "owner",
+   "domains": [],
+   "errors": [],
+   "extra": {},
+   "file": "Collections/Malformed items.md",
+   "items": [
+    {
+     "display": null,
+     "excluded": false,
+     "exists": true,
+     "file": "extract",
+     "fragment": null,
+     "line": 11,
+     "note": "the one good item",
+     "rev": "2026-01-10_aaaaaaaa",
+     "role": "valid"
+    },
+    {
+     "display": null,
+     "excluded": false,
+     "exists": true,
+     "file": "extract",
+     "fragment": null,
+     "line": 26,
+     "note": "the last good item",
+     "rev": "2026-03-12_cccccccc-2",
+     "role": "valid"
+    }
+   ],
+   "malformed": [
+    {
+     "line": 12,
+     "reason": "two or more links on one line",
+     "text": "- [[Sources/2026-02-11_bbbbbbbb/extract]] and [[Sources/2026-03-12_cccccccc/extract]] — two links on one line"
+    },
+    {
+     "line": 13,
+     "reason": "list line without a Sources/ link",
+     "text": "- a list line without any link"
+    },
+    {
+     "line": 14,
+     "reason": "link outside Sources/ (another folder or another instance)",
+     "text": "- [[Synthesis/Stable note]] — a link outside Sources/"
+    },
+    {
+     "line": 15,
+     "reason": "path traversal in link target",
+     "text": "- [[Sources/../Other/extract]] — path traversal"
+    },
+    {
+     "line": 16,
+     "reason": "absolute path in link target",
+     "text": "- [[/Sources/2026-01-10_aaaaaaaa/extract]] — absolute path"
+    },
+    {
+     "line": 17,
+     "reason": "link outside Sources/ (another folder or another instance)",
+     "text": "- [[Other vault/Sources/2026-01-10_aaaaaaaa/extract]] — another instance"
+    },
+    {
+     "line": 18,
+     "reason": "duplicate revision 2026-01-10_aaaaaaaa (first at line 11)",
+     "text": "- [[Sources/2026-01-10_aaaaaaaa/source]] — the same revision twice"
+    },
+    {
+     "line": 19,
+     "reason": "unknown file in revision: notes.md",
+     "text": "- [[Sources/2026-01-10_aaaaaaaa/notes.md]] — an unknown file in the revision"
+    },
+    {
+     "line": 20,
+     "reason": "revision name malformed: not-a-revision",
+     "text": "- [[Sources/not-a-revision/extract]] — a malformed revision name"
+    },
+    {
+     "line": 21,
+     "reason": "free text between items (no list marker)",
+     "text": "free text between two items"
+    },
+    {
+     "line": 22,
+     "reason": "continuation under a malformed line",
+     "text": "- a continuation under the free text, not under an item"
+    }
+   ],
+   "migrated_from": null,
+   "name": "Malformed items",
+   "question": "Every rejected line form of the grammar in one dossier",
+   "recusal": null,
+   "schema": "collection/1",
+   "sections": [
+    "Items"
+   ],
+   "source_of": null,
+   "state": "fail",
+   "status": "open",
+   "suppressed_pages": [],
+   "tags": [],
+   "updated": null,
+   "wiki": "on"
+  },
+  {
+   "aliases": [],
+   "counts": {
+    "excluded": 0,
+    "items": 0,
+    "links_outside_items": 0,
+    "malformed": 0,
+    "unresolved": 0
+   },
+   "created": "2026-10-01",
+   "curated_by": "owner",
+   "domains": [],
+   "errors": [
+    "no `## Items` section"
+   ],
+   "extra": {},
+   "file": "Collections/No items section.md",
+   "items": [],
+   "malformed": [],
+   "migrated_from": null,
+   "name": "No items section",
+   "question": "A dossier that forgot its items",
+   "recusal": null,
+   "schema": "collection/1",
+   "sections": [
+    "Why"
+   ],
+   "source_of": null,
+   "state": "fail",
+   "status": "open",
+   "suppressed_pages": [],
+   "tags": [],
+   "updated": null,
+   "wiki": "on"
+  },
+  {
+   "aliases": [
+    "Trust without identity"
+   ],
+   "counts": {
+    "excluded": 1,
+    "items": 4,
+    "links_outside_items": 1,
+    "malformed": 0,
+    "unresolved": 0
+   },
+   "created": "2026-09-21",
+   "curated_by": "agent",
+   "domains": [
+    "learning",
+    "mc/ai"
+   ],
+   "errors": [],
+   "extra": {},
+   "file": "Collections/Trust without identity.md",
+   "items": [
+    {
+     "display": null,
+     "excluded": false,
+     "exists": true,
+     "file": "extract",
+     "fragment": null,
+     "line": 24,
+     "note": "identity is not checked; the cost of acting replaces it",
+     "rev": "2026-01-10_aaaaaaaa",
+     "role": "answer (a): price of action"
+    },
+    {
+     "display": "Beta",
+     "excluded": false,
+     "exists": true,
+     "file": "extract",
+     "fragment": "Summary",
+     "line": 25,
+     "note": "a ladder of rights\nthe same channel, read from the operator's side\na second continuation line",
+     "rev": "2026-02-11_bbbbbbbb",
+     "role": "answer (b): quotas and karma"
+    },
+    {
+     "display": null,
+     "excluded": true,
+     "exists": true,
+     "file": "extract",
+     "fragment": null,
+     "line": 28,
+     "note": "superseded by the second revision; kept as considered",
+     "rev": "2026-03-12_cccccccc",
+     "role": "excluded"
+    },
+    {
+     "display": null,
+     "excluded": false,
+     "exists": true,
+     "file": "extract",
+     "fragment": null,
+     "line": 29,
+     "note": "(★8) — Gamma v2, no role here, the whole tail is the note.",
+     "rev": "2026-03-12_cccccccc-2",
+     "role": null
+    }
+   ],
+   "malformed": [],
+   "migrated_from": "Synthesis/Trust without identity",
+   "name": "Trust without identity",
+   "question": "How can an agent be trusted when it cannot be identified?",
+   "recusal": null,
+   "schema": "collection/1",
+   "sections": [
+    "Why",
+    "Items",
+    "Open questions",
+    "Notes (owner)"
+   ],
+   "source_of": null,
+   "state": "ok",
+   "status": "open",
+   "suppressed_pages": [],
+   "tags": [
+    "agent-identity",
+    "trust-design"
+   ],
+   "updated": "2026-10-18",
+   "wiki": "on"
+  }
+ ],
+ "schema": "research-interface/1"
+}

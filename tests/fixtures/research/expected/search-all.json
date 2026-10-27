@@ -1,0 +1,178 @@
+{
+ "configured_provider": null,
+ "count": 9,
+ "fallback_applied": false,
+ "fallback_token": null,
+ "provider": "grep",
+ "query": "trust",
+ "results": [
+  {
+   "author": "",
+   "created": "2026-03-12",
+   "domains": [
+    "mc/engineering",
+    "learning"
+   ],
+   "file": "extract.md",
+   "path": "Sources/2026-03-12_cccccccc-2/",
+   "rating": 8,
+   "result_type": "extract",
+   "snippet": "Gamma v2: the signatures had no trust anchor; escalation went to peers.",
+   "status": "extracted",
+   "tags": [
+    "incident",
+    "trust"
+   ],
+   "tier": "full",
+   "title": "Gamma report v2",
+   "url": ""
+  },
+  {
+   "author": "",
+   "created": "2026-01-10",
+   "domains": [
+    "learning",
+    "mc/ai"
+   ],
+   "file": "extract.md",
+   "path": "Sources/2026-01-10_aaaaaaaa/",
+   "rating": 7,
+   "result_type": "extract",
+   "snippet": "Alpha: trust from the price of action, not from identity.",
+   "status": "extracted",
+   "tags": [
+    "trust",
+    "identity"
+   ],
+   "tier": "full",
+   "title": "Alpha paper",
+   "url": ""
+  },
+  {
+   "author": "",
+   "created": "2026-03-12",
+   "domains": [
+    "mc/engineering"
+   ],
+   "file": "extract.md",
+   "path": "Sources/2026-03-12_cccccccc/",
+   "rating": 6,
+   "result_type": "extract",
+   "snippet": "Gamma v1: agents invented signatures without a root of trust.",
+   "status": "extracted",
+   "tags": [
+    "incident"
+   ],
+   "tier": "full",
+   "title": "Gamma report v1",
+   "url": ""
+  },
+  {
+   "author": "",
+   "created": "2026-02-11",
+   "domains": [
+    "learning"
+   ],
+   "file": "extract.md",
+   "path": "Sources/2026-02-11_bbbbbbbb/",
+   "rating": 5,
+   "result_type": "extract",
+   "snippet": "Beta: quotas and karma as the price of trust.",
+   "status": "extracted",
+   "tags": [
+    "trust",
+    "quotas"
+   ],
+   "tier": "bookmark",
+   "title": "Beta bookmark",
+   "url": ""
+  },
+  {
+   "author": "",
+   "created": "2026-10-20",
+   "domains": [],
+   "file": "Inbox minimal.md",
+   "path": "Collections/",
+   "rating": null,
+   "result_type": "collection",
+   "snippet": "question: \"Proposed: what did the scanner find about trust?\"",
+   "status": "inbox",
+   "tags": [],
+   "tier": null,
+   "title": "Inbox minimal",
+   "url": ""
+  },
+  {
+   "author": "",
+   "created": "2026-09-21",
+   "domains": [
+    "learning",
+    "mc/ai"
+   ],
+   "file": "Trust without identity.md",
+   "path": "Collections/",
+   "rating": null,
+   "result_type": "collection",
+   "snippet": "# Trust without identity",
+   "status": "open",
+   "tags": [
+    "agent-identity",
+    "trust-design"
+   ],
+   "tier": null,
+   "title": "Trust without identity",
+   "url": ""
+  },
+  {
+   "author": "",
+   "created": "2026-07-01",
+   "domains": [
+    "learning"
+   ],
+   "file": "Closed dossier.md",
+   "path": "Collections/",
+   "rating": null,
+   "result_type": "collection",
+   "snippet": "question: \"Which captures covered trust before the dossier was closed?\"",
+   "status": "closed",
+   "tags": [],
+   "tier": null,
+   "title": "Closed dossier",
+   "url": ""
+  },
+  {
+   "author": "",
+   "created": "2026-05-01",
+   "domains": [],
+   "file": "Stable note.md",
+   "path": "Synthesis/",
+   "rating": null,
+   "result_type": "synthesis",
+   "snippet": "The owner's position on trust, resting on [[Sources/2026-01-10_aaaaaaaa/extract|Alpha]].",
+   "status": "stable",
+   "tags": [],
+   "tier": null,
+   "title": "Stable note",
+   "url": ""
+  },
+  {
+   "author": "",
+   "created": "",
+   "domains": [],
+   "file": "source.md",
+   "path": "Sources/2026-04-13_dddddddd/",
+   "rating": null,
+   "result_type": "source",
+   "snippet": "Delta was captured without an extract; it mentions trust once.",
+   "status": null,
+   "tags": [],
+   "tier": "full",
+   "title": "Delta capture",
+   "url": "https://example.org/2026-04-13_dddddddd"
+  }
+ ],
+ "schema": "mnemon-search/2",
+ "tokens": [
+  "trust"
+ ]
+}
