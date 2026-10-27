@@ -430,31 +430,32 @@ class RankResultsTests(unittest.TestCase):
 class DedupeByFolderTests(unittest.TestCase):
     def test_extract_beats_source(self):
         results = [
-            {"path": "Sources/2026-01-01_aaa/", "tier": "source", "title": "raw"},
-            {"path": "Sources/2026-01-01_aaa/", "tier": "extract", "title": "extracted"},
+            {"path": "Sources/2026-01-01_aaa/", "result_type": "source", "title": "raw"},
+            {"path": "Sources/2026-01-01_aaa/", "result_type": "extract", "title": "extracted"},
         ]
         deduped = search.dedupe_by_folder(results)
         self.assertEqual(len(deduped), 1)
-        self.assertEqual(deduped[0]["tier"], "extract")
+        self.assertEqual(deduped[0]["result_type"], "extract")
 
     def test_different_folders_both_kept(self):
         results = [
-            {"path": "Sources/a/", "tier": "extract", "title": "a"},
-            {"path": "Sources/b/", "tier": "extract", "title": "b"},
+            {"path": "Sources/a/", "result_type": "extract", "title": "a"},
+            {"path": "Sources/b/", "result_type": "extract", "title": "b"},
         ]
         self.assertEqual(len(search.dedupe_by_folder(results)), 2)
 
     def test_synthesis_beats_source(self):
         results = [
-            {"path": "X/", "tier": "source", "title": "s"},
-            {"path": "X/", "tier": "synthesis", "title": "syn"},
+            {"path": "X/", "file": "s.md", "result_type": "source", "title": "s"},
+            {"path": "X/", "file": "syn.md", "result_type": "synthesis", "title": "syn"},
         ]
-        self.assertEqual(search.dedupe_by_folder(results)[0]["tier"], "synthesis")
+        # a synthesis note is keyed by file: it never collapses into a Sources result
+        self.assertEqual(sorted(r["result_type"] for r in search.dedupe_by_folder(results)), ["source", "synthesis"])
 
     def test_synthesis_notes_in_one_folder_are_distinct(self):
         results = [
-            {"path": "Synthesis/", "file": "a.md", "tier": "synthesis", "title": "a", "rating": 3},
-            {"path": "Synthesis/", "file": "b.md", "tier": "synthesis", "title": "b", "rating": 9},
+            {"path": "Synthesis/", "file": "a.md", "result_type": "synthesis", "title": "a", "rating": 3},
+            {"path": "Synthesis/", "file": "b.md", "result_type": "synthesis", "title": "b", "rating": 9},
         ]
         deduped = search.dedupe_by_folder(results)
         self.assertEqual(sorted(r["file"] for r in deduped), ["a.md", "b.md"])
@@ -649,7 +650,8 @@ class EndToEndTests(TempVaultMixin, unittest.TestCase):
         out_with = self._run("--query", "unique-raw-marker", "--include-source")
         self.assertEqual(out_with["count"], 1)
         hit = out_with["results"][0]
-        self.assertEqual(hit["tier"], "source")
+        self.assertEqual(hit["result_type"], "source")
+        self.assertEqual(hit["tier"], "full")       # mnemon-search/2: tier = the capture tier (absent = full)
         self.assertEqual(hit["file"], "source.md")
         # metadata comes from the paired extract; the snippet from the raw file
         self.assertEqual(hit["title"], "Paired extract")
@@ -673,7 +675,9 @@ class EndToEndTests(TempVaultMixin, unittest.TestCase):
         self.assertEqual(self._run("--query", "perspective")["count"], 0)
         out_with = self._run("--query", "perspective", "--include-synthesis")
         self.assertEqual(out_with["count"], 1)
-        self.assertEqual(out_with["results"][0]["tier"], "synthesis")
+        self.assertEqual(out_with["results"][0]["result_type"], "synthesis")
+        self.assertIsNone(out_with["results"][0]["tier"])
+        self.assertEqual(out_with["schema"], "mnemon-search/2")
 
     def test_two_synthesis_notes_in_one_folder_both_returned(self):
         (self.vault / "Synthesis" / "second-note.md").write_text(

@@ -4,9 +4,14 @@
 Run as `mnemon search --query "<q>" [...]` (or directly). Resolves the vault
 through the engine's config loader (bin/mnemon-config.sh, honouring
 MNEMON_INSTANCE / MNEMON_CONFIG), or takes `--vault <path>` as an explicit
-override, then searches Sources/*/extract.md (and optionally source.md and
-Synthesis/) for files matching the query. Results are ranked by rating DESC,
-then date DESC, then title.
+override, then searches Sources/*/extract.md (and optionally source.md,
+Synthesis/ and Collections/) for files matching the query. Results are ranked by
+rating DESC, then date DESC, then title. The JSON is `mnemon-search/2`
+(docs/specs/2026-10-27-research-interface.md §7): every result carries
+`result_type` (extract · source · synthesis · collection; wiki in phase 3b) apart
+from `tier`, which is the capture tier of a Sources result (`full` · `bookmark`,
+read from the revision's frontmatter; `null` for a synthesis or collection
+result) — until v2 the `tier` key carried what `result_type` carries now.
 
 Design notes
 ------------
@@ -40,6 +45,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lib_config  # noqa: E402
+
+SEARCH_SCHEMA = "mnemon-search/2"
+RESULT_TYPES = ("extract", "source", "synthesis", "collection", "wiki")
+SOURCE_RESULT_TYPES = ("extract", "source")     # results of a Sources/ revision: tier applies
 
 
 # ---------------------------------------------------------------------------
@@ -216,9 +225,9 @@ def tokenize(query: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def collect_targets(
-    vault: Path, include_source: bool, include_synthesis: bool
+    vault: Path, include_source: bool, include_synthesis: bool, include_collections: bool = False
 ) -> list[tuple[Path, str]]:
-    """Return list of (file_path, tier) tuples to search."""
+    """Return list of (file_path, result_type) tuples to search."""
     targets: list[tuple[Path, str]] = []
     sources_dir = vault / "Sources"
     if sources_dir.is_dir():
@@ -232,6 +241,12 @@ def collect_targets(
         if synth_dir.is_dir():
             for md in sorted(synth_dir.rglob("*.md")):
                 targets.append((md, "synthesis"))
+    if include_collections:
+        col_dir = vault / "Collections"
+        if col_dir.is_dir():
+            for md in sorted(col_dir.glob("*.md")):
+                if not md.name.startswith("."):
+                    targets.append((md, "collection"))
     return targets
 
 
@@ -289,19 +304,36 @@ def _extract_snippet(text: str, tokens: list[str], width: int = 200) -> str | No
 # Result assembly
 # ---------------------------------------------------------------------------
 
-def assemble_result(path: Path, tier: str, snippet: str | None, vault: Path) -> dict:
+def capture_tier(source_meta: dict, extract_meta: dict) -> str:
+    """The capture tier of a Sources revision: `tier:` of source.md, else of extract.md
+    (a legacy placeholder), else `full` (absent = full, vault store §4)."""
+    for meta in (source_meta, extract_meta):
+        v = meta.get("tier")
+        if isinstance(v, str) and v.strip():
+            return v.strip().lower()
+    return "full"
+
+
+def assemble_result(path: Path, result_type: str, snippet: str | None, vault: Path) -> dict:
     meta = parse_frontmatter(path)
-    if tier == "source":
+    tier: str | None = None
+    status = meta.get("status")
+    if result_type == "source":
         # source.md carries capture metadata only (no title/domains/rating);
         # the paired extract.md has the curated fields. Keep the raw file's
-        # snippet and tier, take metadata from the extract where it has any.
+        # snippet and type, take metadata from the extract where it has any.
         paired = path.with_name("extract.md")
-        if paired.is_file():
-            merged = dict(meta)
-            for key, value in parse_frontmatter(paired).items():
-                if value not in (None, "", []):
-                    merged[key] = value
-            meta = merged
+        extract_meta = parse_frontmatter(paired) if paired.is_file() else {}
+        tier = capture_tier(meta, extract_meta)
+        status = extract_meta.get("status", status)
+        merged = dict(meta)
+        for key, value in extract_meta.items():
+            if value not in (None, "", []):
+                merged[key] = value
+        meta = merged
+    elif result_type == "extract":
+        paired = path.with_name("source.md")
+        tier = capture_tier(parse_frontmatter(paired) if paired.is_file() else {}, meta)
     # folder path relative to vault (e.g. Sources/2026-04-04_5c78d63f/)
     try:
         rel = path.relative_to(vault)
@@ -313,7 +345,9 @@ def assemble_result(path: Path, tier: str, snippet: str | None, vault: Path) -> 
     return {
         "path": folder_rel,
         "file": path.name,
+        "result_type": result_type,
         "tier": tier,
+        "status": str(status) if isinstance(status, str) and status else None,
         "title": str(meta.get("title") or path.stem),
         "author": str(meta.get("author") or ""),
         "url": str(meta.get("url") or ""),
@@ -355,20 +389,21 @@ def dedupe_by_folder(results: list[dict]) -> list[dict]:
     """If both extract.md and source.md match the same folder, keep extract.md.
 
     Sources/<folder>/ holds one source, so extract and source results share the
-    folder key. Synthesis notes are plain files — several in one folder are
-    distinct results — so they are keyed by folder + file name.
+    folder key. Synthesis notes and collections are plain files — several in one
+    folder are distinct results — so they are keyed by folder + file name
+    (interface §7: deduplication by file for every non-Sources result type).
     """
     by_folder: dict[str, dict] = {}
-    tier_priority = {"extract": 0, "synthesis": 1, "source": 2}
+    type_priority = {"extract": 0, "source": 1}
     for r in results:
         key = r["path"]
-        if r["tier"] == "synthesis":
+        if r["result_type"] not in SOURCE_RESULT_TYPES:
             key = key + r.get("file", "")
         if key not in by_folder:
             by_folder[key] = r
             continue
         current = by_folder[key]
-        if tier_priority.get(r["tier"], 99) < tier_priority.get(current["tier"], 99):
+        if type_priority.get(r["result_type"], 99) < type_priority.get(current["result_type"], 99):
             by_folder[key] = r
     return list(by_folder.values())
 
@@ -405,6 +440,8 @@ def main() -> int:
                         help="Also search raw source.md (default: only extract.md)")
     parser.add_argument("--include-synthesis", action="store_true",
                         help="Also search Synthesis/ directory")
+    parser.add_argument("--include-collections", action="store_true",
+                        help="Also search Collections/ (result_type collection)")
     parser.add_argument("--vault", default=None,
                         help="Vault path (overrides the configured instance)")
     parser.add_argument("--human", action="store_true", help="Human-readable output instead of JSON")
@@ -425,15 +462,15 @@ def main() -> int:
         print("ERROR: query contains no usable tokens (>=2 chars)", file=sys.stderr)
         return 2
 
-    targets = collect_targets(vault, args.include_source, args.include_synthesis)
+    targets = collect_targets(vault, args.include_source, args.include_synthesis, args.include_collections)
 
     # Single pass: every file matching at least one token, with the set of
     # tokens it matched. Primary results: matched == all tokens (AND).
     all_hits: list[tuple[Path, str, set, str | None]] = []
-    for path, tier in targets:
+    for path, result_type in targets:
         matched, snippet = scan_file(path, tokens)
         if matched:
-            all_hits.append((path, tier, matched, snippet))
+            all_hits.append((path, result_type, matched, snippet))
 
     token_set = set(tokens)
     primary_hits = [(p, t, m, s) for p, t, m, s in all_hits if m == token_set]
@@ -467,6 +504,7 @@ def main() -> int:
     results = results[: args.limit]
 
     output = {
+        "schema": SEARCH_SCHEMA,
         "query": args.query,
         "tokens": tokens,
         "provider": SEARCH_METHOD,
@@ -504,7 +542,10 @@ def _print_human(output: dict) -> None:
         print(f"{i}. {r['title']}")
         if r["author"]:
             print(f"   by {r['author']}")
-        print(f"   {rating} · {r['created']} · domains: {domains} · tier: {r['tier']}")
+        kind = r["result_type"] + (f" · tier: {r['tier']}" if r.get("tier") else "")
+        if r.get("status") and r["result_type"] in ("synthesis", "collection"):
+            kind += f" · status: {r['status']}"
+        print(f"   {rating} · {r['created']} · domains: {domains} · {kind}")
         if r["url"]:
             print(f"   {r['url']}")
         if r["snippet"]:

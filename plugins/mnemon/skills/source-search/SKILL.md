@@ -1,6 +1,6 @@
 ---
 name: source-search
-description: Search the Mnemon knowledge library for sources, extracts, and synthesis notes. Use whenever the user asks "what do I know about X", "find sources about", "search knowledge", "have I saved anything about", references a topic they might have captured, or when you need to check for prior context before answering a substantive question. Prefer this over manual Grep on the vault — it handles tokenization, tier selection, domain filtering, and rating-based ranking in one call.
+description: Search the Mnemon knowledge library for sources, extracts, synthesis notes and collections (research dossiers). Use whenever the user asks "what do I know about X", "find sources about", "search knowledge", "have I saved anything about", references a topic they might have captured, or when you need to check for prior context before answering a substantive question. Prefer this over manual Grep on the vault — it handles tokenization, tier selection, domain filtering, and rating-based ranking in one call.
 ---
 
 # /source-search — Search the Mnemon Knowledge Library
@@ -35,6 +35,7 @@ The command prints a JSON object to stdout. Parse it and format the results for 
 | `--limit` | 10 | Max number of results to return. |
 | `--include-source` | off | Also search `source.md` (raw captured content), not just `extract.md`. Use when the user is looking for a specific phrase that might only appear in the raw source. |
 | `--include-synthesis` | off | Also search the `Synthesis/` directory (the reader's own notes). Use when the user might be looking for their own writing, not just captured material. |
+| `--include-collections` | off | Also search `Collections/` (research dossiers: a question and the revisions filed under it). Use when the user asks what has been gathered on a topic, or which dossier a source belongs to. |
 
 ### Multi-word queries
 
@@ -64,6 +65,7 @@ The command returns JSON shaped like:
 
 ```json
 {
+  "schema": "mnemon-search/2",
   "query": "karpathy knowledge bases",
   "tokens": ["karpathy", "knowledge", "bases"],
   "provider": "grep",
@@ -75,7 +77,9 @@ The command returns JSON shaped like:
     {
       "path": "Sources/2026-04-04_5c78d63f/",
       "file": "extract.md",
-      "tier": "extract",
+      "result_type": "extract",
+      "tier": "full",
+      "status": "extracted",
       "title": "Andrej Karpathy — LLM Knowledge Bases (tweet, Apr 2026)",
       "author": "Andrej Karpathy",
       "url": "https://x.com/karpathy/status/...",
@@ -88,6 +92,8 @@ The command returns JSON shaped like:
   ]
 }
 ```
+
+`result_type` says what the result is — `extract` or `source` (a captured revision), `synthesis` (the reader's note), `collection` (a research dossier; `status` is `open`, `inbox` or `closed`). `tier` is the **capture tier** of a Sources result — `full`, or `bookmark` for a lightweight capture — and `null` for a synthesis or collection result; a bookmark-tier source has no full extract, say so when you show it. (Before `mnemon-search/2` the `tier` key carried the result type; read `result_type` now.) A collection's `path` + `file` is `Collections/<name>.md`; several collections live in one folder and are distinct results.
 
 Format it for the user like this:
 
@@ -112,7 +118,8 @@ If the first pass returns few or zero results and the user seemed to expect more
 
 1. Re-run with `--include-source` — the phrase might be in the raw capture, not the summary
 2. Re-run with `--include-synthesis` — the reader may have written about it themselves
-3. Re-run with a simpler / broader query — strip modifiers, keep the topic word
+3. Re-run with `--include-collections` — a dossier may already gather the sources on this question
+4. Re-run with a simpler / broader query — strip modifiers, keep the topic word
 
 Don't do all three silently — tell the user what you're broadening and why.
 
