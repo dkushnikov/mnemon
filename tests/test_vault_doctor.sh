@@ -651,6 +651,8 @@ doc --list queues
 assert_eq "$out" "_inputs/notes.md	undeclared — declare (type: queue, since) or remove	-	-" "--list queues names the undeclared file"
 
 echo "--- the dispatcher: doctor --data, --json envelope, --list, exit codes; status --brief; the one Extracted ---"
+# the clean vault carries fixed dates (synced 2026-10-10 / 14 d, since 2026-10-10 / 30 d): the dispatcher passes no
+# --today, so its calls pin the clock through the MNEMON_TEST_DOCTOR_TODAY hook — otherwise the suite expires with the calendar
 printf 'instance: dirty\nvault_path: %s\narchive_dir: %s\nreader_context_path: %s/_meta/reader-context.md\nsearch_provider: grep\n' "$DIRTY" "$ARCHIVE" "$DIRTY" > "$TEST_TMPDIR/dirty.yaml"
 printf 'instance: clean\nvault_path: %s\narchive_dir: %s\nreader_context_path: %s/_meta/reader-context.md\nsearch_provider: grep\n' "$CLEAN" "$CARCH" "$CLEAN" > "$TEST_TMPDIR/clean.yaml"
 printf 'instance: gone\nvault_path: %s/no-such-vault\nsearch_provider: grep\n' "$TEST_TMPDIR" > "$TEST_TMPDIR/gone.yaml"
@@ -677,7 +679,7 @@ assert_eq "$rc" "0" "doctor --list thin exits 0"
 assert_eq "$out" "$LIST_THIN" "doctor --list thin prints only that list, equal to the tool's"
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" doctor --data --list data/thin
 assert_eq "$out" "$LIST_THIN" "--data --list data/thin: the same list"
-run "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" doctor --data
+run env MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_TODAY="$TODAY" "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" doctor --data
 fails="$(printf '%s\n' "$out" | grep -c '^fail ' || true)"; depfails="$(printf '%s\n' "$out" | grep -c '^fail \(deps\|fence\|writer\)' || true)"
 assert_eq "$fails" "$depfails" "the clean vault adds no fail line (only this host's deps/fence may)"
 if [[ "$fails" -eq 0 ]]; then assert_eq "$rc" "0" "doctor --data exits 0 without a fail"; else assert_eq "$rc" "1" "doctor --data exits 1 because of this host's deps"; fi
@@ -687,19 +689,19 @@ run "$MNEMON" --config "$TEST_TMPDIR/gone.yaml" doctor --data
 assert_eq "$rc" "1" "a vault that is not there: exit 1"
 assert_contains "$out" "fail doctor/error — vault-doctor: vault not found: $TEST_TMPDIR/no-such-vault" "a tool that dies is one fail doctor/error line, the engine checks are kept"
 assert_contains "$out" " deps — " "...the engine checks are still there"
-run env MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_RAISE=store/index "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" doctor --data
+run env MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_TODAY="$TODAY" MNEMON_TEST_DOCTOR_RAISE=store/index "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" doctor --data
 assert_eq "$rc" "1" "an exception inside one check: exit 1 through the dispatcher"
 assert_contains "$out" "fail doctor/error — store/index: RuntimeError: test hook" "...the fail diagnostic line"
 assert_contains "$out" "warn store/index — not probed: error: RuntimeError: test hook" "...the broken check not probed"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^ok \(store\|data\|human\)/' || true)" "18" "...the other 18 still ran"
-run "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" status --brief
+run env MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_TODAY="$TODAY" "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" status --brief
 assert_eq "$rc" "0" "status --brief exits 0"
 assert_eq "$(printf '%s\n' "$out" | grep -c .)" "1" "status --brief is one physical line"
 assert_contains "$out" "Clean · 3 sources (3 managed · 3 current · 0 superseded) · 3 extracted · 2 synthesis (1 seeds / " "...with the instance's counters"
 assert_contains "$out" " · data: 0 fail · 0 warn · probed 18/19" "...and the data summary (the ledger not probed here)"
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" status --brief --budget 0.001
 assert_eq "$out" "Dirty · data: not probed (budget 0.001 s exceeded)" "status --brief --budget: honest"
-run "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" status --brief --json
+run env MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_TODAY="$TODAY" "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" status --brief --json
 assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["instance"], d["counters"]["folders"], d["summary"]["fail"], "checks" in d)')" "clean 3 0 False" "status --brief --json: counters + summary"
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" status
 assert_eq "$rc" "0" "status exits 0"
@@ -710,7 +712,7 @@ run python3 "$LIBV" --vault "$DIRTY" --status-counts
 assert_contains "$out" "extracted=90" "lib_vault --status-counts: the same number"
 before="$(snap "$DIRTY" "$ARCHIVE" "$CLEAN" "$CARCH")"
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" doctor --data --json
-run "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" status --brief
+run env MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_TODAY="$TODAY" "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" status --brief
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" status
 after="$(snap "$DIRTY" "$ARCHIVE" "$CLEAN" "$CARCH")"
 assert_eq "$after" "$before" "the dispatcher paths write nothing into the vaults or the archives either"
@@ -719,7 +721,7 @@ echo "--- the usage text ---"
 run "$MNEMON" help
 assert_contains "$out" "doctor [--instance <name>] [--json] [--data [--list <check>]]" "help lists doctor --data / --list"
 assert_contains "$out" "status [--brief [--json] [--budget <s>]]" "help lists status --brief"
-run "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" doctor --list
+run env MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_TODAY="$TODAY" "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" doctor --list
 assert_eq "$rc" "2" "doctor --list without a name is a usage error"
 
 echo "--- reindex: the Commands block names what exists ---"

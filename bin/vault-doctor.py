@@ -29,7 +29,8 @@ the budget, terminates then kills the worker when it expires and says so — `da
 Without `--vault` the configuration comes from `lib_config.load_config()` (the instance the
 dispatcher resolved); with `--vault` the tool runs on defaults, for tests. Exit 0 unless an
 exception (the dispatcher derives its exit from the fail lines); `--today` fixes the clock.
-Test hooks, honoured only under MNEMON_TEST_HOOKS=1: MNEMON_TEST_DOCTOR_STALL=<s> (the worker
+Test hooks, honoured only under MNEMON_TEST_HOOKS=1: MNEMON_TEST_DOCTOR_TODAY=<YYYY-MM-DD> (the
+clock when no --today is given — the dispatcher passes none), MNEMON_TEST_DOCTOR_STALL=<s> (the worker
 sleeps before scanning; with MNEMON_TEST_DOCTOR_PIDFILE it writes its pid first) and
 MNEMON_TEST_DOCTOR_RAISE=<check> (that check raises). Stdlib only, python 3.9.
 """
@@ -1317,9 +1318,12 @@ def main(argv: List[str]) -> int:
         args.budget = DEFAULT_BRIEF_BUDGET
 
     try:
-        today = datetime.date.fromisoformat(args.today) if args.today else datetime.date.today()
+        # the clock: --today, else the test hook (the dispatcher passes no --today; a suite that
+        # runs it on fixtures with fixed dates pins the clock this way), else the real date
+        fixed = args.today or test_hook("MNEMON_TEST_DOCTOR_TODAY")
+        today = datetime.date.fromisoformat(fixed) if fixed else datetime.date.today()
     except ValueError:
-        print("vault-doctor: --today expects YYYY-MM-DD, got %r" % args.today, file=sys.stderr)
+        print("vault-doctor: --today expects YYYY-MM-DD, got %r" % (args.today or fixed), file=sys.stderr)
         return 2
     rc = 0
     if args.budget is not None and not args.worker:
