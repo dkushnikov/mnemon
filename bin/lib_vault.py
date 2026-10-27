@@ -3,10 +3,12 @@
 
 docs/specs/2026-10-16-vault-store.md: `mnemon doctor --data`, `mnemon status --brief` and
 `mnemon status` read the vault through this module and nothing else — one walk of
-`Sources/*/`, `Synthesis/*.md`, `_inputs/*.md`, `_meta/`, the capture ledger and the archive
-listing; per-folder records with the folder class (managed · damaged · legacy, S1), the
-supersedes graph and the derived axes (S2), the Synthesis link resolver, the declared queues
-(S5), the guide stamps (I11) and the counters of the `mnemon-doctor-data/1` document (S4).
+`Sources/*/`, `Collections/*.md`, `Synthesis/*.md`, `_inputs/*.md`, `_meta/`, the capture
+ledger and the archive listing; per-folder records with the folder class (managed · damaged ·
+legacy, S1), the supersedes graph and the derived axes (S2), the Synthesis link resolver, the
+collection records of the research reader (`lib_research.py`, phase 3a — `filed` counts their
+items), the declared queues (S5), the guide stamps (I11) and the counters of the
+`mnemon-doctor-data/1` document (S4; the `collections*` keys were added in v1.4, additively).
 
 Observational by construction: nothing is written, no directory is created, no lock is taken
 (the vault lock is probed on a private descriptor that is closed at once), no network. A file
@@ -51,6 +53,7 @@ def _load_module(name: str, filename: str):
 
 kr = _load_module("knowledge_reindex", "knowledge-reindex.py")   # read_header, scan_sources, build_row, …
 vl = _load_module("vault_lock", "vault-lock.py")                  # vault_state_dir (the D6 rule)
+lr = _load_module("lib_research", "lib_research.py")              # collection/1 reader (phase 3a)
 if BIN_DIR not in sys.path:
     sys.path.insert(0, BIN_DIR)
 from capture import resolve  # noqa: E402  (canonicalize — the one identity rule)
@@ -461,6 +464,28 @@ def scan_synthesis(vault: str, snapshot: dict) -> dict:
     return out
 
 
+def scan_collections(vault: str, snapshot: dict, existing: Optional[set] = None) -> dict:
+    """Every `Collections/*.md` as a collection/1 record of the research reader; a document that
+    vanishes or cannot be read is counted unreadable (state `unreadable`), never raised."""
+    d = os.path.join(vault, lr.COLLECTIONS_DIR)
+    out = {"present": os.path.isdir(d), "notes": []}
+    if not out["present"]:
+        return out
+    try:
+        names = lr.list_collections(vault)
+    except OSError:
+        snapshot["unreadable"] += 1
+        return out
+    for n in names:
+        p = os.path.join(d, n + ".md")
+        text = _read_text(p, snapshot)
+        if text is None:
+            out["notes"].append(lr.unreadable_record(n, "unreadable"))
+            continue
+        out["notes"].append(lr.read_collection_text(text, n, existing=existing))
+    return out
+
+
 def scan_inputs(vault: str, snapshot: dict) -> dict:
     d = os.path.join(vault, "_inputs")
     out = {"present": os.path.isdir(d), "queues": [], "untyped": [], "hand_edits": None, "pending_writes": 0}
@@ -692,6 +717,7 @@ def scan_vault(vault: str, state_dir: Optional[str] = None, archive_dir: Optiona
         "folders": folders, "by_name": {r["name"]: r for r in folders}, "graph": graph,
         "index_text": index_text,
         "synthesis": scan_synthesis(vault, snapshot),
+        "collections": scan_collections(vault, snapshot, existing=set(r["name"] for r in folders)),
         "inputs": scan_inputs(vault, snapshot),
         "reader_context": scan_reader_context(reader_context, snapshot),
         "charter": scan_charter(charter, snapshot),
@@ -768,6 +794,17 @@ def synthesis_breakdown(notes: List[dict]) -> dict:
     return out
 
 
+def collections_breakdown(cols: List[dict]) -> dict:
+    out = {"open": 0, "inbox": 0, "closed": 0, "unknown": 0}
+    for c in cols:
+        s = c.get("status")
+        if s in lr.COLLECTION_STATUS:
+            out[s] += 1
+        else:
+            out["unknown"] += 1
+    return out
+
+
 def unratified(note: dict) -> bool:
     """S2: drafted_by non-empty and status ∈ {draft, empty} (seeds are H2, stable is ratified)."""
     return bool(note["drafted_by"]) and note["status"] in ("draft", "")
@@ -790,6 +827,11 @@ def counters(scan: dict) -> dict:
             integrated.update(rev for rev in n["links"] if rev in existing)
         elif n["status"] in ("seed", "draft"):
             filed.update(rev for rev in n["links"] if rev in existing)
+    # v1.4: an item of any collection (any status, any role — `excluded` was considered) files
+    # its revision; a malformed line files nothing
+    cols = scan.get("collections", {}).get("notes", [])
+    for col in cols:
+        filed.update(it["rev"] for it in col["items"] if it["rev"] in existing)
     queues = scan["inputs"]["queues"]
     c = {
         "folders": len(folders),
@@ -813,6 +855,14 @@ def counters(scan: dict) -> dict:
         "unknown_authorship": sum(1 for n in notes if unknown_authorship(n)),
         "integrated": len(integrated), "filed": len(filed - integrated),
         "links_unresolved": sum(n["unresolved"] for n in notes),
+        "collections": len(cols),
+        "collections_fail": sum(1 for c in cols if c["state"] == "fail"),
+        "collections_unreadable": sum(1 for c in cols if c["state"] == "unreadable"),
+        "collections_status": collections_breakdown(cols),
+        "collection_items": sum(c["counts"]["items"] for c in cols),
+        "collection_items_excluded": sum(c["counts"]["excluded"] for c in cols),
+        "collection_items_malformed": sum(c["counts"]["malformed"] for c in cols),
+        "collection_items_unresolved": sum(c["counts"]["unresolved"] or 0 for c in cols),
         "queues_declared": len(queues),
         "queues_parked": sum(1 for q in queues if queue_is_parked(q, today)),
         "queues_untyped": len(scan["inputs"]["untyped"]),
@@ -856,6 +906,7 @@ def main(argv: List[str]) -> int:
         st = c["status"]
         for key, value in (("folders", c["folders"]), ("extracted", c["extracted"]), ("captured", c["captured"]),
                            ("current", c["current"]), ("superseded", c["superseded"]), ("managed", c["managed"]),
+                           ("collections", c["collections"]), ("collections_fail", c["collections_fail"]),
                            ("status_extracted", st["extracted"]), ("status_dismissed", st["dismissed"]),
                            ("status_legacy_words", st["legacy_words"]), ("status_empty", st["empty"]),
                            ("status_unknown", st["unknown"]), ("unreadable", scan["snapshot"]["unreadable"])):
