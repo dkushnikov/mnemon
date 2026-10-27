@@ -22,8 +22,8 @@ A change to any row is a change to this document, in the same PR as the code, wi
 The frontmatter of a collection is read by `lib_research.parse_flat_frontmatter`, a subset shared with the engine's other readers:
 
 - `key: scalar` — a double-quoted scalar decodes `\"` and `\\` and nothing else; a single-quoted one is verbatim (`''` → `'`); a bare one loses a trailing ` # comment` and surrounding whitespace; `#…` is empty;
-- `key: [a, "b, c", d]` — an inline list, commas outside quotes split it, each item a scalar; `[]` is the empty list;
-- `key:` followed by `- item` lines (indented or at column zero) — a block list; `key:` with nothing under it is the empty scalar;
+- `key: [a, "b, c", d]` — an inline list, commas outside quotes split it, each item a scalar; `[]` is the empty list; a ` # comment` after the closing bracket is dropped;
+- `key:` followed by `- item` lines (indented or at column zero) — a block list; comment lines inside it are skipped; `key:` with nothing under it is the empty scalar;
 - comments and blank lines are skipped;
 - a **duplicate key** is an error (the first value is kept, the document fails); a **nested mapping** (`key:` followed by `  sub: value`) is an error; an indented line outside a block list and a line that is not `key: value` are errors.
 
@@ -65,7 +65,7 @@ The raw target is classified **before** any resolver: nothing is normalized, not
 
 ## 4. The reader record
 
-`lib_research.read_collection_text(text, name, existing=None)` → one record; `scan_collections(vault, existing)` → the records of `Collections/*.md` sorted by name (dot-files skipped); `python3 bin/lib_research.py --vault <path> [--json]` prints them (`--json`: `{"schema": "research-interface/1", "collections": [...]}`; text: one `ok|fail|unreadable <name> — <status> · N items[ · K excluded][ · U unresolved][ · M malformed]` line, each error and malformed line under it, a summary line, exit 1 when any document is not `ok`); `--file <path>` reads one document without consulting a vault (`exists` and `unresolved` are null).
+`lib_research.read_collection_text(text, name, existing=None)` → one record; `scan_collections(vault, existing)` → the records of `Collections/*.md` sorted by name (dot-files skipped); `python3 bin/lib_research.py --vault <path> [--json]` prints them (`--json`: `{"schema": "research-interface/1", "collections": [...]}`; text: one `ok|fail|unreadable <name> — <status> · N items[ · K excluded][ · U unresolved][ · M malformed]` line, each error and malformed line under it, a summary line, exit 1 when any document is not `ok`); `--file <path>` reads one document without consulting a vault (`exists` and `unresolved` are null). A `Collections/` folder that exists but cannot be listed is never an empty one: `list_collections` raises, the CLI exits 1 saying so, `lib_vault` counts it (`snapshot.complete = false`, `snapshot.collections_unlisted`), reindex keeps one row saying the section was not regenerated (§6).
 
 ```json
 {
@@ -110,6 +110,7 @@ The raw target is classified **before** any resolver: nothing is normalized, not
 ```
 - [[Collections/<name>|<name>]] (<status>, <n> items[, <k> excluded][, <m> malformed])[ (fail: <first error>)] — <question>
 - [[Collections/<name>|<name>]] (unreadable)
+- _Collections/ could not be listed (<error>); the rows are not regenerated_
 ```
 
 `<name>` and `<question>` pass through the index's `display_text` (a `|` is replaced). The counters line of `reindex` adds `Collections=N` when the folder exists. The rows are regenerated every time and never preserved as hand edits (only `- [[Sources/…` rows are).
@@ -138,7 +139,7 @@ Targets: `Sources/*/extract.md` always; `Sources/*/source.md` with `--include-so
 
 - `result_type` is what the result is. `tier` is the **capture tier** of a Sources result (`extract` or `source`): `tier:` of the revision's `source.md`, else of its `extract.md` (a legacy placeholder), else `full`; it is `null` for every other result type. Until v2 the `tier` key carried the result type — a consumer that reads `tier` for the kind of result must read `result_type` now (the plugin's `source-search` skill does since 0.2.2).
 - `status`: the stored `status:` of the file (`extracted`/`dismissed`/a legacy word for an extract; for a source result the paired extract's; `seed`/`draft`/`stable` for a synthesis note; `open`/`inbox`/`closed` for a collection), `null` when absent.
-- A source result takes its metadata from the paired `extract.md` where that has any (v1); a collection result's `title` is its file stem, its `domains`/`tags`/`created` its frontmatter's.
+- A source result takes its metadata from the paired `extract.md` where that has any (v1); a collection result's `title` is its file stem and its `status`/`domains`/`tags`/`created` come from the research reader (§4) — the same subset, the same duplicate-key and `...` rules as reindex and the doctor.
 - Deduplication: `extract` and `source` results are keyed by folder (extract wins); every other result type is keyed by folder + file — three collections in one folder are three results.
 - `--domain` filters every result type by its `domains` (a collection's are its own; phase 3b wiki pages inherit the union of their collections').
 - Exit codes: 0 · 2 for a usage error, a missing vault, a query with no usable token, a configuration error.
