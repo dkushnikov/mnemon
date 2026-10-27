@@ -44,7 +44,7 @@ echo "--- compatibility fixtures (tests/fixtures/research/expected) ---"
 run python3 "$MNEMON_ROOT/tests/fixtures/research/generate.py" --check
 assert_eq "$rc" "0" "every expected reading of the fixture vault is reproduced (generate.py --check)"
 [[ "$rc" -eq 0 ]] || printf '%s\n' "$out"
-for f in research.json counters.json index.md search-default.json search-all.json search-domain.json; do
+for f in research.json counters.json index.md search-default.json search-all.json search-domain.json doctor-data.json; do
   assert_file_exists "$MNEMON_ROOT/tests/fixtures/research/expected/$f" "golden $f is tracked"
 done
 run python3 "$MNEMON_ROOT/tests/fixtures/research/generate.py"
@@ -58,29 +58,31 @@ run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" search --query trust --inclu
 assert_eq "$rc" "0" "mnemon search --include-collections exits 0"
 assert_eq "$(jq_ "$out" 'd["schema"]')" "mnemon-search/2" "the JSON is mnemon-search/2"
 assert_eq "$(jq_ "$out" 'sorted(set(r["result_type"] for r in d["results"]))')" "['collection', 'extract']" "collections and extracts, no synthesis without its flag"
-assert_eq "$(jq_ "$out" 'sorted(r["file"] for r in d["results"] if r["result_type"] == "collection")')" "['Closed dossier.md', 'Inbox minimal.md', 'Trust without identity.md']" "three collections of one folder are three results (dedup by file)"
+assert_eq "$(jq_ "$out" 'sorted(r["file"] for r in d["results"] if r["result_type"] == "collection")')" "['Annotated.md', 'Closed dossier.md', 'Inbox minimal.md', 'Trust without identity.md']" "four collections of one folder are four results (dedup by file)"
 assert_eq "$(jq_ "$out" 'sorted(set(str(r["tier"]) for r in d["results"] if r["result_type"] == "collection"))')" "['None']" "a collection result has tier null"
 assert_eq "$(jq_ "$out" '[r["tier"] for r in d["results"] if r["path"] == "Sources/2026-02-11_bbbbbbbb/"]')" "['bookmark']" "tier is the capture tier of the revision (bookmark from source.md)"
 run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" search --query trust
 assert_eq "$(jq_ "$out" 'sorted(set(r["result_type"] for r in d["results"]))')" "['extract']" "collections are opt-in"
-run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" search --query trust --include-collections --human
+run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" search --query trust --include-collections --include-synthesis --include-source --human --limit 20
 assert_contains "$out" "collection · status: open" "the human form names the result type and the collection's status"
+assert_contains "$out" "synthesis · status: stable" "...and a synthesis note's"
 assert_contains "$out" "extract · tier: bookmark" "...and the capture tier of a Sources result"
+assert_contains "$out" "source · tier: bookmark" "...a bookmark revision without an extract is a source result"
 run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" search --query trust --include-wiki
 assert_eq "$rc" "2" "--include-wiki is reserved for phase 3b (a usage error today)"
 
 run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" reindex
 assert_eq "$rc" "0" "mnemon reindex on the fixture exits 0"
-assert_contains "$out" "Collections=7" "...and reports the collections"
-assert_contains "$(cat "$VAULT/index.md")" "| Collections | 7 |" "index.md: the Status row"
-assert_eq "$(grep -c '^- \[\[Collections/' "$VAULT/index.md")" "7" "index.md: one row per collection"
+assert_contains "$out" "Collections=8" "...and reports the collections"
+assert_contains "$(cat "$VAULT/index.md")" "| Collections | 8 |" "index.md: the Status row"
+assert_eq "$(grep -c '^- \[\[Collections/' "$VAULT/index.md")" "8" "index.md: one row per collection"
 assert_contains "$(cat "$VAULT/index.md")" "(open, 4 items, 1 excluded) — How can an agent be trusted when it cannot be identified?" "index.md: status, items, excluded, the question"
 run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" status
 assert_eq "$rc" "0" "mnemon status exits 0 on the fixture"
 run hermetic "$MNEMON" --config "$TEST_TMPDIR/research.yaml" doctor --data --json
 JSON="$TEST_TMPDIR/doc.json"; printf '%s' "$out" > "$JSON"
 assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["data"]["schema"], len(d["data"]["checks"]), sorted(c["name"] for c in d["data"]["checks"])[0])' "$JSON")" "mnemon-doctor-data/1 19 data/arxiv-abstract" "doctor --data stays mnemon-doctor-data/1 with its 19 checks (the research document is phase 3b)"
-assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["data"]["counters"]; print(d["collections"], d["collections_fail"], d["filed"], d["integrated"])' "$JSON")" "7 4 4 1" "...and its counters carry the collections additively, filed extended"
+assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["data"]["counters"]; print(d["collections"], d["collections_fail"], d["filed"], d["integrated"])' "$JSON")" "8 4 4 1" "...and its counters carry the collections additively, filed extended"
 assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["data"]; print([c["status"] for c in d["checks"] if c["name"] == "store/index"][0])' "$JSON")" "ok" "store/index reads only the Sources rows: the Collections section is no drift"
 run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" search --query trust --include-collections --limit 20
 assert_eq "$rc" "0" "search is read-only: nothing changed by reindex/doctor breaks it"
@@ -89,7 +91,7 @@ assert_eq "$rc" "0" "search is read-only: nothing changed by reindex/doctor brea
 echo "--- lib_research.py as a door ---"
 run python3 "$MNEMON_ROOT/bin/lib_research.py" --vault "$VAULT"
 assert_eq "$rc" "1" "exit 1: four documents fail"
-assert_contains "$out" "collections: 7 · fail 4 · unreadable 0" "the summary line"
+assert_contains "$out" "collections: 8 · fail 4 · unreadable 0" "the summary line"
 assert_contains "$out" "line 12: two or more links on one line" "every malformed line is named with its reason"
 run python3 "$MNEMON_ROOT/bin/lib_research.py" --file "$VAULT/Collections/Trust without identity.md"
 assert_eq "$rc" "0" "--file on a valid document exits 0"
@@ -134,6 +136,7 @@ run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" reindex
 assert_eq "$rc" "0" "reindex still writes the index"
 assert_contains "$err" "Collections/ could not be listed" "...and says the section was not regenerated"
 assert_contains "$(cat "$VAULT/index.md")" "_Collections/ could not be listed" "...with one row saying so instead of an empty section"
+assert_contains "$(cat "$VAULT/index.md")" "| Collections | ? |" "...and the Status row says ?"
 chmod 755 "$VAULT/Collections"
 
 rm -rf "$TEST_TMPDIR"

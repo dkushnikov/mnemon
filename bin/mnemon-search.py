@@ -338,7 +338,7 @@ def assemble_result(path: Path, result_type: str, snippet: str | None, vault: Pa
         paired = path.with_name("extract.md")
         extract_meta = parse_frontmatter(paired) if paired.is_file() else {}
         tier = capture_tier(meta, extract_meta)
-        status = extract_meta.get("status", status)
+        status = extract_meta.get("status")      # a source result's status is its extract's; none → null
         merged = dict(meta)
         for key, value in extract_meta.items():
             if value not in (None, "", []):

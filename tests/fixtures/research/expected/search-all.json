@@ -1,6 +1,6 @@
 {
  "configured_provider": null,
- "count": 9,
+ "count": 11,
  "fallback_applied": false,
  "fallback_token": null,
  "provider": "grep",
@@ -104,6 +104,26 @@
   },
   {
    "author": "",
+   "created": "2026-10-05",
+   "domains": [
+    "learning"
+   ],
+   "file": "Annotated.md",
+   "path": "Collections/",
+   "rating": null,
+   "result_type": "collection",
+   "snippet": "question: \"Is trust annotated?\"   # the question, with a comment",
+   "status": "open",
+   "tags": [
+    "annotated",
+    "trust"
+   ],
+   "tier": null,
+   "title": "Annotated",
+   "url": ""
+  },
+  {
+   "author": "",
    "created": "2026-09-21",
    "domains": [
     "learning",
@@ -169,6 +189,21 @@
    "tier": "full",
    "title": "Delta capture",
    "url": "https://example.org/2026-04-13_dddddddd"
+  },
+  {
+   "author": "",
+   "created": "",
+   "domains": [],
+   "file": "source.md",
+   "path": "Sources/2026-05-14_ffffffff/",
+   "rating": null,
+   "result_type": "source",
+   "snippet": "A bookmark-tier capture about trust with no extract of its own.",
+   "status": null,
+   "tags": [],
+   "tier": "bookmark",
+   "title": "Epsilon bookmark",
+   "url": "https://example.org/2026-05-14_ffffffff"
   }
  ],
  "schema": "mnemon-search/2",

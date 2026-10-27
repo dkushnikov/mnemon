@@ -1,0 +1,575 @@
+{
+ "checks": [
+  {
+   "counts": {
+    "damaged": 0,
+    "legacy": 6,
+    "legacy_empty": 0,
+    "legacy_unclosed": 0,
+    "legacy_underscore": 0,
+    "managed_bad": 0,
+    "managed_ok": 0
+   },
+   "detail": "0 managed bodies match text_sha256; 0 damaged; 6 legacy headers closed, bodies present, no `_` keys",
+   "fix": "operator",
+   "items": [],
+   "name": "store/source-integrity",
+   "probed": true,
+   "reason": null,
+   "status": "ok",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "current": 5,
+    "duplicate_groups": 0,
+    "inconsistent": 0,
+    "legacy_only_groups": 0,
+    "unkeyed": 0
+   },
+   "detail": "5 current revisions, 0 share a resource (resource_sha256 · canonical URL v1); unkeyed 0 (non-url legacy)",
+   "fix": "mnemon audit --canonical",
+   "items": [],
+   "name": "store/identity",
+   "probed": true,
+   "reason": null,
+   "status": "ok",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "differ": 0,
+    "duplicated": 0,
+    "extra": 0,
+    "hand_edits_rows": 0,
+    "missing": 4,
+    "rows": 4
+   },
+   "detail": "index.md missing; 4 rows to generate; no hand-edits report",
+   "fix": "mnemon reindex",
+   "items": [
+    {
+     "id": "2026-01-10_aaaaaaaa",
+     "rating": null,
+     "reason": "row missing",
+     "words": null
+    },
+    {
+     "id": "2026-02-11_bbbbbbbb",
+     "rating": null,
+     "reason": "row missing",
+     "words": null
+    },
+    {
+     "id": "2026-03-12_cccccccc",
+     "rating": null,
+     "reason": "row missing",
+     "words": null
+    },
+    {
+     "id": "2026-03-12_cccccccc-2",
+     "rating": null,
+     "reason": "row missing",
+     "words": null
+    }
+   ],
+   "name": "store/index",
+   "probed": true,
+   "reason": null,
+   "status": "warn",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "cross_resource": 0,
+    "current_incomplete": false,
+    "cycles": 0,
+    "dangling": 0,
+    "edges": 1,
+    "fan_out": 0,
+    "incomparable": 0,
+    "self_edges": 0,
+    "stored_superseded": 0
+   },
+   "detail": "1 edges, 0 dangling, 0 cycles",
+   "fix": "operator",
+   "items": [],
+   "name": "store/supersedes",
+   "probed": true,
+   "reason": null,
+   "status": "ok",
+   "threshold": {}
+  },
+  {
+   "counts": {},
+   "detail": "not probed: archive_dir not configured",
+   "fix": "mnemon audit",
+   "items": [],
+   "name": "store/archive",
+   "probed": false,
+   "reason": "archive_dir not configured",
+   "status": "ok",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "blocked": 0,
+    "complete": 0,
+    "invalid": 0,
+    "legacy_url_without_record": 6,
+    "managed_url": 0,
+    "partial": 0,
+    "unknown": 0
+   },
+   "detail": "managed url revisions: complete 0 · partial 0 · blocked 0 · unknown 0; 6 legacy url revisions without a record",
+   "fix": "mnemon add --recapture",
+   "items": [],
+   "name": "store/completeness",
+   "probed": true,
+   "reason": null,
+   "status": "ok",
+   "threshold": {}
+  },
+  {
+   "counts": {},
+   "detail": "not probed: no ledger yet — nothing captured on this host (<state>/captures)",
+   "fix": "mnemon add --resume",
+   "items": [],
+   "name": "store/ledger",
+   "probed": false,
+   "reason": "no ledger yet — nothing captured on this host (<state>/captures)",
+   "status": "ok",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "extract": {
+     "dismissed": 0,
+     "empty": 0,
+     "empty_managed": 0,
+     "extracted": 4,
+     "legacy": {},
+     "legacy_words": 0,
+     "unknown": 0,
+     "unknown_words": {}
+    },
+    "synthesis": {
+     "draft": 0,
+     "empty": 0,
+     "seed": 1,
+     "stable": 1,
+     "unknown": 0,
+     "unknown_words": {}
+    }
+   },
+   "detail": "extract: extracted 4 · dismissed 0 · legacy words 0 · empty 0 · unknown 0; synthesis: seed 1 · draft 0 · stable 1 · empty 0 · unknown 0",
+   "fix": "operator",
+   "items": [],
+   "name": "store/status-vocabulary",
+   "probed": true,
+   "reason": null,
+   "status": "ok",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "declared": [
+     "personal"
+    ],
+    "inside": 0,
+    "legacy_vaults": {},
+    "managed": 0,
+    "outside": 0
+   },
+   "detail": "0 managed contexts ∈ charter (personal); no charter (default personal); legacy vault names not compared",
+   "fix": "operator",
+   "items": [],
+   "name": "store/context",
+   "probed": true,
+   "reason": null,
+   "status": "ok",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "alias_unknown": 0,
+    "aliases": 0,
+    "managed_pairs": 0,
+    "mismatch": 0,
+    "no_sections": 0,
+    "no_status": 0,
+    "orphans": 0,
+    "url_differs": 0,
+    "with_source": 4
+   },
+   "detail": "4 extracts have a source; 0 managed pairs agree on capture_id/revision; 0 without sections",
+   "fix": "operator",
+   "items": [],
+   "name": "store/extract-consistency",
+   "probed": true,
+   "reason": null,
+   "status": "ok",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "claude_md": null,
+    "engine": 4,
+    "protocol": null
+   },
+   "detail": "vault CLAUDE.md missing, _meta/Protocol.md missing (engine guide 4)",
+   "fix": "operator",
+   "items": [
+    {
+     "id": "vault CLAUDE.md",
+     "rating": null,
+     "reason": "missing",
+     "words": null
+    },
+    {
+     "id": "_meta/Protocol.md",
+     "rating": null,
+     "reason": "missing",
+     "words": null
+    }
+   ],
+   "name": "store/guide-version",
+   "probed": true,
+   "reason": null,
+   "status": "warn",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "by_class": {
+     "landing/stub": 3
+    },
+    "completeness": 0,
+    "rated_hi": 2,
+    "thin": 3
+   },
+   "detail": "3 current bodies < 300 words (landing/stub 3); 2 rated ≥ 7 — top: 2026-03-12_cccccccc-2 ★8 14w, 2026-01-10_aaaaaaaa ★7 19w",
+   "fix": "mnemon add --recapture",
+   "items": [
+    {
+     "class": "landing/stub",
+     "features": [
+      "stub",
+      "completeness:none"
+     ],
+     "id": "2026-03-12_cccccccc-2",
+     "rating": 8,
+     "source_type": "article",
+     "words": 14
+    },
+    {
+     "class": "landing/stub",
+     "features": [
+      "stub",
+      "completeness:none"
+     ],
+     "id": "2026-01-10_aaaaaaaa",
+     "rating": 7,
+     "source_type": "article",
+     "words": 19
+    },
+    {
+     "class": "landing/stub",
+     "features": [
+      "stub",
+      "completeness:none"
+     ],
+     "id": "2026-04-13_dddddddd",
+     "rating": null,
+     "source_type": "article",
+     "words": 13
+    }
+   ],
+   "name": "data/thin",
+   "probed": true,
+   "reason": null,
+   "status": "warn",
+   "threshold": {
+    "rating_hi": 7,
+    "stub_words": 40,
+    "thin_words": 300
+   }
+  },
+  {
+   "counts": {
+    "superseded": 0,
+    "suspects": 0
+   },
+   "detail": "0 current arXiv revisions below 600 words (0 superseded)",
+   "fix": "mnemon add --recapture",
+   "items": [],
+   "name": "data/arxiv-abstract",
+   "probed": true,
+   "reason": null,
+   "status": "ok",
+   "threshold": {
+    "arxiv_words": 600
+   }
+  },
+  {
+   "counts": {
+    "features": {
+     "< 40 words": 5,
+     "bookmark": 0,
+     "fetch_status failed": 0
+    },
+    "stubs": 5
+   },
+   "detail": "5 placeholders: fetch_status failed 0 · bookmark 0 · < 40 words 5",
+   "fix": "operator",
+   "items": [
+    {
+     "class": "stub",
+     "features": [
+      "< 40 words"
+     ],
+     "id": "2026-03-12_cccccccc-2",
+     "rating": 8,
+     "words": 14
+    },
+    {
+     "class": "stub",
+     "features": [
+      "< 40 words"
+     ],
+     "id": "2026-01-10_aaaaaaaa",
+     "rating": 7,
+     "words": 19
+    },
+    {
+     "class": "stub",
+     "features": [
+      "< 40 words"
+     ],
+     "id": "2026-02-11_bbbbbbbb",
+     "rating": 5,
+     "words": 12
+    },
+    {
+     "class": "stub",
+     "features": [
+      "< 40 words"
+     ],
+     "id": "2026-04-13_dddddddd",
+     "rating": null,
+     "words": 13
+    },
+    {
+     "class": "stub",
+     "features": [
+      "< 40 words"
+     ],
+     "id": "2026-05-14_ffffffff",
+     "rating": null,
+     "words": 14
+    }
+   ],
+   "name": "data/stubs",
+   "probed": true,
+   "reason": null,
+   "status": "warn",
+   "threshold": {
+    "stub_words": 40
+   }
+  },
+  {
+   "counts": {
+    "current": 5,
+    "hi": 2,
+    "rated": 3,
+    "share_pct": 66.7
+   },
+   "detail": "67 % of rated current revisions ≥ 7 (2/3, coverage 3/5); threshold 20 %",
+   "fix": "operator",
+   "items": [
+    {
+     "class": "rated ≥ 7",
+     "id": "2026-03-12_cccccccc-2",
+     "rating": 8,
+     "words": 14
+    },
+    {
+     "class": "rated ≥ 7",
+     "id": "2026-01-10_aaaaaaaa",
+     "rating": 7,
+     "words": 19
+    }
+   ],
+   "name": "data/rating-scale",
+   "probed": true,
+   "reason": null,
+   "status": "warn",
+   "threshold": {
+    "rating_hi": 7,
+    "rating_hi_share": 20
+   }
+  },
+  {
+   "counts": {
+    "age_days": null
+   },
+   "detail": "no freshness data (missing <vault>/reader-context.md)",
+   "fix": "operator",
+   "items": [],
+   "name": "data/reader-context",
+   "probed": true,
+   "reason": null,
+   "status": "warn",
+   "threshold": {
+    "staleness_threshold_days": 14
+   }
+  },
+  {
+   "counts": {
+    "mtime_fallback": 0,
+    "oldest_days": 0,
+    "unknown_authorship": 0,
+    "unratified": 0
+   },
+   "detail": "0 unratified agent drafts (radius 5 / 45 d) (defaults); unknown authorship 0",
+   "fix": "operator",
+   "items": [],
+   "name": "human/ratification",
+   "probed": true,
+   "reason": null,
+   "status": "ok",
+   "threshold": {
+    "count": 5,
+    "days": 45,
+    "defaults": true
+   }
+  },
+  {
+   "counts": {
+    "mtime_fallback": 0,
+    "oldest_days": 148,
+    "seeds": 1
+   },
+   "detail": "1 seeds, oldest 148 d (radius 10 / 30 d) (defaults)",
+   "fix": "operator",
+   "items": [
+    {
+     "age_days": 148,
+     "drafted_by": "agent",
+     "id": "Synthesis/Seed note",
+     "mtime_fallback": false,
+     "rating": null,
+     "reason": "seed 148 d",
+     "status": "seed",
+     "words": null
+    }
+   ],
+   "name": "human/seeds",
+   "probed": true,
+   "reason": null,
+   "status": "warn",
+   "threshold": {
+    "count": 10,
+    "days": 30,
+    "defaults": true
+   }
+  },
+  {
+   "counts": {
+    "declared": 0,
+    "oldest_days": 0,
+    "over_radius": 0,
+    "parked": 0,
+    "pending_writes_legacy": 0,
+    "untyped": 0
+   },
+   "detail": "0 declared queues; untyped 0; pending-writes legacy 0 (radius 30 d) (defaults)",
+   "fix": "operator",
+   "items": [],
+   "name": "human/queues",
+   "probed": true,
+   "reason": null,
+   "status": "ok",
+   "threshold": {
+    "days": 30,
+    "defaults": true
+   }
+  }
+ ],
+ "counters": {
+  "archive_entries": 0,
+  "captured": 2,
+  "cross_resource": 0,
+  "current": 5,
+  "current_incomplete": false,
+  "cycles": 0,
+  "damaged": 0,
+  "dangling": 0,
+  "drafts_unratified": 0,
+  "edges": 1,
+  "extracted": 4,
+  "fan_out": 0,
+  "filed": 4,
+  "folders": 6,
+  "integrated": 1,
+  "ledger_present": false,
+  "legacy": 6,
+  "links_unresolved": 0,
+  "malformed": 0,
+  "managed": 0,
+  "pending_writes_legacy": 0,
+  "queues_declared": 0,
+  "queues_parked": 0,
+  "queues_untyped": 0,
+  "receipts": 0,
+  "seeds": 1,
+  "stable": 1,
+  "status": {
+   "dismissed": 0,
+   "empty": 0,
+   "extracted": 4,
+   "legacy": {},
+   "legacy_words": 0,
+   "unknown": 0,
+   "unknown_words": {}
+  },
+  "superseded": 1,
+  "synthesis": 2,
+  "synthesis_status": {
+   "draft": 0,
+   "empty": 0,
+   "seed": 1,
+   "stable": 1,
+   "unknown": 0,
+   "unknown_words": {}
+  },
+  "unknown_authorship": 0,
+  "unreadable_folders": 0,
+  "without_source": 0
+ },
+ "diagnostics": [],
+ "instance": "vault",
+ "schema": "mnemon-doctor-data/1",
+ "snapshot": {
+  "budget_s": null,
+  "complete": true,
+  "folders_listed": 6,
+  "folders_scanned": 6,
+  "lock": "none",
+  "lock_held": false,
+  "sources_unlisted": null,
+  "today": "2026-10-27",
+  "unreadable": 0
+ },
+ "summary": {
+  "checks": 19,
+  "diagnostics_fail": 0,
+  "diagnostics_warn": 0,
+  "fail": 0,
+  "not_probed": 2,
+  "ok": 12,
+  "probed": 17,
+  "warn": 7
+ },
+ "vault": "<vault>"
+}

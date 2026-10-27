@@ -25,7 +25,7 @@ The frontmatter of a collection is read by `lib_research.parse_flat_frontmatter`
 - `key: [a, "b, c", d]` — an inline list, commas outside quotes split it, each item a scalar; `[]` is the empty list; a ` # comment` after the closing bracket is dropped;
 - `key:` followed by `- item` lines (indented or at column zero) — a block list; comment lines inside it are skipped; `key:` with nothing under it is the empty scalar;
 - comments and blank lines are skipped;
-- a **duplicate key** is an error (the first value is kept, the document fails); a **nested mapping** (`key:` followed by `  sub: value`) is an error; an indented line outside a block list and a line that is not `key: value` are errors.
+- a **duplicate key** is an error (the first value is kept, the document fails); a **nested mapping** (`key:` followed by `  sub: value`) and a **nested list** (an item indented deeper than the first, or a bracket inside an inline list) are errors; an indented line outside a block list and a line that is not `key: value` are errors; a quoted scalar may be followed by a ` # comment`.
 
 Keys of `collection/1`: scalars `type`, `status`, `question`, `curated_by`, `created`, `updated`, `wiki`, `recusal`, `migrated_from`, `source_of`; lists `domains`, `tags`, `aliases`, `suppressed_pages`. Unknown keys are kept as they are and returned under `extra` (a migrated note carries its old `visibility`, `sources`, …). A list key given a scalar is an error; a scalar key given a list is an error.
 
@@ -38,7 +38,7 @@ Keys of `collection/1`: scalars `type`, `status`, `question`, `curated_by`, `cre
 | `created` | yes | `YYYY-MM-DD` | — |
 | `updated` | no | `YYYY-MM-DD` | null |
 | `wiki` | no | `on` · `off` (case-insensitive, normalized) | `on` |
-| `suppressed_pages` | no | list of wiki page file names (without `.md`) | `[]` |
+| `suppressed_pages` | no | list of wiki page file names: no `/`, no `[[`/`]]`, no `.md` suffix, not empty (anything else is an error — the veto must match a file name) | `[]` |
 | `recusal` | no | `on` · `off` | null (= the agent decides by tags, phase 3c) |
 | `domains`, `tags`, `aliases` | no | lists of strings | `[]` |
 | `migrated_from` | no | `Synthesis/<old name>`; written once by the migration, never changed | null |
@@ -46,20 +46,20 @@ Keys of `collection/1`: scalars `type`, `status`, `question`, `curated_by`, `cre
 
 ## 3. The `## Items` grammar
 
-The body is split into `## ` sections outside fenced blocks (``` or ~~~); a `# ` title and `### ` sub-headings do not open sections. Exactly one `## Items` section is required: none → the document fails (`no `## Items` section`); two → it fails (`duplicate `## Items` heading (lines a, b)`) and the first is read. Other sections — `## Why`, `## Open questions`, `## Notes (owner)` and any other — are tolerated and returned by name in `sections`.
+The body is split into `## ` sections outside fenced blocks (a run of three or more backticks or tildes, closed by a run of the same character at least as long, with nothing after it); a `# ` title and `### ` sub-headings do not open sections. A heading is an ATX heading with up to three leading spaces, one space after the `##`, and closing `#`s only after whitespace; the section name is compared exactly (`Items`, not `items`). A UTF-8 BOM before the frontmatter is ignored; CRLF line endings are read. Exactly one `## Items` section is required: none → the document fails (`no `## Items` section`); two → it fails (`duplicate `## Items` heading (lines a, b)`) and the first is read. Other sections — `## Why`, `## Open questions`, `## Notes (owner)` and any other — are tolerated and returned by name in `sections`.
 
 Inside `## Items`, line by line (fenced blocks skipped, blank lines ignored):
 
 | Line | Reading |
 |---|---|
-| a list line (`- ` or `* `, any indentation) with **exactly one** wikilink whose target is `Sources/<rev>`, `Sources/<rev>/extract`, `Sources/<rev>/source`, optionally `.md`, `#fragment`, `\|display` (the `![[…]]` embed form counts as a link) | an **item**: `rev`, `file` (`extract` · `source` · null for the bare revision), `fragment`, `display`; the tail after the link, minus trailing punctuation and one dash (`—`, `–`, `-`), gives the **role** — the first `**…**` segment, normalized to lower case and single spaces — and the **note** (the rest, minus one more dash); without a leading `**…**` the role is null and the whole tail is the note; the role `excluded` sets `excluded: true` |
-| an indented line (two spaces or more; a tab counts two) **without a link**, with or without a list marker, under an item | a continuation: appended to the item's note with a newline |
+| a list line (`- ` or `* `, any indentation) with **exactly one** wikilink whose target is `Sources/<rev>`, `Sources/<rev>/extract`, `Sources/<rev>/source`, optionally `.md`, `#fragment`, `\|display` (the `![[…]]` embed form counts as a link) | an **item**: `rev`, `file` (`extract` · `source` · null for the bare revision), `fragment`, `display`; the tail after the link, minus trailing punctuation and one dash (`—`, `–`, `-`), gives the **role** — the first `**…**` segment, normalized to lower case and single spaces, surrounding `*`/`_` and a trailing `:.,;` dropped (`***excluded***:` is `excluded`) — and the **note** (the rest, minus one more dash); without a leading `**…**` the role is null and the whole tail is the note; the role `excluded` sets `excluded: true` |
+| an indented line (two spaces or more; a tab counts two) **without a link**, with or without a list marker, under an item | a continuation: appended to the item's note with a newline; a nested line **with** a Sources link is an item of its own, with any other link it is malformed |
 | a list line without a link at the top level, or before any item | **malformed**: `list line without a Sources/ link` |
 | a list line with two or more wikilinks | **malformed**: `two or more links on one line` |
 | one link whose target is empty, has a backslash, starts with `/`, contains a `.` or `..` segment, does not start with `Sources/`, names no revision, names a revision outside `^\d{4}-\d{2}-\d{2}_[0-9a-f]{8}(-\d+)?$`, or names a file other than `extract(.md)` / `source(.md)` | **malformed**, with the reason (`absolute path in link target` · `path traversal in link target` · `link outside Sources/ (another folder or another instance)` · `revision name malformed: …` · `unknown file in revision: …` · …) |
 | a second item for a revision already listed | **malformed**: `duplicate revision <rev> (first at line n)` — the first stays an item |
-| a non-list, non-indented line | **malformed**: `free text between items (no list marker)` |
-| an indented line under a malformed line | **malformed**: `continuation under a malformed line` |
+| a non-list line that is not an indented continuation | **malformed**: `free text between items (no list marker)` |
+| an indented line (with or without a marker) under a malformed line | **malformed**: `continuation under a malformed line` |
 
 The raw target is classified **before** any resolver: nothing is normalized, nothing is looked up on disk. A malformed line fails the document; the other items still count and the line is named with its 1-based line number, its reason and its text (first 120 characters).
 
@@ -85,7 +85,7 @@ The raw target is classified **before** any resolver: nothing is normalized, not
 }
 ```
 
-`state` is `fail` when `errors` or `malformed` is non-empty, `unreadable` when the file could not be read (then `errors` names the reason and every count is 0 — an unreadable document is never a clean one), `ok` otherwise. `exists` is resolved against the `existing` set the caller passes (`lib_vault` passes the names of `Sources/*/`); `unresolved` counts the items whose revision is absent. `links_outside_items` counts wikilinks in the other sections — they file nothing.
+`state` is `fail` when `errors` or `malformed` is non-empty, `unreadable` when the file could not be read (then `errors` names the reason, the counts are 0 and `unresolved` null — an unreadable document is never a clean one), `ok` otherwise. `exists` is resolved against the `existing` the caller passes: a set of revision names, or — what `lib_vault` and `existing_revisions()` pass — a mapping revision → the files it holds, in which case the item's **target** must exist: the folder for the bare form, `extract.md` or `source.md` otherwise (an item to a captured-only revision's `extract` is unresolved); `unresolved` counts the items whose target is absent. `links_outside_items` counts wikilinks in the other sections — they file nothing. With `--file`, `file` is the document's base name.
 
 ## 5. Derived relations and counters
 
@@ -101,7 +101,7 @@ The raw target is classified **before** any resolver: nothing is normalized, not
 | `collection_items` · `collection_items_excluded` · `collection_items_malformed` · `collection_items_unresolved` | sums over the documents |
 | `filed` | extended as above (the one existing key whose meaning changed) |
 
-`lib_vault.py --status-counts` adds `collections=` and `collections_fail=` lines. The 19 checks, `summary`, `snapshot`, `diagnostics` and the brief line of `mnemon status --brief` are byte-for-byte what v1.3 produced on a vault without `Collections/` (the vault store suite proves it); `store/index` reads only the `- [[Sources/…` rows, so the new index section is never drift.
+`lib_vault.py --status-counts` adds `collections=` and `collections_fail=` lines. The 19 checks, `summary`, `snapshot`, `diagnostics` of `mnemon-doctor-data/1` are what v1.3 produced (checked by hand against `main` on the fixture vault with and without `Collections/`, 2026-10-27: identical apart from the temporary state path; `counters` gained exactly the keys above) and are frozen as the golden `expected/doctor-data.json` (§11) — the branches must leave it byte-for-byte; `store/index` reads only the `- [[Sources/…` rows, so the new index section is never drift.
 
 ## 6. The index
 
@@ -113,7 +113,7 @@ The raw target is classified **before** any resolver: nothing is normalized, not
 - _Collections/ could not be listed (<error>); the rows are not regenerated_
 ```
 
-`<name>` and `<question>` pass through the index's `display_text` (a `|` is replaced). The counters line of `reindex` adds `Collections=N` when the folder exists. The rows are regenerated every time and never preserved as hand edits (only `- [[Sources/…` rows are).
+`<name>` and `<question>` pass through the index's `display_text` (a `|` is replaced); a document without a valid status shows `?` in its place; an unlistable folder gives the Status row `?`. The counters line of `reindex` adds `Collections=N` when the folder exists. The rows are regenerated every time and never preserved as hand edits (only `- [[Sources/…` rows are).
 
 ## 7. Search — `mnemon-search/2`
 
@@ -138,7 +138,9 @@ Targets: `Sources/*/extract.md` always; `Sources/*/source.md` with `--include-so
 ```
 
 - `result_type` is what the result is. `tier` is the **capture tier** of a Sources result (`extract` or `source`): `tier:` of the revision's `source.md`, else of its `extract.md` (a legacy placeholder), else `full`; it is `null` for every other result type. Until v2 the `tier` key carried the result type — a consumer that reads `tier` for the kind of result must read `result_type` now (the plugin's `source-search` skill does since 0.2.2).
-- `status`: the stored `status:` of the file (`extracted`/`dismissed`/a legacy word for an extract; for a source result the paired extract's; `seed`/`draft`/`stable` for a synthesis note; `open`/`inbox`/`closed` for a collection), `null` when absent.
+- `status`: the stored `status:` of the file (`extracted`/`dismissed`/a legacy word for an extract; for a source result the paired extract's — `null` without an extract, never `source.md`'s own; `seed`/`draft`/`stable` for a synthesis note; `open`/`inbox`/`closed` for a collection), `null` when absent.
+- A **bookmark revision without an extract** (phase 3-capture's lightweight capture, `tier: bookmark` in `source.md`, no `extract.md`) is not found by the default scan (extracts only); with `--include-source` it is a `source` result with `tier: bookmark`, `status: null`, its `title`/`url`/`created` from `source.md`, `rating: null`, `domains`/`tags` empty unless `source.md` carries them. Phase 3-capture may add a `--tier` filter; the absence case above is what phase 3a freezes (fixture `2026-05-14_ffffffff`). A `tier:` value outside `full`/`bookmark` passes through lower-cased.
+- Pages the doctor marks `not probed` (phase 3b) are excluded from the wiki block like `unbound` ones.
 - A source result takes its metadata from the paired `extract.md` where that has any (v1); a collection result's `title` is its file stem and its `status`/`domains`/`tags`/`created` come from the research reader (§4) — the same subset, the same duplicate-key and `...` rules as reindex and the doctor.
 - Deduplication: `extract` and `source` results are keyed by folder (extract wins); every other result type is keyed by folder + file — three collections in one folder are three results.
 - `--domain` filters every result type by its `domains` (a collection's are its own; phase 3b wiki pages inherit the union of their collections').
@@ -147,7 +149,7 @@ Targets: `Sources/*/extract.md` always; `Sources/*/source.md` with `--include-so
 
 ## 8. The doctor
 
-Phase 3a changes nothing in `mnemon doctor --data`: `mnemon-doctor-data/1`, its 19 checks, `--list`, the brief line and the exit codes are as in the vault store spec; only `counters` gains the keys of §5. Reserved for phase 3b: a document `research` with `"schema": "mnemon-doctor-research/1"`, embedded as `"research": {…}` next to `"data": {…}` in the `doctor --data --json` envelope and printed as `ok|warn|fail research/<check> — …` lines after the data lines; its checks are namespaced `research/<name>` (`--list research/<name>`); a `fail` there joins the aggregated exit 1 of `doctor --data`; `status --brief` keeps its policy (exit 0 after a run) and adds `research: N pages · K fail · M warn` to its line; one `--budget` covers both documents and a timeout marks the document it hit `not probed`. The checks it will carry: the collection schema and grammar (every document of §4 with `state` ≠ ok, as `fail` for schema and grammar, `warn` for unresolved items), the age of open collections (informational), and the wiki states of §9.
+Phase 3a changes nothing in `mnemon doctor --data`: `mnemon-doctor-data/1`, its 19 checks, `--list`, the brief line and the exit codes are as in the vault store spec; only `counters` gains the keys of §5. Reserved for phase 3b: a document `research` with `"schema": "mnemon-doctor-research/1"`, embedded as `"research": {…}` next to `"data": {…}` in the `doctor --data --json` envelope and printed as `ok|warn|fail research/<check> — …` lines after the data lines; its checks are namespaced `research/<name>` (`--list research/<name>`); a `fail` there joins the aggregated exit 1 of `doctor --data`; `status --brief` keeps its policy (exit 0 after a run) and adds `research: N pages · K fail · M warn` to its line; one `--budget` covers both documents and a timeout marks the document it hit `not probed`. The checks it will carry: the collection schema and grammar (every document of §4 with `state` ≠ ok, as `fail` for schema and grammar, `warn` for unresolved items), the age of open collections (informational), and the wiki states of §9; its `summary` carries `probed` / `not_probed` like the data document and a `coverage: {pages, collections}` count.
 
 ## 9. `wiki/1` — reserved for phase 3b
 
@@ -159,7 +161,7 @@ No key of `mnemon config keys` changes in phase 3a. Reserved: `research_log_path
 
 ## 11. Compatibility fixtures and ownership
 
-`tests/fixtures/research/vault/` is the vault every branch reads the same way: five legacy revisions (one `tier: bookmark`, one superseded pair, one captured without an extract), a stable and a seed note, and seven collections — one valid `open` dossier with every accepted line form, a minimal `inbox` one, a `closed` one with the veto fields, and four that must fail (every rejected line form, a duplicate `## Items`, a broken frontmatter, a missing `## Items`). `tests/fixtures/research/expected/` holds the readings `generate.py` pins: `research.json` (the records of §4), `counters.json` (the keys of §5), `index.md` (the Status table and the section of §6), `search-default.json` · `search-all.json` · `search-domain.json` (§7). `tests/test_research.sh` runs `generate.py --check`, the unit tests of `tests/test_research.py`, the dispatcher on a copy of the fixture, the reader as a door, `init`'s scaffold and the Guide 4 canon. `generate.py --write` regenerates the goldens — only together with a change to this document.
+`tests/fixtures/research/vault/` is the vault every branch reads the same way: six legacy revisions (a `tier: bookmark` with an extract, a bookmark without any extract, a superseded pair, one captured without an extract), a stable and a seed note, and eight collections — one valid `open` dossier with every accepted line form, an annotated one (`...`, comments, a decorated role), a minimal `inbox` one, a `closed` one with the veto fields and an unresolved target, and four that must fail (every rejected line form, a duplicate `## Items`, a broken frontmatter, a missing `## Items`). `tests/fixtures/research/expected/` holds the readings `generate.py` pins: `research.json` (the records of §4), `counters.json` (the keys of §5), `index.md` (the Status table and the section of §6), `search-default.json` · `search-all.json` · `search-domain.json` (§7), `doctor-data.json` (the data document of §8 with `generated_at`, the paths and the phase 3a counter keys normalized away). `tests/test_research.sh` runs `generate.py --check`, the unit tests of `tests/test_research.py`, the dispatcher on a copy of the fixture, the reader as a door, `init`'s scaffold and the Guide 4 canon. `generate.py --write` regenerates the goldens — only together with a change to this document.
 
 | Shared file | Owner | Other branches |
 |---|---|---|

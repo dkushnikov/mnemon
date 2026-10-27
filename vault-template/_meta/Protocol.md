@@ -45,7 +45,7 @@ suppressed_pages: []    # page file names you removed and forbid rebuilding
 - [[Sources/<rev>/extract]] — **excluded** — considered, not cited
 ```
 
-One `## Items` line = one revision, exactly one `[[Sources/<rev>…]]` link; the role is the first `**…**` after the dash, the rest is the note; a nested line without a link continues the note. Two links on a line, a link outside `Sources/`, `..` in a target, free text between items or a second `## Items` heading fail the dossier (`mnemon doctor --data`, the reindex row, `python3 $MNEMON_HOME/bin/lib_research.py --vault <path>`). An item pins its revision: a re-captured source stays pinned to the old revision until you (or an agent on your word) rebind the line.
+One `## Items` line = one revision, exactly one `[[Sources/<rev>…]]` link; the role is the first `**…**` after the dash, the rest is the note; a nested line without a link continues the note. Two links on a line, a link outside `Sources/`, `..` in a target, free text between items or a second `## Items` heading fail the dossier (the reindex row and `python3 $MNEMON_HOME/bin/lib_research.py --vault <path>` say so today; the doctor's `research/` document comes in phase 3b). A nested line with a Sources link is an item of its own; a nested line with any other link is malformed — a cross-reference belongs in `## Why` or `## Open questions`. An item pins its revision: a re-captured source stays pinned to the old revision until you (or an agent on your word) rebind the line.
 
 ## States
 

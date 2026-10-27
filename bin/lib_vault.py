@@ -721,7 +721,8 @@ def scan_vault(vault: str, state_dir: Optional[str] = None, archive_dir: Optiona
         "folders": folders, "by_name": {r["name"]: r for r in folders}, "graph": graph,
         "index_text": index_text,
         "synthesis": scan_synthesis(vault, snapshot),
-        "collections": scan_collections(vault, snapshot, existing=set(r["name"] for r in folders)),
+        "collections": scan_collections(vault, snapshot, existing={
+            r["name"]: {f for f, has in (("extract", r["has_extract"]), ("source", r["has_source"])) if has} for r in folders}),
         "inputs": scan_inputs(vault, snapshot),
         "reader_context": scan_reader_context(reader_context, snapshot),
         "charter": scan_charter(charter, snapshot),

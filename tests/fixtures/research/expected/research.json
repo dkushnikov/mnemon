@@ -9,6 +9,56 @@
     "malformed": 0,
     "unresolved": 0
    },
+   "created": "2026-10-05",
+   "curated_by": "owner",
+   "domains": [
+    "learning"
+   ],
+   "errors": [],
+   "extra": {},
+   "file": "Collections/Annotated.md",
+   "items": [
+    {
+     "display": null,
+     "excluded": false,
+     "exists": true,
+     "file": "extract",
+     "fragment": null,
+     "line": 17,
+     "note": "the stars and the colon are not part of the role",
+     "rev": "2026-01-10_aaaaaaaa",
+     "role": "bold role"
+    }
+   ],
+   "malformed": [],
+   "migrated_from": null,
+   "name": "Annotated",
+   "question": "Is trust annotated?",
+   "recusal": null,
+   "schema": "collection/1",
+   "sections": [
+    "Items"
+   ],
+   "source_of": null,
+   "state": "ok",
+   "status": "open",
+   "suppressed_pages": [],
+   "tags": [
+    "annotated",
+    "trust"
+   ],
+   "updated": null,
+   "wiki": "on"
+  },
+  {
+   "aliases": [],
+   "counts": {
+    "excluded": 0,
+    "items": 1,
+    "links_outside_items": 0,
+    "malformed": 0,
+    "unresolved": 0
+   },
    "created": null,
    "curated_by": "owner",
    "domains": [],
@@ -58,10 +108,10 @@
    "aliases": [],
    "counts": {
     "excluded": 0,
-    "items": 2,
+    "items": 3,
     "links_outside_items": 0,
     "malformed": 0,
-    "unresolved": 0
+    "unresolved": 1
    },
    "created": "2026-07-01",
    "curated_by": "owner",
@@ -93,6 +143,17 @@
      "note": "the `.md` form and plain dashes",
      "rev": "2026-02-11_bbbbbbbb",
      "role": "answer (b)"
+    },
+    {
+     "display": null,
+     "excluded": false,
+     "exists": false,
+     "file": "extract",
+     "fragment": null,
+     "line": 21,
+     "note": "the revision exists, its extract is not published: an unresolved target",
+     "rev": "2026-04-13_dddddddd",
+     "role": "captured only"
     }
    ],
    "malformed": [],

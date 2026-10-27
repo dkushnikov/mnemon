@@ -88,6 +88,19 @@ class FrontmatterSubsetTests(unittest.TestCase):
         data, _ = lr.parse_flat_frontmatter('question: "[draft] why?"\n')
         self.assertEqual(data["question"], "[draft] why?")
 
+    def test_quoted_scalar_followed_by_a_comment(self):
+        data, err = lr.parse_flat_frontmatter('q: "x # y" # c\nr: \'it\'\'s\' # c\ns: "unterminated # not a comment\n')
+        self.assertEqual(err, [])
+        self.assertEqual(data, {"q": "x # y", "r": "it's", "s": '"unterminated'})
+
+    def test_nested_lists_are_errors(self):
+        _, err = lr.parse_flat_frontmatter("tags:\n  - a\n    - b\n")
+        self.assertEqual(err, ["nested list under `tags` (flat scalars and lists only)"])
+        _, err = lr.parse_flat_frontmatter("tags: [a, [b, c]]\n")
+        self.assertEqual(err, ["nested list under `tags` (flat scalars and lists only)"])
+        data, err = lr.parse_flat_frontmatter('tags: [a, "[b]"]\n')
+        self.assertEqual((data, err), ({"tags": ["a", "[b]"]}, []))
+
 
 # ---------------------------------------------------------------------------
 # Links
@@ -135,6 +148,11 @@ class ItemTailTests(unittest.TestCase):
     def test_no_role_is_a_note(self):
         self.assertEqual(lr.parse_item_tail(" (★8) — Gamma, no role here."), (None, "(★8) — Gamma, no role here."))
         self.assertEqual(lr.parse_item_tail(""), (None, ""))
+
+    def test_decorated_roles(self):
+        self.assertEqual(lr.parse_item_tail(" — ***excluded*** — n"), ("excluded", "n"))
+        self.assertEqual(lr.parse_item_tail(" — **excluded:** — n"), ("excluded", "n"))
+        self.assertEqual(lr.parse_item_tail(" — **Answer (B).**"), ("answer (b)", ""))
 
     def test_trailing_punctuation_after_the_link(self):
         self.assertEqual(lr.parse_item_tail(". — **r** — n"), ("r", "n"))
@@ -215,6 +233,49 @@ class GrammarTests(unittest.TestCase):
         rec = doc("  - nested first\n- [[Sources/%s/extract]]\n" % A)
         self.assertEqual(rec["malformed"][0]["reason"], "list line without a Sources/ link")
 
+    def test_nested_line_with_a_link(self):
+        rec = doc("- [[Sources/%s/extract]] — **r** — first\n  - [[Sources/%s/extract]] — nested item\n  - see [[Synthesis/X]]\n" % (A, B))
+        self.assertEqual([i["rev"] for i in rec["items"]], [A, B], "a nested line with a Sources link is an item of its own")
+        self.assertEqual([m["reason"] for m in rec["malformed"]], ["link outside Sources/ (another folder or another instance)"])
+
+    def test_heading_rule(self):
+        base = HEAD + "\n%s\n- [[Sources/%s/extract]]\n"
+        for heading, ok in (("## Items", True), ("   ## Items", True), ("## Items ##", True), ("## Items   ", True),
+                            ("## Items#", False), ("## items", False), ("    ## Items", False), ("##Items", False), ("### Items", False)):
+            rec = lr.read_collection_text(base % (heading, A), "t")
+            self.assertEqual(rec["state"] == "ok" and rec["counts"]["items"] == 1, ok, heading)
+
+    def test_fences_of_any_length_and_tildes(self):
+        rec = doc("- [[Sources/%s/extract]]\n````\n- [[Sources/%s/extract]]\n```\nstill fenced\n````\n~~~\n- [[Sources/%s/extract]]\n~~~\n- [[Sources/%s/extract]]\n" % (A, B, C, D))
+        self.assertEqual(rec["state"], "ok")
+        self.assertEqual([i["rev"] for i in rec["items"]], [A, D])
+
+    def test_bom_crlf_empty_unclosed(self):
+        bom = "\ufeff" + HEAD + "## Items\n- [[Sources/%s/extract]]\n" % A
+        self.assertEqual(lr.read_collection_text(bom, "t")["state"], "ok", "a BOM is ignored")
+        crlf = (HEAD + "## Items\n- [[Sources/%s/extract]] — **r** — n\n" % A).replace("\n", "\r\n")
+        rec = lr.read_collection_text(crlf, "t")
+        self.assertEqual((rec["state"], rec["items"][0]["role"], rec["items"][0]["note"]), ("ok", "r", "n"))
+        rec = lr.read_collection_text("", "t")
+        self.assertEqual(rec["state"], "fail")
+        self.assertEqual(rec["errors"][0], "no frontmatter (an opening `---` line closed by `---`)")
+        rec = lr.read_collection_text("---\ntype: collection\nstatus: open\n## Items\n", "t")
+        self.assertEqual(rec["errors"][0], "no frontmatter (an opening `---` line closed by `---`)")
+
+    def test_targets_resolve_per_file(self):
+        existing = {A: {"extract", "source"}, D: {"source"}, "2026-06-01_abababab": set(), "2026-06-02_acacacac": {"source"}}
+        rec = lr.read_collection_text(HEAD + "## Items\n- [[Sources/%s/extract]]\n- [[Sources/%s/extract]]\n- [[Sources/2026-06-02_acacacac/source]]\n- [[Sources/2026-06-01_abababab]]\n- [[Sources/2026-06-03_adadadad/source]]\n" % (A, D), "t", existing=existing)
+        self.assertEqual([i["exists"] for i in rec["items"]], [True, False, True, True, False])
+        self.assertEqual(rec["counts"]["unresolved"], 2)
+        rec = lr.read_collection_text(HEAD + "## Items\n- [[Sources/%s/source]]\n- [[Sources/%s]]\n" % (D, A), "t", existing=existing)
+        self.assertEqual([i["exists"] for i in rec["items"]], [True, True], "the bare form needs only the folder; /source needs the file")
+
+    def test_suppressed_pages_entries(self):
+        rec = lr.read_collection_text("---\ntype: collection\nstatus: open\nquestion: q\ncurated_by: o\ncreated: 2026-10-01\n"
+                                      "suppressed_pages: [\"Good page\", \"Bad.md\", \"Wiki/Bad\", \"[[Bad]]\", \"\"]\n---\n## Items\n", "t")
+        self.assertEqual(len([e for e in rec["errors"] if e.startswith("`suppressed_pages` entry")]), 4)
+        self.assertEqual(rec["suppressed_pages"], ["Good page", "Bad.md", "Wiki/Bad", "[[Bad]]", ""])
+
     def test_existing_marks_resolution(self):
         rec = doc("- [[Sources/%s/extract]]\n- [[Sources/2026-05-01_eeeeeeee/extract]]\n" % A)
         self.assertEqual([i["exists"] for i in rec["items"]], [True, False])
@@ -277,9 +338,15 @@ class FixtureVaultTests(unittest.TestCase):
 
     def test_the_seven_documents(self):
         states = {n: r["state"] for n, r in self.records.items()}
-        self.assertEqual(states, {"Trust without identity": "ok", "Inbox minimal": "ok", "Closed dossier": "ok",
+        self.assertEqual(states, {"Trust without identity": "ok", "Annotated": "ok", "Inbox minimal": "ok", "Closed dossier": "ok",
                                   "Malformed items": "fail", "Duplicate heading": "fail", "Bad frontmatter": "fail",
                                   "No items section": "fail"})
+        ann = self.records["Annotated"]
+        self.assertEqual((ann["status"], ann["curated_by"], ann["domains"], ann["tags"], ann["question"]),
+                         ("open", "owner", ["learning"], ["annotated", "trust"], "Is trust annotated?"))
+        self.assertEqual((ann["items"][0]["role"], ann["items"][0]["note"]), ("bold role", "the stars and the colon are not part of the role"))
+        closed = self.records["Closed dossier"]
+        self.assertEqual([i["exists"] for i in closed["items"]], [True, True, False], "an item to a captured-only revision's extract is unresolved")
 
     def test_the_valid_dossier(self):
         r = self.records["Trust without identity"]
@@ -293,9 +360,10 @@ class FixtureVaultTests(unittest.TestCase):
     def test_counters(self):
         c = self.scan["counters"]
         self.assertEqual((c["collections"], c["collections_fail"], c["collections_status"]),
-                         (7, 4, {"open": 5, "inbox": 1, "closed": 1, "unknown": 0}))
+                         (8, 4, {"open": 6, "inbox": 1, "closed": 1, "unknown": 0}))
         self.assertEqual((c["collection_items"], c["collection_items_excluded"], c["collection_items_malformed"], c["collection_items_unresolved"]),
-                         (12, 1, 11, 1))
+                         (14, 1, 11, 2))
+        self.assertEqual((c["folders"], c["captured"], c["extracted"]), (6, 2, 4))
         # filed: B (the seed) · C, C2 (the open dossier; A is integrated by the stable note and not counted) · D (inbox)
         self.assertEqual((c["integrated"], c["filed"]), (1, 4))
 
@@ -315,9 +383,18 @@ class FixtureVaultTests(unittest.TestCase):
             p = subprocess.run([sys.executable, str(BIN_DIR / "knowledge-reindex.py"), str(copy), "--no-hand-edit-report"],
                                capture_output=True, text=True)
             self.assertEqual(p.returncode, 0, p.stderr)
-            self.assertIn("Collections=7", p.stdout)
+            self.assertIn("Collections=8", p.stdout)
             text = (copy / "index.md").read_text(encoding="utf-8")
-            self.assertIn("| Collections | 7 |", text)
+            self.assertIn("| Collections | 8 |", text)
+            # an unreadable document is one row saying so; a `|` in a question is displayed, not a table break
+            (copy / "Collections" / "Piped.md").write_text("---\ntype: collection\nstatus: open\nquestion: \"a | b?\"\ncurated_by: o\ncreated: 2026-10-01\n---\n## Items\n", encoding="utf-8")
+            os.chmod(copy / "Collections" / "Closed dossier.md", 0)
+            subprocess.run([sys.executable, str(BIN_DIR / "knowledge-reindex.py"), str(copy), "--no-hand-edit-report"], check=True, capture_output=True)
+            text = (copy / "index.md").read_text(encoding="utf-8")
+            os.chmod(copy / "Collections" / "Closed dossier.md", 0o644)
+            self.assertIn("- [[Collections/Closed dossier|Closed dossier]] (unreadable)", text)
+            self.assertIn("(open, 0 items) — a / b?", text)
+            self.assertIn("| Collections | 9 |", text)
             self.assertIn("- [[Collections/Trust without identity|Trust without identity]] (open, 4 items, 1 excluded) — How can an agent be trusted when it cannot be identified?", text)
             self.assertIn("(open, 2 items, 11 malformed)", text)
             self.assertIn("(fail: no `## Items` section)", text)
@@ -351,11 +428,16 @@ class FixtureVaultTests(unittest.TestCase):
             if r["result_type"] in ("synthesis", "collection"):
                 self.assertIsNone(r["tier"], r)
         self.assertEqual({r["status"] for r in out["results"] if r["result_type"] == "collection"}, {"open", "inbox", "closed"})
-        # three collections in one folder — deduplication is by file
-        self.assertEqual(len([r for r in out["results"] if r["result_type"] == "collection"]), 3)
+        # four collections in one folder — deduplication is by file
+        self.assertEqual(len([r for r in out["results"] if r["result_type"] == "collection"]), 4)
         # the captured-only revision: a source result with tier full and no status
         d = [r for r in out["results"] if r["path"] == "Sources/%s/" % D][0]
         self.assertEqual((d["result_type"], d["tier"], d["status"]), ("source", "full", None))
+        # a bookmark revision without an extract: found with --include-source only, a source result
+        e = [r for r in out["results"] if r["path"] == "Sources/2026-05-14_ffffffff/"]
+        self.assertEqual(len(e), 1)
+        self.assertEqual((e[0]["result_type"], e[0]["tier"], e[0]["status"], e[0]["title"], e[0]["rating"]), ("source", "bookmark", None, "Epsilon bookmark", None))
+        self.assertEqual([r["path"] for r in self._search("--query", "trust")["results"] if "ffffffff" in r["path"]], [])
 
     def test_collections_are_opt_in_and_filtered_by_domain(self):
         self.assertEqual({r["result_type"] for r in self._search("--query", "trust")["results"]}, {"extract"})
@@ -404,12 +486,15 @@ class FixtureVaultTests(unittest.TestCase):
     def test_reader_cli(self):
         p = subprocess.run([sys.executable, str(BIN_DIR / "lib_research.py"), "--vault", str(FIXTURE)], capture_output=True, text=True)
         self.assertEqual(p.returncode, 1)
-        self.assertIn("collections: 7 · fail 4 · unreadable 0", p.stdout)
+        self.assertIn("collections: 8 · fail 4 · unreadable 0", p.stdout)
         p = subprocess.run([sys.executable, str(BIN_DIR / "lib_research.py"), "--file", str(FIXTURE / "Collections" / "Closed dossier.md")], capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stdout)
         p = subprocess.run([sys.executable, str(BIN_DIR / "lib_research.py"), "--vault", str(FIXTURE), "--json"], capture_output=True, text=True)
         d = json.loads(p.stdout)
-        self.assertEqual((d["schema"], len(d["collections"])), ("research-interface/1", 7))
+        self.assertEqual((d["schema"], len(d["collections"])), ("research-interface/1", 8))
+        p = subprocess.run([sys.executable, str(BIN_DIR / "lib_vault.py"), "--vault", str(FIXTURE), "--status-counts"], capture_output=True, text=True)
+        self.assertIn("collections=8\n", p.stdout)
+        self.assertIn("collections_fail=4\n", p.stdout)
 
 
 if __name__ == "__main__":

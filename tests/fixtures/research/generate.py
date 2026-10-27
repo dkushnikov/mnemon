@@ -11,6 +11,10 @@ What is pinned (docs/specs/2026-10-27-research-interface.md §11):
 - expected/search-default.json  — `mnemon-search.py --query trust` (Sources only: collections are opt-in)
 - expected/search-all.json      — `--query trust --include-source --include-synthesis --include-collections --limit 20`
 - expected/search-domain.json   — `--query trust --include-collections --domain mc/ai`
+- expected/doctor-data.json     — `vault-doctor.py --json` on the fixture (guide pinned at the engine's, a temp state dir,
+                                  `--today 2026-10-27`), with `generated_at` dropped, the vault and state paths replaced by
+                                  `<vault>` / `<state>` and the phase 3a counter keys (`collection*`) removed: the
+                                  mnemon-doctor-data/1 document the branches must leave byte-for-byte as it is
 
 Stdlib only, python 3.9; runs the tools as subprocesses with the interpreter that runs this script.
 """
@@ -37,10 +41,15 @@ COUNTER_KEYS = ("folders", "extracted", "captured", "current", "superseded", "sy
                 "collection_items_unresolved")
 
 
+ISOLATION = tempfile.mkdtemp(prefix="mnemon-research-xdg-")
+
+
 def run(*argv: str, cwd: str | None = None) -> str:
     env = dict(os.environ)
-    for key in ("MNEMON_CONFIG", "MNEMON_INSTANCE", "MNEMON_CONFIG_DIR", "MNEMON_VAULT_PATH"):
+    for key in ("MNEMON_CONFIG", "MNEMON_INSTANCE", "MNEMON_CONFIG_DIR", "MNEMON_VAULT_PATH", "MNEMON_HOME"):
         env.pop(key, None)
+    env["XDG_CONFIG_HOME"] = os.path.join(ISOLATION, "xdg")
+    env["XDG_STATE_HOME"] = os.path.join(ISOLATION, "state")
     p = subprocess.run([sys.executable, *argv], capture_output=True, text=True, env=env, cwd=cwd)
     if p.returncode not in (0, 1):
         sys.exit("%s exited %d:\n%s" % (argv[0], p.returncode, p.stderr))
@@ -70,7 +79,25 @@ def readings() -> dict[str, object]:
                                             "--include-synthesis", "--include-collections", "--limit", "20"))
     out["search-domain.json"] = json.loads(run(search, "--vault", str(VAULT), "--query", "trust",
                                                "--include-collections", "--domain", "mc/ai"))
+    state = os.path.join(ISOLATION, "doctor-state")
+    os.makedirs(state, exist_ok=True)
+    guide = run(str(BIN / "lib_vault.py"), "--vault", str(VAULT), "--json")   # warms nothing; the guide comes from the engine
+    doc_text = run(str(BIN / "vault-doctor.py"), "--vault", str(VAULT), "--state-dir", state, "--today", "2026-10-27",
+                   "--guide-version", str(_engine_guide()), "--json")
+    doc_text = doc_text.replace(str(VAULT), "<vault>").replace(state, "<state>")
+    doc = json.loads(doc_text)
+    doc.pop("generated_at", None)
+    doc["counters"] = {k: v for k, v in doc["counters"].items() if not k.startswith("collection")}
+    out["doctor-data.json"] = doc
     return out
+
+
+def _engine_guide() -> int:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("lib_vault", BIN / "lib_vault.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.engine_guide_version()
 
 
 def dump(value: object) -> str:

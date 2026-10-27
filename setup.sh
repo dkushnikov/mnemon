@@ -95,6 +95,7 @@ copy_if_missing() {
 
 copy_if_missing "$SCRIPT_DIR/vault-template/CLAUDE.md" "$VAULT_PATH/CLAUDE.md" "CLAUDE.md"
 copy_if_missing "$SCRIPT_DIR/vault-template/_meta/Protocol.md" "$VAULT_PATH/_meta/Protocol.md" "_meta/Protocol.md"
+copy_if_missing "$SCRIPT_DIR/vault-template/Templates/Collection.md" "$VAULT_PATH/Templates/Collection.md" "Templates/Collection.md"
 
 if [[ -n "$READER_CONTEXT_SRC" ]]; then
   case "$READER_CONTEXT_SRC" in "~") READER_CONTEXT_SRC="$HOME" ;; "~/"*) READER_CONTEXT_SRC="$HOME${READER_CONTEXT_SRC#\~}" ;; esac

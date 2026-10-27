@@ -145,7 +145,7 @@ suppressed_pages: []              # page file names the owner removed and forbid
 migrated_from: "<Synthesis/<old name>>"   # only on a note migrated from a seed
 source_of: "<external collection>"        # optional, written by a scanner
 ```
-Body: `## Why` · `## Items` (required, exactly once) · `## Open questions` · `## Notes (owner)`. An item is one list line with exactly one `[[Sources/<rev>/extract]]` (or `/source`, or the bare revision) link, then ` — **<role>** — <note>`; `**excluded**` = considered, not cited; a nested line without a link continues the note. Two links on a line, a link outside `Sources/`, `..` in a target, free text between items or a second `## Items` fail the note — `python3 $MNEMON_HOME/bin/lib_research.py --vault <path>` names the line. Flat scalars and lists only in the frontmatter; a duplicate key fails.
+Body: `## Why` · `## Items` (required, exactly once) · `## Open questions` · `## Notes (owner)`. An item is one list line with exactly one `[[Sources/<rev>/extract]]` (or `/source`, or the bare revision) link, then ` — **<role>** — <note>`; `**excluded**` = considered, not cited; a nested line without a link continues the note (a nested line with a Sources link is an item of its own; with any other link it is malformed — put cross-references in `## Why` or `## Open questions`). Two links on a line, a link outside `Sources/`, `..` in a target, free text between items or a second `## Items` fail the note — `python3 $MNEMON_HOME/bin/lib_research.py --vault <path>` names the line. Flat scalars and lists only in the frontmatter; a duplicate key fails.
 
 ### Synthesis note frontmatter
 ```yaml

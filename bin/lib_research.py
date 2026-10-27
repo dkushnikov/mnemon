@@ -18,7 +18,7 @@ Grammar of an `## Items` line (interface §3; accepted / rejected):
   `|display`, `#fragment`) is an item; the role is the first `**…**` segment right after the
   dash that follows the link, the note is the rest; `**excluded**` = considered, not cited;
 - a nested line (indented two spaces or more, with or without a list marker) without a link
-  continues the previous item's note;
+  continues the previous item's note; a nested line with a Sources link is an item of its own;
 - a line with no `Sources/` link, with two or more wikilinks, with `..` or an absolute path in
   the target, or with a target outside this vault's `Sources/` is malformed → the document
   fails (the other items still count, the line is named);
@@ -61,7 +61,9 @@ ITEM_FILES = {"": None, "extract": "extract", "extract.md": "extract", "source":
 REV_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[0-9a-f]{8}(-\d+)?$")
 WIKILINK_RE = re.compile(r"!?\[\[([^\]]*)\]\]")
 LIST_RE = re.compile(r"^([ \t]*)([-*])[ \t]+(.*)$")
-HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$")
+HEADING_RE = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$")
+FENCE_OPEN_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
+FENCE_CLOSE_RE = re.compile(r"^(`{3,}|~{3,})[ \t]*$")
 KEY_RE = re.compile(r"^([A-Za-z_][\w.-]*):(?:[ \t]+(.*))?$")
 DASH_RE = re.compile(r"^[ \t]*[—–-][ \t]*")
 ROLE_RE = re.compile(r"^\*\*(.+?)\*\*[ \t]*(.*)$", re.S)
@@ -93,10 +95,21 @@ def scalar(raw: str) -> str:
     single-quoted is verbatim to its closing quote; a bare value loses a trailing ` # comment`
     and surrounding whitespace; `#…` is empty."""
     v = raw.strip()
-    if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
-        return decode_dq(v[1:-1])
-    if len(v) >= 2 and v[0] == "'" and v[-1] == "'":
-        return v[1:-1].replace("''", "'")
+    if v.startswith('"'):
+        i = 1
+        while i < len(v):
+            if v[i] == "\\":
+                i += 2
+                continue
+            if v[i] == '"':
+                break
+            i += 1
+        if i < len(v) and (i == len(v) - 1 or re.match(r"^\s+#", v[i + 1:])):
+            return decode_dq(v[1:i])
+    if v.startswith("'"):
+        m = re.match(r"^'((?:[^']|'')*)'(?:\s+#.*)?$", v)
+        if m:
+            return m.group(1).replace("''", "'")
     if v.startswith("#"):
         return ""
     return re.sub(r"\s#.*$", "", v).strip()
@@ -165,17 +178,24 @@ def parse_flat_frontmatter(block: str) -> Tuple[Dict[str, object], List[str]]:
         if raw.strip() and not raw.strip().startswith("#"):
             r = raw.strip()
             if r.startswith("["):
-                # an inline list: the trailing ` # comment` after the closing bracket is dropped
+                # an inline list: the trailing ` # comment` after the closing bracket is dropped;
+                # a bracket inside it (outside quotes) is a nested list — not in the subset
                 end = r.rfind("]")
                 if end > 0 and (end == len(r) - 1 or re.match(r"^\s+#", r[end + 1:])):
-                    value = inline_list(r[1:end])
+                    inner = r[1:end]
+                    if re.search(r"[\[\]]", re.sub(r"\"[^\"]*\"|'[^']*'", "", inner)):
+                        errors.append("nested list under `%s` (flat scalars and lists only)" % key)
+                        value = ""
+                    else:
+                        value = inline_list(inner)
                 else:
                     value = scalar(r)
             else:
                 value = scalar(r)
         else:
             items: List[str] = []
-            nested = False
+            nested = None
+            first_indent = None
             while j < len(lines):
                 cont = lines[j]
                 s = cont.strip()
@@ -184,15 +204,18 @@ def parse_flat_frontmatter(block: str) -> Tuple[Dict[str, object], List[str]]:
                     continue
                 if cont[0] not in " \t" and not (s.startswith("- ") or s == "-"):
                     break
-                if s == "-":
-                    items.append("")
-                elif s.startswith("- "):
-                    items.append(scalar(s[2:]))
+                lead = len(cont.replace("\t", "  ")) - len(cont.replace("\t", "  ").lstrip(" "))
+                if s == "-" or s.startswith("- "):
+                    if first_indent is None:
+                        first_indent = lead
+                    elif lead > first_indent:
+                        nested = "list"
+                    items.append("" if s == "-" else scalar(s[2:]))
                 else:
-                    nested = True
+                    nested = nested or "mapping"
                 j += 1
             if nested:
-                errors.append("nested mapping under `%s` (flat scalars and lists only)" % key)
+                errors.append("nested %s under `%s` (flat scalars and lists only)" % (nested, key))
                 value = ""
             else:
                 value = items if items else ""
@@ -252,8 +275,8 @@ def parse_item_tail(tail: str) -> Tuple[Optional[str], str]:
     t = DASH_RE.sub("", t, count=1)
     m = ROLE_RE.match(t)
     if m:
-        role = " ".join(m.group(1).split()).strip().lower()
-        note = DASH_RE.sub("", m.group(2).strip(), count=1).strip()
+        role = " ".join(m.group(1).split()).strip("*_ ").rstrip(":.,;").strip().lower()
+        note = DASH_RE.sub("", re.sub(r"^[*_\s]*[:.,;]*\s*", "", m.group(2)), count=1).strip()
         return role or None, note
     return None, t
 
@@ -265,18 +288,20 @@ def _sections(body: str, offset: int) -> Tuple[List[dict], List[str]]:
     lines = body.split("\n")
     sections: List[dict] = []
     current = {"name": None, "start": offset, "lines": []}
-    fence = None
+    fence = None            # (char, run length) of the open fence
     for i, line in enumerate(lines):
         ln = offset + i
         stripped = line.lstrip()
-        if fence is None and (stripped.startswith("```") or stripped.startswith("~~~")):
-            fence = stripped[:3]
+        if fence is None:
+            fo = FENCE_OPEN_RE.match(stripped)
+            if fo:
+                fence = (fo.group(1)[0], len(fo.group(1)))
+                current["lines"].append((ln, line, True))
+                continue
+        else:
+            fc = FENCE_CLOSE_RE.match(stripped)
             current["lines"].append((ln, line, True))
-            continue
-        if fence is not None:
-            closes = stripped.startswith(fence)
-            current["lines"].append((ln, line, True))
-            if closes:
+            if fc and fc.group(1)[0] == fence[0] and len(fc.group(1)) >= fence[1]:
                 fence = None
             continue
         m = HEADING_RE.match(line)
@@ -303,31 +328,26 @@ def parse_items(section_lines: List[Tuple[int, str, bool]]) -> Tuple[List[dict],
         if fenced or not line.strip():
             continue
         m = LIST_RE.match(line)
+        expanded = line.replace("\t", "  ")
+        indent = len(expanded) - len(expanded.lstrip(" "))
+        content = m.group(3) if m else line.strip()
+        links = WIKILINK_RE.findall(content)
+        if not links and indent >= 2 and items:
+            # an indented line without a link — with or without a marker — continues the item above
+            # it (Markdown's lazy continuation), unless a malformed line stands between them
+            if not malformed or malformed[-1]["line"] < items[-1]["line"]:
+                items[-1]["note"] = (items[-1]["note"] + "\n" + content.strip()).strip()
+            else:
+                bad(ln, line, "continuation under a malformed line")
+            continue
         if not m:
-            # an indented line without a marker and without a link continues the item above it
-            # (Markdown's lazy continuation); anything else between items is free text
-            lead = len(line.replace("\t", "  ")) - len(line.replace("\t", "  ").lstrip(" "))
-            if lead >= 2 and not WIKILINK_RE.search(line) and items and (not malformed or malformed[-1]["line"] < items[-1]["line"]):
-                items[-1]["note"] = (items[-1]["note"] + "\n" + line.strip()).strip()
-                continue
             bad(ln, line, "free text between items (no list marker)")
             continue
-        indent = len(m.group(1).replace("\t", "  "))
-        content = m.group(3)
-        links = WIKILINK_RE.findall(content)
         if len(links) >= 2:
             bad(ln, line, "two or more links on one line")
             continue
         if not links:
-            if indent >= 2 and items and (not malformed or malformed[-1]["line"] < items[-1]["line"]):
-                items[-1]["note"] = (items[-1]["note"] + "\n" + content.strip()).strip()
-                continue
-            if indent >= 2 and items:
-                # a nested line under a malformed line: it belongs to nothing that counts
-                bad(ln, line, "continuation under a malformed line")
-                continue
-            bad(ln, line, "list line without a Sources/ link" if not items or indent < 2
-                else "continuation before any item")
+            bad(ln, line, "list line without a Sources/ link")
             continue
         link, reason = classify_link(links[0])
         if link is None:
@@ -389,6 +409,8 @@ def read_collection_text(text: str, name: str, existing: Optional[Set[str]] = No
         "counts": {"items": 0, "excluded": 0, "malformed": 0, "unresolved": None, "links_outside_items": 0},
     }
     errors = rec["errors"]
+    if text.startswith("\ufeff"):
+        text = text[1:]
     block, body, offset = split_frontmatter(text)
     if block is None:
         errors.append("no frontmatter (an opening `---` line closed by `---`)")
@@ -441,6 +463,9 @@ def read_collection_text(text: str, name: str, existing: Optional[Set[str]] = No
             errors.append("`%s` must be a list" % key)
         else:
             rec[key] = lst
+    for page in rec["suppressed_pages"]:
+        if not page.strip() or "/" in page or "[[" in page or "]]" in page or page.endswith(".md"):
+            errors.append("`suppressed_pages` entry must be a page file name without .md (got %r)" % page)
     known = set(COLLECTION_SCALAR_KEYS) | set(COLLECTION_LIST_KEYS)
     rec["extra"] = {k: v for k, v in data.items() if k not in known}
 
@@ -463,8 +488,15 @@ def read_collection_text(text: str, name: str, existing: Optional[Set[str]] = No
                 outside += len(WIKILINK_RE.findall(line))
     rec["counts"]["links_outside_items"] = outside
     if existing is not None:
+        # `existing` is the set of revision names, or a mapping revision → the files it holds
+        # ({"extract", "source"}): then an item's target file must be there too (the bare form
+        # needs only the folder)
         for it in rec["items"]:
-            it["exists"] = it["rev"] in existing
+            if isinstance(existing, dict):
+                files = existing.get(it["rev"])
+                it["exists"] = files is not None and (it["file"] is None or it["file"] in files)
+            else:
+                it["exists"] = it["rev"] in existing
         rec["counts"]["unresolved"] = sum(1 for it in rec["items"] if not it["exists"])
     rec["counts"]["items"] = len(rec["items"])
     rec["counts"]["excluded"] = sum(1 for it in rec["items"] if it["excluded"])
@@ -507,12 +539,22 @@ def scan_collections(vault: str, existing: Optional[Set[str]] = None) -> List[di
     return [read_collection(os.path.join(d, n + ".md"), existing=existing, name=n) for n in list_collections(vault)]
 
 
-def existing_revisions(vault: str) -> Set[str]:
+def existing_revisions(vault: str) -> Dict[str, Set[str]]:
+    """Every `Sources/<rev>/` → the files it holds (`extract`, `source`) — the `existing` of the reader."""
     d = os.path.join(vault, "Sources")
+    out: Dict[str, Set[str]] = {}
     try:
-        return {n for n in os.listdir(d) if not n.startswith(".") and os.path.isdir(os.path.join(d, n))}
+        names = [n for n in os.listdir(d) if not n.startswith(".") and os.path.isdir(os.path.join(d, n))]
     except OSError:
-        return set()
+        return out
+    for n in names:
+        files = set()
+        if os.path.isfile(os.path.join(d, n, "extract.md")):
+            files.add("extract")
+        if os.path.isfile(os.path.join(d, n, "source.md")):
+            files.add("source")
+        out[n] = files
+    return out
 
 
 def summary_line(rec: dict) -> str:

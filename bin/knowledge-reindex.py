@@ -594,7 +594,8 @@ def reindex(vault: Path, hand_edit_report: bool = True) -> dict:
     sources_count = len(all_source_dirs)
     extracted_count = len(extracted_dirs)
     synthesis_count = len(syn_files)
-    collections_count = len(col_lines)
+    collections_count = sum(1 for r in col_lines if r.startswith("- [[Collections/")) if not any(
+        r.startswith("- _Collections/ could not be listed") for r in col_lines) else "?"
     superseded_count = len(scan['successors'])
     today = datetime.date.today().isoformat()
 
