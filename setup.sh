@@ -76,8 +76,8 @@ echo ""
 # --- 1. Create vault structure ---
 
 echo "1. Creating vault structure..."
-mkdir -p "$VAULT_PATH/Sources" "$VAULT_PATH/Synthesis" "$VAULT_PATH/_meta"
-echo "   ✓ Sources/, Synthesis/, _meta/"
+mkdir -p "$VAULT_PATH/Sources" "$VAULT_PATH/Collections" "$VAULT_PATH/Synthesis" "$VAULT_PATH/_meta"
+echo "   ✓ Sources/, Collections/, Synthesis/, _meta/"
 
 # --- 2. Copy vault template files (skip if exist) ---
 

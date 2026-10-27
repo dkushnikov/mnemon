@@ -325,10 +325,11 @@ cmd_init() {
 
   # 1. Vault scaffold (like setup.sh steps 1–2; never overwrites)
   echo "1. Vault scaffold"
-  mkdir -p "$vault/Sources" "$vault/Synthesis" "$vault/_meta"
-  echo "  ✓ Sources/ Synthesis/ _meta/"
+  mkdir -p "$vault/Sources" "$vault/Collections" "$vault/Synthesis" "$vault/_meta"
+  echo "  ✓ Sources/ Collections/ Synthesis/ _meta/"
   _copy_if_missing "$MNEMON_ROOT/vault-template/CLAUDE.md" "$vault/CLAUDE.md" "CLAUDE.md"
   _copy_if_missing "$MNEMON_ROOT/vault-template/_meta/Protocol.md" "$vault/_meta/Protocol.md" "_meta/Protocol.md"
+  _copy_if_missing "$MNEMON_ROOT/vault-template/Templates/Collection.md" "$vault/Templates/Collection.md" "Templates/Collection.md"
   # Reader context — what reader_context_path will point at: an explicit flag
   # wins (--reader-context copies, --reader-context-path references); otherwise an
   # existing profile in the vault is used as it is; only a vault without one gets
