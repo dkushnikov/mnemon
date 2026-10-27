@@ -164,8 +164,13 @@ def parse_flat_frontmatter(block: str) -> Tuple[Dict[str, object], List[str]]:
         j = i + 1
         if raw.strip() and not raw.strip().startswith("#"):
             r = raw.strip()
-            if r.startswith("[") and r.endswith("]"):
-                value = inline_list(r[1:-1])
+            if r.startswith("["):
+                # an inline list: the trailing ` # comment` after the closing bracket is dropped
+                end = r.rfind("]")
+                if end > 0 and (end == len(r) - 1 or re.match(r"^\s+#", r[end + 1:])):
+                    value = inline_list(r[1:end])
+                else:
+                    value = scalar(r)
             else:
                 value = scalar(r)
         else:
@@ -174,7 +179,7 @@ def parse_flat_frontmatter(block: str) -> Tuple[Dict[str, object], List[str]]:
             while j < len(lines):
                 cont = lines[j]
                 s = cont.strip()
-                if not s:
+                if not s or s.startswith("#"):
                     j += 1
                     continue
                 if cont[0] not in " \t" and not (s.startswith("- ") or s == "-"):
@@ -488,15 +493,13 @@ def read_collection(path: str, existing: Optional[Set[str]] = None, name: Option
 
 
 def list_collections(vault: str) -> List[str]:
-    """The `Collections/*.md` stems, sorted; [] without the folder."""
+    """The `Collections/*.md` stems, sorted; [] without the folder. A folder that exists but cannot be
+    listed raises OSError — an unreadable folder is never an empty one (the callers count it)."""
     d = os.path.join(vault, COLLECTIONS_DIR)
     if not os.path.isdir(d):
         return []
-    try:
-        return sorted(n[:-3] for n in os.listdir(d)
-                      if n.endswith(".md") and not n.startswith(".") and os.path.isfile(os.path.join(d, n)))
-    except OSError:
-        return []
+    return sorted(n[:-3] for n in os.listdir(d)
+                  if n.endswith(".md") and not n.startswith(".") and os.path.isfile(os.path.join(d, n)))
 
 
 def scan_collections(vault: str, existing: Optional[Set[str]] = None) -> List[dict]:
@@ -538,7 +541,11 @@ def main(argv: List[str]) -> int:
     args = ap.parse_args(argv[1:])
     if args.vault:
         vault = os.path.abspath(os.path.expanduser(args.vault))
-        records = scan_collections(vault, existing=existing_revisions(vault))
+        try:
+            records = scan_collections(vault, existing=existing_revisions(vault))
+        except OSError as exc:
+            print("lib_research: %s/ could not be listed (%s): nothing validated" % (COLLECTIONS_DIR, exc), file=sys.stderr)
+            return 1
     else:
         path = os.path.abspath(os.path.expanduser(args.file))
         records = [read_collection(path, file=os.path.basename(path))]

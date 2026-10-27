@@ -473,8 +473,12 @@ def scan_collections(vault: str, snapshot: dict, existing: Optional[set] = None)
         return out
     try:
         names = lr.list_collections(vault)
-    except OSError:
+    except OSError as exc:
+        # the folder is there but cannot be listed: coverage lost, never an empty folder
         snapshot["unreadable"] += 1
+        snapshot["complete"] = False
+        snapshot["collections_unlisted"] = "%s: %s" % (type(exc).__name__, exc)
+        out["unlisted"] = snapshot["collections_unlisted"]
         return out
     for n in names:
         p = os.path.join(d, n + ".md")

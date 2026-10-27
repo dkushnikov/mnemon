@@ -80,7 +80,12 @@ def collection_rows(vault: Path) -> list[str]:
     lr = _load_research()
     rows: list[str] = []
     existing = lr.existing_revisions(str(vault))
-    for rec in lr.scan_collections(str(vault), existing=existing):
+    try:
+        records = lr.scan_collections(str(vault), existing=existing)
+    except OSError as exc:
+        print(f"knowledge-reindex: Collections/ could not be listed ({exc}); the section is not regenerated", file=sys.stderr)
+        return [f"- _Collections/ could not be listed ({type(exc).__name__}); the rows are not regenerated_"]
+    for rec in records:
         name = rec["name"]
         if rec["state"] == "unreadable":
             rows.append(f"- [[Collections/{name}|{display_text(name)}]] (unreadable)")

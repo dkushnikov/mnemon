@@ -45,6 +45,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lib_config  # noqa: E402
+import lib_research  # noqa: E402  (the one reader of Collections/*.md)
 
 SEARCH_SCHEMA = "mnemon-search/2"
 RESULT_TYPES = ("extract", "source", "synthesis", "collection", "wiki")
@@ -314,8 +315,20 @@ def capture_tier(source_meta: dict, extract_meta: dict) -> str:
     return "full"
 
 
+def collection_meta(path: Path) -> dict:
+    """A collection's metadata through the research reader (the same subset, the same duplicate-key
+    and `...` rules as reindex and the doctor), in the shape parse_frontmatter() gives."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    rec = lib_research.read_collection_text(text, path.stem)
+    meta = {"status": rec["status"], "domains": rec["domains"], "tags": rec["tags"], "created": rec["created"]}
+    return {k: v for k, v in meta.items() if v not in (None, "", [])}
+
+
 def assemble_result(path: Path, result_type: str, snippet: str | None, vault: Path) -> dict:
-    meta = parse_frontmatter(path)
+    meta = collection_meta(path) if result_type == "collection" else parse_frontmatter(path)
     tier: str | None = None
     status = meta.get("status")
     if result_type == "source":

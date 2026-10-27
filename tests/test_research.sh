@@ -18,8 +18,13 @@ print_toolchain; assert_toolchain_legacy
 unset MNEMON_CONFIG MNEMON_INSTANCE MNEMON_CONFIG_DIR MNEMON_VAULT_PATH MNEMON_HOME
 TEST_TMPDIR="$(cd "$(mktemp -d -t mnemon-research-XXXX)" && pwd -P)"
 export XDG_CONFIG_HOME="$TEST_TMPDIR/xdg" XDG_STATE_HOME="$TEST_TMPDIR/state"
-mkdir -p "$XDG_CONFIG_HOME" "$TEST_TMPDIR/cwd"
+mkdir -p "$XDG_CONFIG_HOME" "$TEST_TMPDIR/cwd" "$TEST_TMPDIR/home" "$TEST_TMPDIR/stub"
 cd "$TEST_TMPDIR/cwd"
+# the dispatcher's doctor probes the fence (`claude --version` / `--help`) and reads $HOME: a stub claude
+# first on PATH and a temp HOME keep the suite hermetic (AGENTS.md: no real claude, a temporary HOME)
+printf '#!/bin/sh\ncase "$1" in --version) echo "0.0.0 (stub)";; --help) echo "--restricted";; *) exit 1;; esac\n' > "$TEST_TMPDIR/stub/claude"
+chmod +x "$TEST_TMPDIR/stub/claude"
+hermetic() { env HOME="$TEST_TMPDIR/home" PATH="$TEST_TMPDIR/stub:$PATH" MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_TODAY=2026-10-27 "$@"; }
 
 out=""; err=""; rc=0
 run() { rc=0; out="$("$@" 2>"$TEST_TMPDIR/err")" || rc=$?; err="$(cat "$TEST_TMPDIR/err")"; }
@@ -72,7 +77,7 @@ assert_eq "$(grep -c '^- \[\[Collections/' "$VAULT/index.md")" "7" "index.md: on
 assert_contains "$(cat "$VAULT/index.md")" "(open, 4 items, 1 excluded) — How can an agent be trusted when it cannot be identified?" "index.md: status, items, excluded, the question"
 run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" status
 assert_eq "$rc" "0" "mnemon status exits 0 on the fixture"
-run env MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_TODAY=2026-10-27 "$MNEMON" --config "$TEST_TMPDIR/research.yaml" doctor --data --json
+run hermetic "$MNEMON" --config "$TEST_TMPDIR/research.yaml" doctor --data --json
 JSON="$TEST_TMPDIR/doc.json"; printf '%s' "$out" > "$JSON"
 assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["data"]["schema"], len(d["data"]["checks"]), sorted(c["name"] for c in d["data"]["checks"])[0])' "$JSON")" "mnemon-doctor-data/1 19 data/arxiv-abstract" "doctor --data stays mnemon-doctor-data/1 with its 19 checks (the research document is phase 3b)"
 assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["data"]["counters"]; print(d["collections"], d["collections_fail"], d["filed"], d["integrated"])' "$JSON")" "7 4 4 1" "...and its counters carry the collections additively, filed extended"
@@ -113,8 +118,23 @@ done
 assert_eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import lib_vault; print(lib_vault.engine_guide_version())' "$MNEMON_ROOT/bin")" "4" "the engine's guide version is 4"
 # a vault on Guide 3 is reported behind by the doctor
 printf -- '---\nmnemon_guide: 3\n---\n# Vault\n' > "$VAULT/CLAUDE.md"
-run env MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_TODAY=2026-10-27 "$MNEMON" --config "$TEST_TMPDIR/research.yaml" doctor --data
+run hermetic "$MNEMON" --config "$TEST_TMPDIR/research.yaml" doctor --data
 assert_contains "$out" "warn store/guide-version — vault CLAUDE.md 3 (behind)" "a Guide 3 copy is reported behind engine 4"
+assert_not_contains "$out" "claude 2." "the fence probe saw the stub claude, not the real one"
+
+# --- 6. a Collections/ that exists but cannot be listed is never an empty one ---
+echo "--- an unlistable Collections/ ---"
+chmod 000 "$VAULT/Collections"
+run python3 "$MNEMON_ROOT/bin/lib_research.py" --vault "$VAULT"
+assert_eq "$rc" "1" "the reader exits 1 when Collections/ cannot be listed"
+assert_contains "$err" "could not be listed" "...and says so on stderr"
+run python3 "$MNEMON_ROOT/bin/lib_vault.py" --vault "$VAULT" --json
+assert_eq "$(jq_ "$out" 'd["snapshot"]["complete"], d["counters"]["collections"], "collections_unlisted" in d["snapshot"]')" "(False, 0, True)" "lib_vault: the snapshot is incomplete, the folder is unlisted, not empty"
+run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" reindex
+assert_eq "$rc" "0" "reindex still writes the index"
+assert_contains "$err" "Collections/ could not be listed" "...and says the section was not regenerated"
+assert_contains "$(cat "$VAULT/index.md")" "_Collections/ could not be listed" "...with one row saying so instead of an empty section"
+chmod 755 "$VAULT/Collections"
 
 rm -rf "$TEST_TMPDIR"
 summary

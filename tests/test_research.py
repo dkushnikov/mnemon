@@ -79,6 +79,15 @@ class FrontmatterSubsetTests(unittest.TestCase):
         data, err = lr.parse_flat_frontmatter("# a comment\n\na: 1\n")
         self.assertEqual((data, err), ({"a": "1"}, []))
 
+    def test_comments_after_lists_and_inside_block_lists(self):
+        data, err = lr.parse_flat_frontmatter("domains: [learning, mc/ai] # context\nsuppressed_pages: []    # names\n"
+                                              "tags:\n  # the first tag\n  - a\n  - b # trailing\nwiki: on # on | off\n")
+        self.assertEqual(err, [])
+        self.assertEqual(data, {"domains": ["learning", "mc/ai"], "suppressed_pages": [], "tags": ["a", "b"], "wiki": "on"})
+        # a bracket inside a quoted scalar is not a list
+        data, _ = lr.parse_flat_frontmatter('question: "[draft] why?"\n')
+        self.assertEqual(data["question"], "[draft] why?")
+
 
 # ---------------------------------------------------------------------------
 # Links
@@ -353,6 +362,44 @@ class FixtureVaultTests(unittest.TestCase):
         out = self._search("--query", "trust", "--include-collections", "--domain", "mc/ai")
         self.assertEqual(sorted((r["result_type"], r["path"] + r["file"]) for r in out["results"]),
                          [("collection", "Collections/Trust without identity.md"), ("extract", "Sources/%s/extract.md" % A)])
+
+    def test_search_reads_collections_through_the_shared_reader(self):
+        # a `...`-closed frontmatter and a duplicate key: the search result agrees with the reader
+        tmp = tempfile.mkdtemp()
+        try:
+            v = Path(tmp) / "v"
+            (v / "Sources").mkdir(parents=True)
+            (v / "Collections").mkdir()
+            (v / "Collections" / "Dots.md").write_text("---\ntype: collection\nstatus: inbox\nstatus: open\nquestion: \"trust?\"\n"
+                                                     "curated_by: o\ncreated: 2026-10-01\ndomains: [mc/ai] # c\n...\n## Items\n", encoding="utf-8")
+            env = {k: val for k, val in os.environ.items() if k not in ("MNEMON_CONFIG", "MNEMON_INSTANCE", "MNEMON_CONFIG_DIR")}
+            p = subprocess.run([sys.executable, str(BIN_DIR / "mnemon-search.py"), "--vault", str(v), "--query", "trust",
+                                "--include-collections", "--domain", "mc/ai"], capture_output=True, text=True, env=env)
+            out = json.loads(p.stdout)
+            self.assertEqual(out["count"], 1, p.stderr)
+            self.assertEqual((out["results"][0]["status"], out["results"][0]["domains"], out["results"][0]["created"]),
+                             ("inbox", ["mc/ai"], "2026-10-01"), "the first value of a duplicate key, as the reader keeps it")
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_unlistable_collections_folder(self):
+        if os.geteuid() == 0:
+            self.skipTest("root lists everything")
+        tmp = tempfile.mkdtemp()
+        v = Path(tmp) / "v"
+        try:
+            (v / "Sources").mkdir(parents=True)
+            (v / "Collections").mkdir()
+            os.chmod(v / "Collections", 0)
+            with self.assertRaises(OSError):
+                lr.list_collections(str(v))
+            scan = lv.scan_vault(str(v), state_dir=tmp)
+            self.assertFalse(scan["snapshot"]["complete"])
+            self.assertIn("collections_unlisted", scan["snapshot"])
+            self.assertEqual(scan["counters"]["collections"], 0)
+        finally:
+            os.chmod(v / "Collections", 0o755)
+            shutil.rmtree(tmp)
 
     def test_reader_cli(self):
         p = subprocess.run([sys.executable, str(BIN_DIR / "lib_research.py"), "--vault", str(FIXTURE)], capture_output=True, text=True)
