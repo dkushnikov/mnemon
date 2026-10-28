@@ -35,8 +35,18 @@ captions child, yt-dlp, ffprobe, whisper — runs in its own process group under
 budget; on expiry (or on SIGTERM/SIGINT/SIGHUP from the parent) every tracked group gets
 SIGTERM, a 2 s grace, SIGKILL for what remains, is reaped, and only then does this process
 exit: on expiry with `error.json` under --out-dir ({"schema": "mnemon-media-error/1",
-"error_class": "timeout", "stage": "download"|"probe"|"captions"|"transcribe", "elapsed_s"}),
-nothing deleted, exit 124. Without the flag there is no timeout (phase-1 behaviour).
+"error_class": "timeout", "stage": "download"|"probe"|"captions"|"transcribe", "elapsed_s",
+"kind": null, "error", "retryable": true}), nothing deleted, exit 124. Without the flag there is
+no timeout (phase-1 behaviour).
+
+Walls (GH #26, capture layer D4/D6): a tool's refusal that is a wall — yt-dlp's "Sign in to
+confirm you're not a bot", youtube_transcript_api's "YouTube is blocking requests from your IP",
+an HTTP 429 — is classified by `classify_wall` and reported as `error.json` with
+`error_class: "blocked"`, `kind: "bot-wall"` (`"rate-limit"` for a 429), the tool's line in
+`error`, `retryable` false (true for a rate limit), exit 1; nothing here tries to pass a wall
+(no cookies, no proxies — the browser lane is the designed route around it). Every other
+failure under --out-dir writes `error.json` too (`error_class: "failed"`, `kind: null`, the
+message in `error`), so the gateway's receipt carries the cause instead of "failed (exit 1)".
 
 Track choice (D12): `choose_track(tracks, original_language)` picks, in order, a manual track
 in the video's language · an automatic one in it (the `-orig` track first) · a manual en or ru
@@ -97,8 +107,7 @@ def format_duration(seconds):
 def extract_video_id(url):
     m = re.search(r'(?:v=|youtu\.be/|shorts/|embed/|live/)([a-zA-Z0-9_-]{11})', url)
     if not m:
-        print(f"ERROR: Cannot extract video ID from {url}", file=sys.stderr)
-        sys.exit(EXIT_FAILED)
+        fail("download", f"Cannot extract video ID from {url}")
     return m.group(1)
 
 
@@ -186,6 +195,73 @@ class Timeout(Exception):
         super().__init__(f"timeout in stage {stage} after {elapsed:.1f}s")
         self.stage = stage
         self.elapsed = elapsed
+
+
+class Failed(Exception):
+    """A tool or content failure of the run (exit 1): the stage and the one-line cause."""
+    def __init__(self, stage, message):
+        super().__init__(message)
+        self.stage = stage
+        self.message = message
+
+
+class Blocked(Failed):
+    """A wall (GH #26): `kind` is the acquisition kind of the capture-layer table — `bot-wall`
+    or `rate-limit`; the message is the tool's own line."""
+    def __init__(self, stage, kind, message):
+        super().__init__(stage, message)
+        self.kind = kind
+
+
+# Markers of a wall in a media tool's output (lowercased substring match). yt-dlp prints the
+# first two (straight or typographic apostrophe); youtube_transcript_api the third; a 429 either.
+WALL_MARKERS = (
+    ("sign in to confirm you're not a bot", "bot-wall"),
+    ("sign in to confirm you’re not a bot", "bot-wall"),
+    ("blocking requests from your ip", "bot-wall"),
+    ("ip has been blocked", "bot-wall"),
+    ("http error 429", "rate-limit"),
+    ("too many requests", "rate-limit"),
+)
+
+
+def classify_wall(text):
+    """The wall kind (`bot-wall` | `rate-limit`) named by a tool's output, else None."""
+    if not text:
+        return None
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", errors="replace")
+    low = text.lower()
+    for marker, kind in WALL_MARKERS:
+        if marker in low:
+            return kind
+    return None
+
+
+def _wall_line(data):
+    """The tool line that names the wall (the ERROR line when there is one), one line."""
+    text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else (data or "")
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    for ln in lines:
+        if classify_wall(ln):
+            return ln
+    return lines[-1] if lines else ""
+
+
+def fail(stage, message):
+    """Print the error and raise Failed (main() writes error.json under --out-dir and exits 1)."""
+    print(f"ERROR: {message}", file=sys.stderr)
+    raise Failed(stage, message)
+
+
+def fail_or_wall(stage, err, message):
+    """A tool failure: a wall in its output is Blocked (the tool's own line), anything else Failed."""
+    kind = classify_wall(err)
+    if kind:
+        line = _wall_line(err)
+        print(f"ERROR: {stage}: {kind} ({line})", file=sys.stderr)
+        raise Blocked(stage, kind, line)
+    fail(stage, message)
 
 
 def _signal_group(pgid, sig):
@@ -294,10 +370,12 @@ class Supervisor:
         sys.exit(128 + signum)
 
 
-def write_error_json(out_dir, stage, elapsed):
-    """`mnemon-media-error/1` under --out-dir (tmp + rename); nothing else is touched."""
-    doc = {"schema": "mnemon-media-error/1", "error_class": "timeout", "stage": stage,
-           "elapsed_s": round(float(elapsed), 1)}
+def write_error_json(out_dir, stage, elapsed, error_class="timeout", kind=None, error=None, retryable=True):
+    """`mnemon-media-error/1` under --out-dir (tmp + rename); nothing else is touched. The keys are
+    fixed (tests/fixtures/capture/reports/media-error*.json): `kind` and `error` are null when they
+    do not apply, `retryable` says whether a later run may pass."""
+    doc = {"schema": "mnemon-media-error/1", "error_class": error_class, "stage": stage,
+           "elapsed_s": round(float(elapsed), 1), "kind": kind, "error": error, "retryable": retryable}
     try:
         os.makedirs(out_dir, exist_ok=True)
         tmp = os.path.join(out_dir, ".error.json.tmp")
@@ -324,13 +402,11 @@ def get_youtube_metadata(sup, url):
     the video declares none), description."""
     rc, out, err = sup.run(["yt-dlp", "--dump-single-json", "--no-download", url], "download")
     if rc != 0:
-        print(f"ERROR: yt-dlp metadata failed for {url}: {_tail(err)}", file=sys.stderr)
-        sys.exit(EXIT_FAILED)
+        fail_or_wall("download", err, f"yt-dlp metadata failed for {url}: {_tail(err)}")
     try:
         data = json.loads(out.decode("utf-8", errors="replace"))
     except ValueError:
-        print(f"ERROR: yt-dlp metadata for {url} is not JSON", file=sys.stderr)
-        sys.exit(EXIT_FAILED)
+        fail("download", f"yt-dlp metadata for {url} is not JSON")
     if not isinstance(data, dict):
         data = {}
     language = data.get("language")
@@ -358,12 +434,10 @@ def _download_audio(sup, url, workdir):
     rc, out, err = sup.run(["yt-dlp", "-f", "ba/b", "-x", "--audio-format", "wav",
                             "-o", f"{workdir}/audio.%(ext)s", url], "download")
     if rc != 0:
-        print(f"ERROR: yt-dlp audio download failed for {url}: {_tail(err)}", file=sys.stderr)
-        sys.exit(EXIT_FAILED)
+        fail_or_wall("download", err, f"yt-dlp audio download failed for {url}: {_tail(err)}")
     audio_file = _find_audio(workdir)
     if not audio_file:
-        print("ERROR: yt-dlp produced no audio file", file=sys.stderr)
-        sys.exit(EXIT_FAILED)
+        fail("download", "yt-dlp produced no audio file")
     return audio_file
 
 
@@ -373,13 +447,11 @@ def _whisper_transcribe(sup, audio_file, whisper_model, workdir):
     rc, out, err = sup.run(["whisper", audio_file, "--model", whisper_model,
                             "--output_format", "txt", "--output_dir", workdir], "transcribe")
     if rc != 0:
-        print(f"ERROR: whisper failed (exit {rc}): {_tail(err)}", file=sys.stderr)
-        sys.exit(EXIT_FAILED)
+        fail("transcribe", f"whisper failed (exit {rc}): {_tail(err)}")
     new_txt = [f for f in sorted(os.listdir(workdir)) if f.endswith(".txt") and f not in before]
     txt_files = new_txt or [f for f in sorted(os.listdir(workdir)) if f.endswith(".txt") and f != "transcript.txt"]
     if not txt_files:
-        print("ERROR: Whisper produced no output", file=sys.stderr)
-        sys.exit(EXIT_FAILED)
+        fail("transcribe", "Whisper produced no output")
     with open(os.path.join(workdir, txt_files[0]), encoding="utf-8", errors="replace") as fh:
         return fh.read()
 
@@ -460,6 +532,10 @@ def fetch_captions(sup, video_id, original_language, out_file):
         argv += ["--original-language", original_language]
     rc, out, err = sup.run(argv, "captions")
     if rc != 0:
+        # a wall in the child's stderr names itself by its own line, not by the exception's last
+        # line (the transcript API's IpBlocked message runs to a dozen lines) — GH #26
+        if classify_wall(err):
+            return None, _wall_line(err)
         return None, _tail(err, 1) or f"captions helper exit {rc}"
     try:
         info = json.loads(out.decode("utf-8"))
@@ -519,8 +595,12 @@ def cmd_youtube(args, sup):
             language, track, method, audio_path = info.get("language"), info.get("track"), info["method"], None
         else:
             if args.no_whisper:
-                print(f"ERROR: No captions and --no-whisper set: {note}", file=sys.stderr)
-                sys.exit(EXIT_FAILED)
+                # the captions note was the last word: a wall there is the capture's outcome (GH #26)
+                wall = classify_wall(note)
+                if wall:
+                    print(f"ERROR: captions: {wall} ({note})", file=sys.stderr)
+                    raise Blocked("captions", wall, note)
+                fail("captions", f"No captions and --no-whisper set: {note}")
             print(f"NOTE: captions unavailable ({note}); transcribing with whisper", file=sys.stderr)
             check_dependency("whisper", "pip install openai-whisper")
             if meta["duration_seconds"] and meta["duration_seconds"] > 3600:
@@ -578,8 +658,7 @@ def cmd_audio(args, sup):
         duration = "unknown"
         dur_seconds = _probe_duration(sup, audio_path)
         if dur_seconds is None and not is_url:
-            print(f"ERROR: Not a valid audio file: {source}", file=sys.stderr)
-            sys.exit(EXIT_FAILED)
+            fail("probe", f"Not a valid audio file: {source}")
         if dur_seconds is not None:
             duration = format_duration(dur_seconds)
             if dur_seconds > 3600:
@@ -587,8 +666,7 @@ def cmd_audio(args, sup):
 
         transcript = _whisper_transcribe(sup, audio_path, args.whisper_model, tmpdir)
         if not transcript.strip():
-            print("ERROR: Empty transcript", file=sys.stderr)
-            sys.exit(EXIT_FAILED)
+            fail("transcribe", "Empty transcript")
 
         title = args.title or os.path.splitext(os.path.basename(source))[0]
         if keep:
@@ -675,11 +753,23 @@ def main():
         else:
             cmd_audio(args, sup)
     except Timeout as t:
+        message = (f"timeout after {t.elapsed:.1f}s in stage {t.stage} (budget {args.timeout:g}s); "
+                   f"process groups terminated")
         if args.out_dir:
-            write_error_json(os.path.abspath(args.out_dir), t.stage, t.elapsed)
-        print(f"ERROR: timeout after {t.elapsed:.1f}s in stage {t.stage} (budget {args.timeout:g}s); "
-              f"process groups terminated", file=sys.stderr)
+            write_error_json(os.path.abspath(args.out_dir), t.stage, t.elapsed, error=message)
+        print(f"ERROR: {message}", file=sys.stderr)
         sys.exit(EXIT_TIMEOUT)
+    except Blocked as b:
+        # a wall: honest class and kind for the gateway, the tool's line as the cause (GH #26)
+        if args.out_dir:
+            write_error_json(os.path.abspath(args.out_dir), b.stage, sup.elapsed(), error_class="blocked",
+                             kind=b.kind, error=b.message, retryable=(b.kind == "rate-limit"))
+        sys.exit(EXIT_FAILED)
+    except Failed as f:
+        if args.out_dir:
+            write_error_json(os.path.abspath(args.out_dir), f.stage, sup.elapsed(), error_class="failed",
+                             kind=None, error=f.message, retryable=None)
+        sys.exit(EXIT_FAILED)
 
 
 if __name__ == "__main__":

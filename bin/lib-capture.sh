@@ -76,8 +76,12 @@
 #   revision) · legacy_match · replayed · notes (publisher notes: dropped list elements).
 #   States: started → source-published → extracted (final); started → failed (no source.md
 #   published — raw may be retained; error_class fetch | convert | no-text | unsupported |
-#   invalid-utf8 | archive-exists | input-missing | evidence-missing | evidence-mismatch, plus
-#   fence-unprobed / environment for an exit-3 preflight miss); source-published →
+#   invalid-utf8 | archive-exists | input-missing | evidence-missing | evidence-mismatch, the
+#   capture layer's blocked | too-large | not-found | server-error | unavailable | timeout — a
+#   media wall is `blocked` too (GH #26: yt-dlp's bot wall, the transcript API's IP block) —, plus
+#   fence-unprobed / environment for an exit-3 preflight miss; a `failed` receipt whose raw was
+#   never staged (raw_sha256 null) carries raw_path/raw_staged_path null, never the name of a
+#   file that was not written); source-published →
 #   extract-failed (error_class auth | transient | budget | max-turns | invalid-output |
 #   claude-exit | timeout | unsupported-size | fence-unprobed); any published state →
 #   integrity-error (the published source.md is missing or was edited: error_class
@@ -1173,7 +1177,10 @@ cap_receipt_update() {
 cap_receipt_fail() {   # <id> <state failed|extract-failed> <class> <retryable> <message>
   local msg
   msg="$(cap_oneline "$5")"
-  cap_receipt_update "$1" '.state=$s | .error_class=$c | .retryable=$r | .error=$m' \
+  # a failure before any raw was staged (raw_sha256 null) names no raw file: the intent recorded
+  # at `started` would otherwise point at a file that was never written (GH #26)
+  cap_receipt_update "$1" '.state=$s | .error_class=$c | .retryable=$r | .error=$m
+    | (if $s == "failed" and .raw_sha256 == null then .raw_path = null | .raw_staged_path = null else . end)' \
     --arg s "$2" --arg c "$3" --argjson r "$4" --arg m "$msg"
 }
 
@@ -1397,12 +1404,15 @@ cap_external_json() {
 
 # Failure fields of an acquisition: class (the report's, with the policy's transport kinds folded
 # into the phase-1 `fetch`), retryable and stage as the report says, the message from its error.
-cap_fail_from_report() {   # <report> <what> → FAIL_CLASS FAIL_RETRYABLE FAIL_STAGE FAIL_MSG
+cap_fail_from_report() {   # <report> <what> → FAIL_CLASS FAIL_RETRYABLE FAIL_STAGE FAIL_ACQUISITION FAIL_MSG
   local report="$1"
   FAIL_CLASS="$(jq -r '.error_class // "fetch"' "$report" 2>/dev/null || echo fetch)"
   case "$FAIL_CLASS" in connection|tls|null|"") FAIL_CLASS=fetch ;; esac
   FAIL_RETRYABLE="$(jq -r 'if .retryable == null then "" else (.retryable | tostring) end' "$report" 2>/dev/null || true)"
   FAIL_STAGE="$(jq -r '.stage // ""' "$report" 2>/dev/null || true)"
+  # the wall's kind (bot-wall · login · rate-limit · forbidden …) for RESULT:acquisition= on the failed capture
+  FAIL_ACQUISITION=""
+  [[ "$FAIL_CLASS" == "blocked" ]] && FAIL_ACQUISITION="$(jq -r '.acquisition.kind // ""' "$report" 2>/dev/null || true)"
   FAIL_MSG="$2: $(jq -r '.error // "capture layer failed"' "$report" 2>/dev/null || echo "capture layer failed")"
   return 0
 }
@@ -1427,7 +1437,7 @@ cap_fetch_run() {   # [--expect pdf|audio] [--render]
   rm -f "$report"
   "$CAP_FETCH_CMD" "${args[@]}" >>"$ATTEMPT_DIR/stderr.txt" 2>&1 || rc=$?
   [[ -f "$report" ]] && cap_receipt_report fetch "$report"
-  FAIL_STAGE=""; FAIL_RETRYABLE=""
+  FAIL_STAGE=""; FAIL_RETRYABLE=""; FAIL_ACQUISITION=""
   case $rc in
     0)
       if [[ ! -s "$RAW_STAGED" ]]; then
@@ -1804,19 +1814,37 @@ cap_url_ext() {   # <url> [default=bin]
 }
 
 # media-extract.py under transcribe_timeout (D11, §3.7): every call gets --timeout; exit 124 is a
-# timeout (retryable, the stage from error.json), 3 an environment failure, 1 the caller's class.
+# timeout (retryable, the stage from error.json), 3 an environment failure, 1 the caller's class —
+# unless error.json says `blocked` (GH #26): a wall of yt-dlp or the transcript API is `blocked`
+# with the wall's kind in FAIL_ACQUISITION (RESULT:acquisition=), the tool's line as the message
+# and the honest retryable (false for a bot wall, true for a rate limit); any other exit-1 cause
+# recorded in error.json reaches the message too, so the receipt never says just "failed (exit 1)".
 cap_media_run() {   # <class on exit 1: fetch|convert> <args…>
-  local cls="$1" rc=0 stage
+  local cls="$1" rc=0 stage ej="$ATTEMPT_DIR/error.json" eclass="" line=""
   shift
+  rm -f "$ej"
   "$(cap_media_tool)" "$@" --timeout "${TRANSCRIBE_TIMEOUT:-3600}" 2>>"$ATTEMPT_DIR/stderr.txt" || rc=$?
-  FAIL_STAGE=""; FAIL_RETRYABLE=""
+  FAIL_STAGE=""; FAIL_RETRYABLE=""; FAIL_ACQUISITION=""
   case $rc in
     0)   return 0 ;;
-    124) stage="$(jq -r '.stage // ""' "$ATTEMPT_DIR/error.json" 2>/dev/null || true)"
+    124) stage="$(jq -r '.stage // ""' "$ej" 2>/dev/null || true)"
          FAIL_CLASS=timeout; FAIL_RETRYABLE=true; FAIL_STAGE="$stage"
          FAIL_MSG="media-extract.py exceeded transcribe_timeout=${TRANSCRIBE_TIMEOUT:-3600}s at stage ${stage:-?} (nothing deleted; retry later)"; return 1 ;;
     3)   FAIL_CLASS=environment; FAIL_RETRYABLE=true; FAIL_MSG="media-extract.py needs a tool this host lacks ($(tail -1 "$ATTEMPT_DIR/stderr.txt" 2>/dev/null | tr -d '\000-\037' || true))"; return 1 ;;
-    *)   FAIL_CLASS="$cls"; FAIL_MSG="media-extract.py failed (exit $rc) for ${URL:-$FILE_PATH}"; return 1 ;;
+    *)   if [[ -f "$ej" ]]; then
+           eclass="$(jq -r '.error_class // ""' "$ej" 2>/dev/null || true)"
+           line="$(jq -r '.error // ""' "$ej" 2>/dev/null | tr -d '\000-\037' || true)"
+           FAIL_STAGE="$(jq -r '.stage // ""' "$ej" 2>/dev/null || true)"
+         fi
+         if [[ "$eclass" == "blocked" ]]; then
+           FAIL_CLASS=blocked
+           FAIL_ACQUISITION="$(jq -r '.kind // "bot-wall"' "$ej" 2>/dev/null || echo bot-wall)"
+           FAIL_RETRYABLE="$(jq -r 'if .retryable == null then "false" else (.retryable | tostring) end' "$ej" 2>/dev/null || echo false)"
+           FAIL_MSG="$FAIL_ACQUISITION: ${line:-the media tool was refused} (media-extract.py, stage ${FAIL_STAGE:-?}; no escalation past it)"
+         else
+           FAIL_CLASS="$cls"; FAIL_MSG="media-extract.py failed (exit $rc) for ${URL:-$FILE_PATH}${line:+: $line}"
+         fi
+         return 1 ;;
   esac
 }
 
@@ -1828,7 +1856,7 @@ cap_transcribe_raw() {
   args=(audio --file "$RAW_PATH" --out-dir "$ATTEMPT_DIR" --whisper-model "$WHISPER_MODEL")
   [[ -n "${TITLE:-}" ]] && args+=(--title "$TITLE")
   if ! cap_media_run convert "${args[@]}" || [[ ! -s "$ATTEMPT_DIR/transcript.txt" ]]; then
-    [[ "${FAIL_CLASS:-}" == "timeout" || "${FAIL_CLASS:-}" == "environment" ]] || { FAIL_CLASS=convert; FAIL_MSG="transcription of the published audio $RAW_PATH failed (raw retained)"; }
+    case "${FAIL_CLASS:-}" in timeout|environment|blocked) ;; *) FAIL_CLASS=convert; FAIL_MSG="transcription of the published audio $RAW_PATH failed (raw retained)${FAIL_MSG:+: $FAIL_MSG}" ;; esac
     return 1
   fi
   cap_text_from_file "$ATTEMPT_DIR/transcript.txt" || return 1
@@ -1850,7 +1878,9 @@ cap_acquire_youtube() {
   args=(youtube "$URL" --out-dir "$ATTEMPT_DIR" --whisper-model "$WHISPER_MODEL")
   $NO_WHISPER && args+=(--no-whisper)
   if ! cap_media_run fetch "${args[@]}" || [[ ! -s "$ATTEMPT_DIR/transcript.txt" ]]; then
-    [[ "${FAIL_CLASS:-}" == "timeout" || "${FAIL_CLASS:-}" == "environment" ]] || { FAIL_CLASS=fetch; FAIL_MSG="media-extract.py failed for $URL"; }
+    # timeout, environment and blocked keep their class and message (the tool's own line); a run
+    # that exited 0 without a transcript is a plain fetch failure
+    case "${FAIL_CLASS:-}" in timeout|environment|blocked) ;; *) [[ -n "${FAIL_MSG:-}" && "${FAIL_CLASS:-}" == fetch ]] || { FAIL_CLASS=fetch; FAIL_MSG="media-extract.py failed for $URL (no transcript written)"; } ;; esac
     return 1
   fi
   cap_media_meta
@@ -2463,6 +2493,9 @@ cap_result() {
   fi
   [[ -n "$canon" && "${RESOURCE_KIND:-}" == "url" ]] && printf 'RESULT:canonical_url=%s\n' "$(cap_oneline "$canon")"
   [[ -n "$compl" ]] && printf 'RESULT:completeness=%s\n' "$(cap_oneline "$compl")"
+  # a failed acquisition on a wall names the wall's kind (bot-wall · login · rate-limit …) — the
+  # fetch report's or the media helper's (GH #26); nothing was published, so it is the only source
+  [[ -z "$acq" && "$status" == failed && -n "${FAIL_ACQUISITION:-}" ]] && acq="$FAIL_ACQUISITION"
   [[ -n "$acq" ]] && printf 'RESULT:acquisition=%s\n' "$(cap_oneline "$acq")"
   # the tier of the revision the result names, printed when it is a bookmark (B1) — for a fresh
   # card, a replay and a skipped-duplicate of one alike; and the stored judgement about it (B4):

@@ -366,8 +366,10 @@ cat > "$STUBS/media-extract.py" <<'STUB'
 #!/usr/bin/env bash
 # media-extract.py stub: youtube <url> --out-dir D … | audio --out-dir D (--url U | --file F) …
 # [--timeout S]. STUB_YT=whisper makes the youtube run report a downloaded audio (the whisper
-# fallback); STUB_MEDIA: ok (default) · timeout (error.json + exit 124) · env (exit 3). Every call is
-# appended to $STUB_DIR/media-calls (the command, its --url/--file and the --timeout it received).
+# fallback); STUB_MEDIA: ok (default) · timeout (error.json + exit 124) · env (exit 3) · wall (a
+# yt-dlp bot wall: error.json blocked/bot-wall with the recorded line, exit 1) · fail (error.json
+# failed with a cause, exit 1). Every call is appended to $STUB_DIR/media-calls (the command, its
+# --url/--file and the --timeout it received).
 cmd="$1"; shift
 out=""; url=""; file=""; timeout=""; prev=""
 for a in "$@"; do
@@ -378,8 +380,15 @@ done
 [[ -n "${STUB_DIR:-}" ]] && printf '%s url=%s file=%s timeout=%s\n' "$cmd" "$url" "$file" "$timeout" >> "$STUB_DIR/media-calls"
 mkdir -p "$out"
 case "${STUB_MEDIA:-ok}" in
-  timeout) printf '{"schema":"mnemon-media-error/1","error_class":"timeout","stage":"download","elapsed_s":%s}\n' "${timeout:-0}" > "$out/error.json"; exit 124 ;;
+  timeout) printf '{"schema":"mnemon-media-error/1","error_class":"timeout","stage":"download","elapsed_s":%s,"kind":null,"error":"timeout after %ss in stage download","retryable":true}\n' "${timeout:-0}" "${timeout:-0}" > "$out/error.json"; exit 124 ;;
   env)     echo "stub media-extract: yt-dlp missing" >&2; exit 3 ;;
+  wall)    line="$(grep '^ERROR:' "$MEDIA_FIX/ytdlp-bot-wall.stderr.txt" | head -1)"
+           printf '%s\n' "$line" >&2
+           python3 -c 'import json,sys; json.dump({"schema":"mnemon-media-error/1","error_class":"blocked","stage":"download","elapsed_s":3.9,"kind":"bot-wall","error":sys.argv[1],"retryable":False}, open(sys.argv[2],"w"))' "$line" "$out/error.json"
+           exit 1 ;;
+  fail)    echo "ERROR: yt-dlp metadata failed for $url: ERROR: [youtube] abc: Video unavailable" >&2
+           printf '{"schema":"mnemon-media-error/1","error_class":"failed","stage":"download","elapsed_s":1.2,"kind":null,"error":"yt-dlp metadata failed for %s: ERROR: [youtube] abc: Video unavailable","retryable":null}\n' "$url" > "$out/error.json"
+           exit 1 ;;
 esac
 printf 'transcript line one\ntranscript line two\n' > "$out/transcript.txt"
 if [[ "$cmd" == "youtube" ]]; then
@@ -417,6 +426,7 @@ STUB
 chmod +x "$STUBS"/*
 export PATH="$STUBS:$PATH"
 export RENDER_URL_CMD="$STUBS/render-url.sh" MEDIA_EXTRACT_CMD="$STUBS/media-extract.py" MNEMON_DEPTH_FOLD_CMD="$STUBS/kb-depth-fold.py"
+export MEDIA_FIX="$MNEMON_ROOT/tests/fixtures/capture/media"
 export MNEMON_CAPTURE_FETCH_CMD="$STUBS/capture-fetch.py" MNEMON_CAPTURE_SITE_CMD="$STUBS/capture-site.py"
 export STUB_DIR STUB_VAULT="$VAULT" STUB_FIXTURE="$FIX/extract-good.json" STUB_FIXTURE_PART="$FIX/extract-part-good.json"
 

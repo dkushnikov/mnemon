@@ -2,5 +2,8 @@
  "schema": "mnemon-media-error/1",
  "error_class": "timeout",
  "stage": "download",
- "elapsed_s": 3600.4
+ "elapsed_s": 3600.4,
+ "kind": null,
+ "error": "timeout after 3600.4s in stage download (budget 3600s); process groups terminated",
+ "retryable": true
 }

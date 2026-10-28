@@ -272,7 +272,14 @@ MEDIA = {
     "track": {"lang": "pt", "kind": "manual", "orig": False},
     "channel": "Example Channel",
 }
-MEDIA_ERROR = {"schema": "mnemon-media-error/1", "error_class": "timeout", "stage": "download", "elapsed_s": 3600.4}
+MEDIA_ERROR = {"schema": "mnemon-media-error/1", "error_class": "timeout", "stage": "download", "elapsed_s": 3600.4,
+               "kind": None, "error": "timeout after 3600.4s in stage download (budget 3600s); process groups terminated",
+               "retryable": True}
+# GH #26 part 1: a wall of the media tools — the kind of the capture-layer table, the tool's own line, not retryable
+MEDIA_ERROR_BLOCKED = {"schema": "mnemon-media-error/1", "error_class": "blocked", "stage": "download", "elapsed_s": 3.9,
+                       "kind": "bot-wall",
+                       "error": "ERROR: [youtube] abc123xyz00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication.",
+                       "retryable": False}
 
 # --- receipts (§4.1, A3, A4): the request objects under their own schema ---------------------------------------
 def receipt(request: dict, **extra) -> dict:
@@ -360,6 +367,7 @@ FILES = {
     "site-report.json": SITE_REPORT,
     "media.json": MEDIA,
     "media-error.json": MEDIA_ERROR,
+    "media-error-blocked.json": MEDIA_ERROR_BLOCKED,
     "receipts/request-v1.json": RECEIPT_V1,
     "receipts/request-v2-page.json": RECEIPT_V2_PAGE,
     "receipts/request-v2-site-auto.json": RECEIPT_V2_SITE_AUTO,

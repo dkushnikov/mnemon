@@ -1,0 +1,9 @@
+{
+ "schema": "mnemon-media-error/1",
+ "error_class": "blocked",
+ "stage": "download",
+ "elapsed_s": 3.9,
+ "kind": "bot-wall",
+ "error": "ERROR: [youtube] abc123xyz00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication.",
+ "retryable": false
+}

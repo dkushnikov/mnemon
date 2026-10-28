@@ -39,7 +39,13 @@ cat > "$STUBS/yt-dlp" <<'STUB'
 # with a `sleep` child of its own; both pids under $STUB_DIR for the teardown assertions).
 # The MNEMON_VAULT_LOCK_* variables of its environment are recorded (must be none).
 env | grep '^MNEMON_VAULT_LOCK_' > "$STUB_DIR/ytdlp-env" || true
+# STUB_YTDLP=wall: the metadata call ends on YouTube's bot wall (the recorded stderr, exit 1);
+# wall-download: the metadata passes and the audio download hits the wall; fail: a plain refusal
 if [[ "${1:-}" == "--dump-single-json" ]]; then
+  case "${STUB_YTDLP:-ok}" in
+    wall) cat "$MEDIA_FIX/ytdlp-bot-wall.stderr.txt" >&2; exit 1 ;;
+    fail) echo "ERROR: [youtube] abc123xyz00: Video unavailable. This video is private" >&2; exit 1 ;;
+  esac
   lang='"pt"'; [[ "${STUB_YTDLP_LANG:-}" == null ]] && lang=null
   printf '{"id":"abc123xyz00","title":"Um vídeo de exemplo","channel":"Example Channel","duration":754,"upload_date":"20260901","language":%s,"description":"a description"}\n' "$lang"
   exit 0
@@ -50,6 +56,7 @@ echo $$ > "$STUB_DIR/ytdlp.pid"
 case "${STUB_YTDLP:-ok}" in
   hang) sleep 30 & echo $! > "$STUB_DIR/ytdlp-child.pid"; wait; exit 0 ;;
   slow) sleep 1 ;;
+  wall-download) cat "$MEDIA_FIX/ytdlp-bot-wall.stderr.txt" >&2; exit 1 ;;
 esac
 printf 'RIFFstubaudio' > "$(printf '%s' "$out" | sed 's/%(ext)s$/wav/')"
 exit 0
@@ -78,8 +85,9 @@ chmod +x "$STUBS"/*
 cat > "$PYMODS/youtube_transcript_api/__init__.py" <<'PY'
 """Stub of youtube_transcript_api for tests/test_media.sh. STUB_YTA selects the listing:
 pt (default: an automatic en track and a manual pt track) · en-orig (one automatic en-orig track) ·
-none (the listing raises) · hang (sleeps 30 s inside list(), its pid in $STUB_DIR/captions.pid) ·
-missing (the package is not importable). STUB_YTA_API=v0 serves the 0.x class-method API whose
+none (the listing raises) · ipblock (the listing raises the recorded IpBlocked message of a blocked
+host) · hang (sleeps 30 s inside list(), its pid in $STUB_DIR/captions.pid) · missing (the package is
+not importable). STUB_YTA_API=v0 serves the 0.x class-method API whose
 fetch() returns dicts; otherwise the 1.x instance API whose fetch() returns snippet objects."""
 import os
 import time
@@ -114,6 +122,9 @@ def _listing(video_id, dicts=False):
         time.sleep(30)
     if mode == "none":
         raise RuntimeError("stub: no transcripts for " + video_id)
+    if mode == "ipblock":
+        with open(os.path.join(os.environ["MEDIA_FIX"], "transcript-api-ip-block.txt"), encoding="utf-8") as fh:
+            raise RuntimeError(fh.read().strip())
     if mode == "en-orig":
         return [_Transcript("en-orig", True, ["hello", "original world"], dicts)]
     return [_Transcript("en", True, ["hello", "world"], dicts),
@@ -130,7 +141,7 @@ else:
         def list(self, video_id):
             return _listing(video_id)
 PY
-export PATH="$STUBS:$PATH" PYTHONPATH="$PYMODS"
+export PATH="$STUBS:$PATH" PYTHONPATH="$PYMODS" MEDIA_FIX="$FIX/media"
 URL="https://www.youtube.com/watch?v=abc123xyz00"
 
 # run_media <args…>: $out (stdout), $err (stderr), $rc
@@ -292,6 +303,56 @@ assert_contains "$err" "No captions and --no-whisper set" "...with the phase-1 m
 STUB_YTA=missing run_media youtube "$URL" --out-dir "$TEST_TMPDIR/out-missinglib" --timeout 20 --whisper-model tiny
 assert_eq "$rc" "0" "a missing transcript library falls back to whisper"
 assert_contains "$err" "not importable" "...naming the library in the note"
+
+# --- 3b. walls (GH #26 part 1): yt-dlp's bot wall and the transcript API's IP block are `blocked` ---
+echo "--- walls: yt-dlp bot wall · transcript API IP block → error.json blocked/bot-wall (GH #26) ---"
+python3 - "$MEDIA" "$FIX/media" <<'PY' && pass "classify_wall: the recorded lines, a 429, and plain failures" || fail "classify_wall" "see above"
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("me", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+fix = sys.argv[2]
+ytdlp = open(os.path.join(fix, "ytdlp-bot-wall.stderr.txt"), encoding="utf-8").read()
+yta = open(os.path.join(fix, "transcript-api-ip-block.txt"), encoding="utf-8").read()
+assert m.classify_wall(ytdlp) == "bot-wall", m.classify_wall(ytdlp)
+assert m.classify_wall(ytdlp.encode("utf-8")) == "bot-wall"
+assert m.classify_wall("ERROR: [youtube] x: Sign in to confirm you're not a bot.") == "bot-wall", "straight apostrophe"
+assert m.classify_wall(yta) == "bot-wall", m.classify_wall(yta)
+assert m.classify_wall("ERROR: unable to download: HTTP Error 429: Too Many Requests") == "rate-limit"
+assert m.classify_wall("ERROR: [youtube] abc: Video unavailable") is None
+assert m.classify_wall("") is None and m.classify_wall(None) is None
+assert m._wall_line(ytdlp).startswith("ERROR: [youtube] abc123xyz00: Sign in to confirm"), m._wall_line(ytdlp)
+PY
+stub_reset
+DW="$TEST_TMPDIR/out-wall"; mkdir -p "$DW"; printf 'keep me\n' > "$DW/keep.txt"
+STUB_YTDLP=wall run_media youtube "$URL" --out-dir "$DW" --timeout 20 --whisper-model tiny
+assert_eq "$rc" "1" "yt-dlp metadata behind the bot wall → exit 1"
+assert_contains "$err" "ERROR: download: bot-wall (ERROR: [youtube] abc123xyz00: Sign in to confirm you’re not a bot" "...stderr names the stage, the kind and the tool's line"
+assert_file_exists "$DW/error.json" "error.json written under --out-dir"
+assert_eq "$(jget "$DW/error.json" 'd["error_class"]') $(jget "$DW/error.json" 'd["kind"]') $(jget "$DW/error.json" 'd["stage"]') $(jget "$DW/error.json" 'd["retryable"]')" "blocked bot-wall download false" "error.json: blocked · bot-wall · stage download · retryable false"
+assert_contains "$(jget "$DW/error.json" 'd["error"]')" "Sign in to confirm you’re not a bot. Use --cookies-from-browser" "...error = the yt-dlp line (the cause is not swallowed)"
+assert_not_contains "$(jget "$DW/error.json" 'd["error"]')" "older than 90 days" "...not the version warning"
+shape="$(keyshape "$DW/error.json" "$FIX/reports/media-error-blocked.json" 2>&1)" && pass "error.json matches the frozen blocked fixture's key set" || fail "error.json matches reports/media-error-blocked.json" "$shape"
+assert_file_exists "$DW/keep.txt" "nothing under --out-dir deleted"
+[[ -f "$STUB_DIR/captions.pid" ]] && fail "captions never tried after the metadata wall (chain stops; degradation is #26 part 2)" "captions ran" || pass "captions not tried after the metadata wall (the chain still stops at metadata; degradation is #26 part 2)"
+# the audio download hits the wall after the captions came back empty
+stub_reset
+DW2="$TEST_TMPDIR/out-wall-dl"
+STUB_YTA=none STUB_YTDLP=wall-download run_media youtube "$URL" --out-dir "$DW2" --timeout 20 --whisper-model tiny
+assert_eq "$rc $(jget "$DW2/error.json" 'd["error_class"]') $(jget "$DW2/error.json" 'd["kind"]') $(jget "$DW2/error.json" 'd["stage"]')" "1 blocked bot-wall download" "the whisper fallback's download behind the wall → blocked/bot-wall, stage download"
+# the transcript API's IP block with --no-whisper: the captions note was the last word
+stub_reset
+DW3="$TEST_TMPDIR/out-ipblock"
+STUB_YTA=ipblock run_media youtube "$URL" --out-dir "$DW3" --no-whisper
+assert_eq "$rc $(jget "$DW3/error.json" 'd["error_class"]') $(jget "$DW3/error.json" 'd["kind"]') $(jget "$DW3/error.json" 'd["stage"]') $(jget "$DW3/error.json" 'd["retryable"]')" "1 blocked bot-wall captions false" "the transcript API's IP block with --no-whisper → blocked/bot-wall, stage captions"
+assert_contains "$(jget "$DW3/error.json" 'd["error"]')" "YouTube is blocking requests from your IP" "...the library's line as the cause"
+assert_contains "$err" "ERROR: captions: bot-wall" "...on stderr too"
+# a plain refusal is `failed` with the cause, kind null
+stub_reset
+DF="$TEST_TMPDIR/out-fail"
+STUB_YTDLP=fail run_media youtube "$URL" --out-dir "$DF" --timeout 20 --whisper-model tiny
+assert_eq "$rc $(jget "$DF/error.json" 'd["error_class"]') $(jget "$DF/error.json" 'd["kind"]') $(jget "$DF/error.json" 'd["retryable"]')" "1 failed null null" "a plain yt-dlp refusal → error.json failed, kind null, retryable null"
+assert_contains "$(jget "$DF/error.json" 'd["error"]')" "Video unavailable" "...the cause recorded"
+assert_contains "$err" "ERROR: yt-dlp metadata failed for" "...the phase-1 stderr message kept"
+shape="$(keyshape "$DF/error.json" "$FIX/reports/media-error.json" 2>&1 || true)"; case "$shape" in *"type/nullability differ: ['kind']"*|*"type/nullability differ: ['retryable']"*|*"type/nullability differ: ['kind', 'retryable']"*) pass "a failed error.json differs from the timeout fixture only in the nullable kind/retryable" ;; *"same keys"*) pass "a failed error.json has the fixture's keys" ;; *) fail "a failed error.json has the fixture's keys" "$shape" ;; esac
 
 # --- 4. --timeout: one budget, process groups torn down (D11, §12 A9) ---
 echo "--- --timeout: download stage (stub yt-dlp hangs with a child of its own) ---"

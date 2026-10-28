@@ -12,7 +12,7 @@ failure and null shapes:
 | `site-manifest.json` | `mnemon-site-bundle/1` | `fetch-bundle` → `verify`, `cap_raw_commit` (canonical bytes: sorted keys, no spaces, UTF-8, one trailing newline; `raw_sha256` hashes exactly these bytes) |
 | `site-bundle-stdout.json` | the one stdout line of `fetch-bundle` | `fetch-bundle` → `cap_acquire_site` |
 | `site-report.json` | `mnemon-site/1` | `assemble` → `folded_sources`, `site_pages`, `capture.completeness` |
-| `media.json`, `media-error.json` | `mnemon-media/1`, `mnemon-media-error/1` | `media-extract.py` → `cap_media_meta`, the receipt (`media_meta`) |
+| `media.json`, `media-error.json`, `media-error-blocked.json` | `mnemon-media/1`, `mnemon-media-error/1` (the timeout shape; the wall shape of GH #26 — `error_class: blocked`, `kind`, the tool's line in `error`, `retryable`) | `media-extract.py` → `cap_media_meta`, the receipt (`media_meta`); `error.json` → `cap_media_run` (class, kind, stage, message) |
 | `receipts/request-v1.json` | a phase-1 receipt (`mnemon-request/1`) | the gateway's replay and binding under the stored schema |
 | `receipts/request-v2-page.json`, `receipts/request-v2-site-auto.json` | phase-2 receipts (`mnemon-request/2`, `calls`, `capture_report`, the sidecar fields, `site_plan_sha256`) | the gateway, `doctor captures`, the integrator's chain test |
 

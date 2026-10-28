@@ -1030,6 +1030,9 @@ for spec in blocked-botwall:blocked:false:bot-wall:render blocked-login:blocked:
   assert_eq "$(result revision)" "" "...nothing published"
   assert_eq "$(rget "m-$m" '.capture_report.fetch.acquisition.kind') $(rget "m-$m" '.stage')" "$kind $stage" "...the fetch report is in the receipt (acquisition.kind $kind) with the failing stage"
   assert_eq "$(staging_left)" "0" "...no staged raw left"
+  # GH #26: a wall names its kind on the failed capture's RESULT block too; a plain fetch failure prints none
+  if [[ "$cls" == blocked ]]; then assert_eq "$(result acquisition)" "$kind" "...RESULT:acquisition=$kind on the failed capture"; else assert_eq "$(result acquisition)" "" "...no RESULT:acquisition on a plain fetch failure"; fi
+  assert_eq "$(rget "m-$m" '.raw_path')" "null" "...raw_path null (no raw was staged)"
 done
 assert_eq "$(result canonical_url)" "https://example.com/mode-fail" "RESULT:canonical_url is reported for a failed url capture too"
 STUB_FETCH=js-shell-noenv run_gw --url "https://example.com/noenv" --capture-id m-noenv
@@ -1314,6 +1317,20 @@ assert_eq "$rc $(result error_class) $(result retryable)" "1 timeout true" "medi
 assert_eq "$(rget yt-hang '.stage')" "download" "...the stage from error.json"
 STUB_MEDIA=env run_gw --url "https://youtube.com/watch?v=noenv000000" --capture-id yt-env
 assert_eq "$rc $(result error_class)" "3 environment" "media-extract.py exit 3 → environment (exit 3)"
+# GH #26 part 1: a wall of the media tools is `blocked` with the kind, the tool's line and an honest retryable
+stub_reset
+STUB_MEDIA=wall run_gw --url "https://youtube.com/watch?v=wall0000000" --capture-id yt-wall
+assert_eq "$rc $(result status) $(result error_class) $(result retryable) $(result acquisition)" "1 failed blocked false bot-wall" "a yt-dlp bot wall → failed/blocked, retryable false, RESULT:acquisition=bot-wall"
+assert_eq "$(result revision)" "" "...nothing published"
+assert_contains "$(rget yt-wall '.error')" "Sign in to confirm you’re not a bot" "...the yt-dlp line is the receipt's error"
+assert_eq "$(rget yt-wall '.state') $(rget yt-wall '.error_class') $(rget yt-wall '.retryable') $(rget yt-wall '.stage')" "failed blocked false download" "...receipt: failed · blocked · retryable false · stage download"
+assert_eq "$(rget yt-wall '.raw_path') $(rget yt-wall '.raw_staged_path') $(rget yt-wall '.raw_sha256')" "null null null" "...raw_path names no file that was never written"
+assert_eq "$(staging_left)" "0" "...no staged raw left"
+STUB_MEDIA=fail run_gw --url "https://youtube.com/watch?v=fail0000000" --capture-id yt-fail
+assert_eq "$rc $(result status) $(result error_class) $(result retryable)" "1 failed fetch true" "another media failure stays fetch, retryable"
+assert_contains "$(rget yt-fail '.error')" "Video unavailable" "...with the tool's cause in the receipt's error (not just 'failed (exit 1)')"
+assert_eq "$(result acquisition)" "" "...and no acquisition kind (not a wall)"
+assert_eq "$(rget yt-fail '.raw_path')" "null" "...raw_path null on a failure before any raw was staged"
 
 # ---------------------------------------------------------------------------------------------
 echo "--- p2.7 the archive sidecar transaction (A6) ---"
