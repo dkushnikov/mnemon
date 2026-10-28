@@ -8,10 +8,17 @@ override, then searches Sources/*/extract.md (and optionally source.md,
 Synthesis/ and Collections/) for files matching the query. Results are ranked by
 rating DESC, then date DESC, then title. The JSON is `mnemon-search/2`
 (docs/specs/2026-10-27-research-interface.md §7): every result carries
-`result_type` (extract · source · synthesis · collection; wiki in phase 3b) apart
-from `tier`, which is the capture tier of a Sources result (`full` · `bookmark`,
-read from the revision's frontmatter; `null` for a synthesis or collection
+`result_type` (extract · source · synthesis · collection · wiki) apart from
+`tier`, which is the capture tier of a Sources result (`full` · `bookmark`, read
+from the revision's frontmatter; `null` for a synthesis, collection or wiki
 result) — until v2 the `tier` key carried what `result_type` carries now.
+`--include-wiki` (phase 3b) adds a separate `wiki` block (`null` without the
+flag): the usable pages — validated by the research reader on the vault's
+snapshot, so `suppressed`, `unbound`, schema-failed and not-probed pages never
+appear and `orphan` ones only with `--include-orphans` — ordered by `updated`
+desc then file name, capped by `--wiki-limit`, their snippets taken from the
+page without its `## Atlas reading` section, their domains the union of their
+dossiers'.
 
 Design notes
 ------------
@@ -377,6 +384,78 @@ def assemble_result(path: Path, result_type: str, snippet: str | None, vault: Pa
     }
 
 
+def cut_atlas_reading(text: str) -> str:
+    """The page text without its `## Atlas reading` section (the agent's opinion, never evidence:
+    interface §7/§9) — from that heading to the next `## ` heading or the end."""
+    lines = text.split("\n")
+    out: list[str] = []
+    skipping = False
+    for line in lines:
+        if line.startswith("## "):
+            name = " ".join(line[3:].split())
+            skipping = name == "Atlas reading"
+            if skipping:
+                continue
+        if not skipping:
+            out.append(line)
+    return "\n".join(out)
+
+
+def wiki_pages(vault: Path, include_orphans: bool) -> list[dict]:
+    """The usable wiki pages of the vault, validated by the research reader on the one snapshot:
+    `suppressed`, `unbound`, schema-failed and not-probed pages are left out; `orphan` pages
+    only with the flag. Each entry: {record, text (without `## Atlas reading`), domains}."""
+    import lib_vault  # the scanner (loaded here: it is heavier than the reader, and only this flag needs it)
+    lib_research.list_wiki(str(vault))             # OSError when Wiki/ exists but cannot be listed
+    scan = lib_vault.scan_vault(str(vault))
+    ctx = lib_vault.research_context(scan)
+    out: list[dict] = []
+    for rec in scan["wiki"]["notes"]:
+        lib_research.validate_wiki(rec, ctx)
+        if not rec["usable"]:
+            continue
+        if "orphan" in rec["states"] and not include_orphans:
+            continue
+        path = vault / "Wiki" / (rec["name"] + ".md")
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        domains: list[str] = list(rec["domains"])
+        for cname in rec["collections"]:
+            c = ctx["collections"].get(cname)
+            for d in (c or {}).get("domains") or []:
+                if d not in domains:
+                    domains.append(d)
+        out.append({"record": rec, "path": path, "text": cut_atlas_reading(text), "domains": domains})
+    return out
+
+
+def wiki_result(entry: dict, snippet: str | None, vault: Path) -> dict:
+    rec = entry["record"]
+    return {
+        "path": "Wiki/", "file": rec["name"] + ".md", "result_type": "wiki", "tier": None, "status": None,
+        "title": rec["name"], "author": "", "url": "", "domains": entry["domains"], "tags": [],
+        "rating": None, "created": rec["created"] or "", "snippet": snippet or "",
+        "kind": rec["kind"], "updated": rec["updated"], "states": list(rec["states"]),
+    }
+
+
+def search_wiki(entries: list[dict], tokens: list[str], fallback_token: str | None, vault: Path) -> list[dict]:
+    """The wiki block: pages whose text (without `## Atlas reading`) holds every token — or, when
+    the main search fell back, the fallback token — ordered by `updated` desc, then file name."""
+    wanted = {fallback_token} if fallback_token else set(tokens)
+    results: list[dict] = []
+    for entry in entries:
+        text_lower = entry["text"].lower()
+        matched = {t for t in wanted if t in text_lower}
+        if matched != wanted:
+            continue
+        results.append(wiki_result(entry, _extract_snippet(entry["text"], list(matched)), vault))
+    results.sort(key=lambda r: (-_date_sort_key(r.get("updated") or ""), r["file"]))
+    return results
+
+
 def rank_results(results: list[dict]) -> list[dict]:
     """Sort by rating DESC (None last), then created DESC, then title."""
     def key(r: dict):
@@ -460,6 +539,12 @@ def main() -> int:
                         help="Also search Synthesis/ directory")
     parser.add_argument("--include-collections", action="store_true",
                         help="Also search Collections/ (result_type collection)")
+    parser.add_argument("--include-wiki", action="store_true",
+                        help="Also search Wiki/ pages as a separate block of the output (result_type wiki; "
+                             "suppressed, unbound and not-probed pages are never shown)")
+    parser.add_argument("--wiki-limit", type=int, default=5, help="Max wiki results in the block (default: 5)")
+    parser.add_argument("--include-orphans", action="store_true",
+                        help="With --include-wiki: also show orphan pages (no open supporting dossier)")
     parser.add_argument("--vault", default=None,
                         help="Vault path (overrides the configured instance)")
     parser.add_argument("--human", action="store_true", help="Human-readable output instead of JSON")
@@ -480,11 +565,21 @@ def main() -> int:
         print("ERROR: query contains no usable tokens (>=2 chars)", file=sys.stderr)
         return 2
 
+    if args.wiki_limit < 0:
+        print("ERROR: --wiki-limit must be >= 0", file=sys.stderr)
+        return 2
     try:
         targets = collect_targets(vault, args.include_source, args.include_synthesis, args.include_collections)
     except OSError as exc:
         print(f"ERROR: Collections/ could not be listed ({exc}); no answer is better than an empty one", file=sys.stderr)
         return 2
+    wiki_entries: list[dict] | None = None
+    if args.include_wiki:
+        try:
+            wiki_entries = wiki_pages(vault, args.include_orphans)
+        except OSError as exc:
+            print(f"ERROR: Wiki/ could not be listed ({exc}); no answer is better than an empty one", file=sys.stderr)
+            return 2
 
     # Single pass: every file matching at least one token, with the set of
     # tokens it matched. Primary results: matched == all tokens (AND).
@@ -525,6 +620,13 @@ def main() -> int:
     results = rank_results(results)
     results = results[: args.limit]
 
+    wiki_block = None
+    if wiki_entries is not None:
+        wiki_results = search_wiki(wiki_entries, tokens, fallback_token, vault)
+        wiki_results = apply_domain_filter(wiki_results, args.domain)
+        wiki_results = wiki_results[: args.wiki_limit]
+        wiki_block = {"count": len(wiki_results), "limit": args.wiki_limit, "results": wiki_results}
+
     output = {
         "schema": SEARCH_SCHEMA,
         "query": args.query,
@@ -535,6 +637,7 @@ def main() -> int:
         "fallback_token": fallback_token,
         "count": len(results),
         "results": results,
+        "wiki": wiki_block,
     }
 
     if args.human:
@@ -545,9 +648,28 @@ def main() -> int:
     return 0
 
 
+def _print_human_wiki(block: dict | None) -> None:
+    if block is None:
+        return
+    if block["count"] == 0:
+        print("Wiki: no page matched.")
+        return
+    print(f"Wiki ({block['count']} page(s), limit {block['limit']}):\n")
+    for i, r in enumerate(block["results"], 1):
+        domains = ", ".join(r["domains"]) if r["domains"] else "—"
+        states = ", ".join(r["states"]) if r["states"] else "ok"
+        print(f"{i}. {r['title']}")
+        print(f"   wiki · {r['kind']} · updated {r['updated'] or '—'} · domains: {domains} · {states}")
+        if r["snippet"]:
+            print(f"   → {r['snippet']}")
+        print(f"   path: {r['path']}{r['file']}")
+        print()
+
+
 def _print_human(output: dict) -> None:
     if output["count"] == 0:
         print(f"No sources found for '{output['query']}'.")
+        _print_human_wiki(output.get("wiki"))
         return
     if output["fallback_applied"]:
         note = f" (fallback: no file matched all tokens; relaxed to '{output['fallback_token']}')"
@@ -574,6 +696,7 @@ def _print_human(output: dict) -> None:
             print(f"   → {r['snippet']}")
         print(f"   path: {r['path']}")
         print()
+    _print_human_wiki(output.get("wiki"))
 
 
 if __name__ == "__main__":
