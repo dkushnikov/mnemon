@@ -3,7 +3,8 @@
 # bin/lib_research.py (collection/1, the `## Items` grammar) through its unit tests, the compatibility
 # fixture vault's goldens (tests/fixtures/research/expected/ — every branch that touches the shared
 # files must keep them), the dispatcher's `search --include-collections`, `reindex` and `status` on the
-# fixture, `init`'s scaffold (Collections/, Templates/Collection.md), the Guide 4 canon
+# fixture, `init`'s scaffold (Collections/, Templates/Collection.md), the Guide 5 canon, the research
+# operations' dispatcher route (phase 3c: `mnemon research …` with a stub claude and a probe record),
 # (vault-template names the four folders, stamped 4), and the doctor's envelope staying
 # mnemon-doctor-data/1 with its 19 checks. Temp vaults, no network. bash 3.2 / python 3.9.
 source "$(dirname "$0")/test-helper.sh"
@@ -144,8 +145,8 @@ run python3 "$MNEMON_ROOT/bin/lib_research.py" --vault "$VAULT" --json
 assert_eq "$(jq_ "$out" '[c["state"] for c in d["collections"] if c["name"] == "Closed dossier"]')" "['unreadable']" "an unreadable document has state unreadable, never raised, never ok"
 chmod 644 "$VAULT/Collections/Closed dossier.md"
 
-# --- 5. init scaffold and the Guide 4 canon ---
-echo "--- init scaffold, Guide 4 ---"
+# --- 5. init scaffold and the Guide 5 canon ---
+echo "--- init scaffold, Guide 5 ---"
 run "$MNEMON" init research2 --vault "$TEST_TMPDIR/v2" --non-interactive
 assert_eq "$rc" "0" "mnemon init exits 0"
 assert_dir_exists "$TEST_TMPDIR/v2/Collections" "init creates Collections/"
@@ -162,13 +163,14 @@ assert_contains "$out" "based_on[0]: rev: revision name malformed" "...rejected 
 for f in CLAUDE.md _meta/Protocol.md; do
   assert_contains "$(cat "$MNEMON_ROOT/vault-template/$f")" 'Collections/' "vault-template/$f names Collections/"
   assert_contains "$(cat "$MNEMON_ROOT/vault-template/$f")" 'Wiki/' "vault-template/$f names Wiki/"
-  assert_contains "$(cat "$MNEMON_ROOT/vault-template/$f")" 'mnemon_guide: 4' "vault-template/$f is Guide 4"
+  assert_contains "$(cat "$MNEMON_ROOT/vault-template/$f")" 'mnemon_guide: 5' "vault-template/$f is Guide 5"
+  assert_contains "$(cat "$MNEMON_ROOT/vault-template/$f")" 'mnemon research update' "vault-template/$f names the Wiki/ door (phase 3c)"
 done
-assert_eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import lib_vault; print(lib_vault.engine_guide_version())' "$MNEMON_ROOT/bin")" "4" "the engine's guide version is 4"
+assert_eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import lib_vault; print(lib_vault.engine_guide_version())' "$MNEMON_ROOT/bin")" "5" "the engine's guide version is 5"
 # a vault on Guide 3 is reported behind by the doctor
 printf -- '---\nmnemon_guide: 3\n---\n# Vault\n' > "$VAULT/CLAUDE.md"
 run hermetic "$MNEMON" --config "$TEST_TMPDIR/research.yaml" doctor --data
-assert_contains "$out" "warn store/guide-version — vault CLAUDE.md 3 (behind)" "a Guide 3 copy is reported behind engine 4"
+assert_contains "$out" "warn store/guide-version — vault CLAUDE.md 3 (behind)" "a Guide 3 copy is reported behind engine 5"
 assert_not_contains "$out" "claude 2." "the fence probe saw the stub claude, not the real one"
 
 # --- 6. a Collections/ that exists but cannot be listed is never an empty one ---
@@ -190,6 +192,55 @@ assert_contains "$err" "Collections/ could not be listed" "...and says why"
 run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" search --query trust
 assert_eq "$rc" "0" "...while a search without the flag never touches the folder"
 chmod 755 "$VAULT/Collections"
+
+# --- 7. the research operations through the dispatcher (phase 3c, docs/research.md) ---
+echo "--- mnemon research (the dispatcher route) ---"
+RV="$TEST_TMPDIR/rvault"; cp -R "$FIXTURE" "$RV"
+printf 'instance: research3\nvault_path: %s\nsearch_provider: grep\ndoctor_wiki_pages_per_collection: 20\nresearch_log_path: _claude/research-log.jsonl\n' "$RV" > "$TEST_TMPDIR/research3.yaml"
+# the stub claude answers from a canned file and records a probe pass for its version
+cat > "$TEST_TMPDIR/stub/claude" <<'STUB'
+#!/bin/sh
+case "$1" in --version) echo "0.0.0 (stub)"; exit 0;; --help) echo "--restricted"; exit 0;; esac
+cat > /dev/null
+printf '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"duration_ms":5,"num_turns":1,"structured_output":'
+cat "${STUB_ANSWER:?}"
+printf '}\n'
+STUB
+chmod +x "$TEST_TMPDIR/stub/claude"
+mkdir -p "$XDG_STATE_HOME/mnemon"
+printf '{"0.0.0 (stub)": {"pass": true}}\n' > "$XDG_STATE_HOME/mnemon/fence-probes.json"
+research() { env HOME="$TEST_TMPDIR/home" PATH="$TEST_TMPDIR/stub:$PATH" STUB_ANSWER="$MNEMON_ROOT/tests/fixtures/research/answers/contradiction-good.json" MNEMON_AGENT=atlas "$MNEMON" --config "$TEST_TMPDIR/research3.yaml" research "$@"; }
+run research update --page "Trust — routed" --kind contradiction --collection "Trust without identity" --recusal off
+assert_eq "$rc" "0" "mnemon research update through the dispatcher exits 0"
+assert_contains "$out" "RESULT:op=research-update status=published page=Trust — routed class=-" "...and publishes the page"
+assert_file_exists "$RV/Wiki/Trust — routed.md" "the page is in Wiki/"
+assert_file_exists "$RV/_claude/research-log.jsonl" "the journal lands at research_log_path inside the vault"
+run research update --page "Trust — routed" --kind contradiction --collection "Trust without identity" --recusal off
+assert_contains "$out" "status=no-op" "the second update is a no-op (the package is unchanged)"
+run research update --propose --page "Trust — routed"
+assert_eq "$rc" "0" "research update --propose is read-only and exits 0"
+assert_contains "$out" "RESULT:op=research-propose status=proposed" "...with its RESULT line"
+run research ask --task-id t-route --question "how?" --page "Trust — routed"
+assert_eq "$rc" "0" "research ask exits 0"
+assert_contains "$out" "## State of evidence" "...and serves the evidential body"
+assert_not_contains "$out" "complementary, not rival" "...without the page's ## Atlas reading"
+run research triage --propose
+assert_eq "$rc" "0" "research triage --propose exits 0"
+assert_contains "$out" "Seed note — seed · drafted_by agent" "...and maps the fixture's agent-drafted seed"
+run research bogus
+assert_eq "$rc" "2" "an unknown research verb is a usage error"
+run python3 "$MNEMON_ROOT/bin/lib_research.py" --vault "$RV"
+assert_contains "$out" "ok Trust — routed — contradiction · 3 based_on · 1 collections · 2 locators" "the reader validates the built page as clean"
+run hermetic "$MNEMON" --config "$TEST_TMPDIR/research3.yaml" doctor --data --json
+assert_eq "$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print([p["severity"] for p in d["research"]["pages"] if p["name"] == "Trust — routed"])' "$out")" "['ok']" "the doctor reads the built page as ok"
+# the single-writer rule: a declared writer_host that is not this host refuses the writers before the lock
+printf 'instance: research4\nvault_path: %s\nwriter_host: another-host\n' "$RV" > "$TEST_TMPDIR/research4.yaml"
+run env HOME="$TEST_TMPDIR/home" PATH="$TEST_TMPDIR/stub:$PATH" "$MNEMON" --config "$TEST_TMPDIR/research4.yaml" research update --page "X" --kind concept --collection "Trust without identity"
+assert_eq "$rc" "2" "a writer_host that is not this host refuses research update"
+assert_contains "$err" "must not write vault" "...and says so"
+run env HOME="$TEST_TMPDIR/home" PATH="$TEST_TMPDIR/stub:$PATH" "$MNEMON" --config "$TEST_TMPDIR/research3.yaml" config keys
+assert_contains "$out" "research_log_path str -" "mnemon config keys lists the research keys (phase 3c)"
+assert_contains "$out" "research_package_max_bytes int 400000" "...with their defaults"
 
 rm -rf "$TEST_TMPDIR"
 summary

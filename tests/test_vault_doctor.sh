@@ -847,8 +847,9 @@ assert_eq "$(printf '%s' "$unr_json" | python3 -c 'import json,sys; d=json.load(
 assert_contains "$unr_brief" "(unreadable 1)" "the brief carries the unreadable count"
 
 echo "--- the engine's own guide stamp ---"
-assert_eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import lib_vault; print(lib_vault.engine_guide_version())' "$MNEMON_ROOT/bin")" "4" "vault-template/CLAUDE.md is stamped mnemon_guide: 4"
-assert_eq "$(head -1 "$MNEMON_ROOT/vault-template/_meta/Protocol.md")" "<!-- mnemon_guide: 4 -->" "vault-template/_meta/Protocol.md starts with the same stamp"
+assert_eq "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import lib_vault; print(lib_vault.engine_guide_version())' "$MNEMON_ROOT/bin")" "5" "vault-template/CLAUDE.md is stamped mnemon_guide: 5"
+assert_eq "$(head -1 "$MNEMON_ROOT/vault-template/_meta/Protocol.md")" "<!-- mnemon_guide: 5 -->" "vault-template/_meta/Protocol.md starts with the same stamp"
+# Guide 5 (2026-10-28, phase 3c): the Wiki/ door is `mnemon research update`; the operations are listed under Doors
 # Guide 4 (2026-10-27, phase 3a): the four knowledge folders — Collections/ (items appended by agents, the
 # question and the veto the owner's) and Wiki/ (agent-only, never by hand) join Sources/ and Synthesis/
 # Guide 3 (2026-10-17): the Guide says what _meta/Protocol.md and the spec's §3.2 say — an agent writes
