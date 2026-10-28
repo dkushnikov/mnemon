@@ -160,6 +160,26 @@ rc=0; out="$(bash -c '"$@"' _ "$MNEMON" --config "$TEST_TMPDIR/reader.yaml" tria
 assert_eq "$rc" "2" "dismiss on a host that is not the writer_host is exit 2"
 assert_contains "$out" "writer_host some-other-host" "...naming the writer"
 [[ -f "$VAULT/Sources/$bmb/triage.md" ]] && fail "nothing written by a non-writer host" "triage.md exists" || pass "nothing written by a non-writer host"
+rc=0; out="$(bash -c '"$@"' _ "$MNEMON" --config "$TEST_TMPDIR/reader.yaml" triage restore "$bma" 2>&1)" || rc=$?
+assert_eq "$rc" "2" "restore on a host that is not the writer_host is exit 2 too"
+# the doctor's data checks on this vault: Q1 and Q3 leave the legacy placeholder (status: bookmark, 8 words) alone
+run_m doctor --data --json
+assert_eq "$rc" "0" "doctor --data --json on the vault exits 0"
+assert_eq "$(printf '%s' "$out" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)["data"]   # the combined envelope: the data document sits under "data"
+checks = {c["name"]: c for c in d["checks"]}
+thin = [i["id"] for i in checks["data/thin"]["items"]]
+stubs = [i["id"] for i in checks["data/stubs"]["items"]]
+print("2026-09-01_feedf00d" in thin, "2026-09-01_feedf00d" in stubs, checks["data/stubs"]["counts"]["bookmarks_excluded"] >= 1, d["counters"]["tier"]["other"])
+')" "False False True 0" "Q1 and Q3 exclude the legacy status: bookmark placeholder (effective tier); tier.other is 0"
+# a foreign tier word is counted apart, never as full or bookmark
+mkdir -p "$VAULT/Sources/2026-09-07_0ther0th"
+printf -- '---\ntype: source\norigin: url\nurl: "https://example.com/other-tier"\ntitle: "Other tier"\ncaptured: 2026-09-07\ntier: snapshot\n---\n# Other tier\n' > "$VAULT/Sources/2026-09-07_0ther0th/source.md"
+assert_eq "$(python3 "$MNEMON_ROOT/bin/lib_vault.py" --vault "$VAULT" --json | python3 -c 'import json,sys; t=json.load(sys.stdin)["counters"]["tier"]; print(t["other"], t["full"] + t["bookmark"] + t["other"])')" "1 $(nfolders)" "tier.other counts a foreign tier word; full + bookmark + other = the folders with a source"
+run_m triage list
+assert_not_contains "$out" "2026-09-07_0ther0th" "...and it is not in the bookmark queue"
+rm -rf "$VAULT/Sources/2026-09-07_0ther0th"
 # the lock: a writer holding the vault lock makes dismiss exit 75
 python3 "$MNEMON_ROOT/bin/vault-lock.py" --vault "$VAULT" -- bash -c 'sleep 3' &
 holder=$!
