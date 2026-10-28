@@ -1,4 +1,4 @@
-<!-- mnemon_guide: 4 -->
+<!-- mnemon_guide: 5 -->
 # Mnemon Vault Protocol
 
 The store mechanics are defined once, in the engine: `$MNEMON_HOME/docs/specs/2026-10-16-vault-store.md` (entities, ownership, state axes, invariants, the data doctor) and, for the research layers, `$MNEMON_HOME/docs/specs/2026-10-27-research-interface.md` (collections, the `## Items` grammar, the wiki contract). This file is the short form a session reads; where the two differ, the spec wins. `mnemon doctor --data` executes the invariants named below.
@@ -23,7 +23,7 @@ Three classes of `Sources/` folders: **managed** (`source.md` carries `capture_i
 | the archive (originals) | the engine | nobody |
 | `index.md` | the engine (`mnemon reindex`) | nobody by hand — a durable note goes to `index_note:` in `extract.md` |
 | `Collections/` | the question, `## Notes (owner)` and the veto (`wiki`, `suppressed_pages`) — you (an agent when you ask it to open one; a scanner or an agent files an `inbox` dossier with a *proposed* question); `## Items` lines — an agent, a scanner, you | per field: an agent or a scanner only **appends** items on its own; you edit or remove any line, the question, the notes, the veto; `open` and `closed` are yours (`inbox` is theirs) |
-| `Wiki/` | an agent only, through `research-update` (phase 3c) | the agent, the same operation — **never by hand** (`edited-outside-update`); your note goes to the collection's `## Notes (owner)` or to `Synthesis/`; you delete a page by naming it in `suppressed_pages` of an open supporting dossier, or `wiki: off` — it becomes `suppressed` and leaves search |
+| `Wiki/` | an agent only, through `mnemon research update` (`$MNEMON_HOME/docs/research.md`: built in the extractor's fence from the dossiers, the charter and the items' `source.md`; validated; one atomic write with the prints) | the agent, the same operation — **never by hand** (`edited-outside-update`, and the next update stops); your note goes to the collection's `## Notes (owner)` or to `Synthesis/`; you delete a page by naming it in `suppressed_pages` of an open supporting dossier, or `wiki: off` — it becomes `suppressed`, leaves search, and `mnemon research delete <page>` removes it |
 | `Synthesis/` | you (the thinking); an agent only `seed`/`draft` notes marked `drafted_by: <agent>`, on explicit request | you ratify (`status: stable`) |
 | `_inputs/` | sessions and producers (incoming material) | sessions (draining) |
 | `_meta/` | you (`charter.md`); an agent on request (`reader-context.md`) | per the freshness protocol |
@@ -76,6 +76,10 @@ Thresholds: `doctor_*` keys in the instance configuration; the human radius in t
 - after an interactive session touched `Sources/`, `Collections/`, `Wiki/` or `Synthesis/`: `mnemon reindex`
 - search: `mnemon search --query <q>` (Sources); `--include-collections`, `--include-synthesis` widen it; `--include-wiki` adds a separate block of usable pages (`--include-orphans`, `--wiki-limit`)
 - validate the dossiers and the pages: `python3 $MNEMON_HOME/bin/lib_research.py --vault <path>` (exit 1 names every malformed line and every failing page); the doctor's `research/` lines: `mnemon doctor --data`, `--list research/<check>`
+- build or rebuild a page: `mnemon research update --page <name> --kind concept|comparison|contradiction|open-question --collection <dossier>… [--reason <why>]` (an unchanged package is a no-op; a hand-edited page stops it); what the pages need: `mnemon research update --propose` (a stale page → a rebind proposal; `mnemon research apply <id> --by <who>` applies one on your word); a vetoed or orphan page: `mnemon research delete <page>`
+- answer from the evidence: `mnemon research ask --task-id <id> --question <q>` serves the usable pages' evidential bodies (never `## Atlas reading`); `--record --page <name> --outcome used|not-used|no-page` records the use
+- a draft of your thought, on your request and inside the radius: `mnemon research synthesize --name <note> --status seed|draft < body.md`; the agent-drafted notes mapped for your verdict: `mnemon research triage --propose`
+- the journal of these operations: `research_log_path` in the instance config (inside the vault, never under `Wiki/`), else the vault's state directory
 - duplicates under canonicalization: `mnemon audit --canonical` (report only)
 - the archive: `mnemon audit`
 - health: `mnemon doctor`, the data: `mnemon doctor --data`, the one line: `mnemon status --brief`

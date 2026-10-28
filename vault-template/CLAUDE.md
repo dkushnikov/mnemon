@@ -1,5 +1,5 @@
 ---
-mnemon_guide: 4
+mnemon_guide: 5
 ---
 
 # Mnemon Knowledge Vault
@@ -39,7 +39,7 @@ The engine is the only writer of `Sources/`, `index.md`, the archive and its led
 | `extract.md` frontmatter — **only** `status`, `index_note`, `title`, `tags`, `domains`, `people`, `visibility`, `rating` | owner, agent | the curation subset; the body and every other field are the engine's |
 | `Collections/` — the question, `## Notes (owner)`, `wiki`, `suppressed_pages`, `status: open|closed` | owner (an agent when asked to open a dossier) | a scanner or an agent files `status: inbox` with a *proposed* question; the owner confirms it when opening |
 | `Collections/` — `## Items` lines, `## Why`, `## Open questions` | agent, scanner, owner | an agent or a scanner only **appends** items on its own; editing or removing a line is the owner's (or an explicitly approved edit of one line, applied without a duplicate) |
-| `Wiki/` | agent, through `research-update` only (the operation lands in phase 3c; until then no page is written) | never by hand — the doctor reports a hand edit as `edited-outside-update`; the owner's note goes to the collection's `## Notes (owner)` or to `Synthesis/`; the owner deletes a page by naming it in `suppressed_pages` of an open supporting dossier (or `wiki: off` for all of them) — the page is then `suppressed`, out of search, and the agent removes it |
+| `Wiki/` | agent, through `mnemon research update` only (`$MNEMON_HOME/docs/research.md`: the page is built in the extractor's fence from the dossiers, the charter and the items' `source.md`, validated, and published as one file with its prints) | never by hand — the doctor reports a hand edit as `edited-outside-update` and the next update stops on it; the owner's note goes to the collection's `## Notes (owner)` or to `Synthesis/`; a superseded item is rebound by the owner (or `mnemon research apply <id> --by <who>` on the owner's word, from `research update --propose`); the owner deletes a page by naming it in `suppressed_pages` of an open supporting dossier (or `wiki: off` for all of them) — the page is then `suppressed`, out of search, and `mnemon research delete <page>` removes it |
 | `Synthesis/` | owner; agent on explicit request | agent notes are `seed`/`draft` with `drafted_by: <agent>`; `stable` = owner |
 | `_inputs/` | sessions, producers | incoming material; declared queues; drained by sessions |
 | `_meta/charter.md` | owner | contexts, value scale, radius |
@@ -161,7 +161,9 @@ A note links the revisions it builds on as `[[Sources/<revision>/extract]]` — 
 - Don't write `Sources/` folders by hand — `mnemon add` publishes them with their receipts
 - Don't create a Synthesis note without an explicit request; when asked, write a `seed` or a `draft` with `drafted_by`, never `stable`; a dossier of sources without a thought is a collection, not a seed
 - Don't edit or remove another author's `## Items` line on your own — append; a rebind or an `excluded` role is the owner's call, applied once, without a duplicate line
-- Don't edit a `Wiki/` page by hand — the doctor reports it (`edited-outside-update`) and the next `research-update` stops on it; notes go to the collection's `## Notes (owner)` or to `Synthesis/`
+- Don't edit a `Wiki/` page by hand — the doctor reports it (`edited-outside-update`) and the next `mnemon research update` stops on it; notes go to the collection's `## Notes (owner)` or to `Synthesis/`
+- Don't answer a research question from a page's `## Atlas reading` — `mnemon research ask --task-id <id> --question <q>` serves the evidential bodies only; answer with their locators and record the use (`--record`)
+- Don't draft a Synthesis note while the radius is crossed — `mnemon research synthesize` refuses and names the oldest drafts to ratify or prune
 - Don't edit `extract.md` outside the curation subset (`status`, `index_note`, `title`, `tags`, `domains`, `people`, `visibility`, `rating`)
 - Don't edit `index.md` — run `mnemon reindex`
 - Don't write outside the doors above; don't touch the archive or the ledger
