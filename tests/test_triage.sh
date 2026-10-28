@@ -74,6 +74,13 @@ assert_eq "$(col "$bma" 2) $(col "$bma" 6)" "dismissed $(date +%Y-%m-%d) — sta
 run_m triage dismiss "$bma"
 assert_eq "$rc $out" "0 Sources/$bma/ is already dismissed" "dismissing twice is idempotent"
 assert_eq "$(shasum -a 256 "$VAULT/Sources/$bma/source.md" | cut -c1-64)" "$src_before" "source.md is never touched"
+# the gateway tells a feeder the judgement: a bookmark of a dismissed resource is a duplicate that
+# says dismissed (scanners never resurrect it); a full add promotes and the line is gone
+run_gw --url "https://example.com/a?utm_source=again" --tier bookmark --capture-id bm-a-again
+assert_eq "$rc $(result status) $(result tier) $(result judgement)" "0 skipped-duplicate bookmark dismissed" "a bookmark of a dismissed resource: skipped-duplicate · tier bookmark · judgement dismissed"
+assert_eq "$(nfolders)" "6" "...nothing written"
+run_gw --url "https://example.com/b" --tier bookmark --capture-id bm-b-again
+assert_eq "$rc $(result status) $(result judgement)" "0 skipped-duplicate " "a duplicate of a card in the queue carries no judgement line"
 # the readers
 run_m search --query "card" --include-source --tier bookmark
 assert_eq "$rc" "0" "search --tier bookmark"
@@ -114,6 +121,8 @@ assert_eq "$(grep -v '^status:\|^dismissed:\|^dismissed_why:\|^dismissed_from:' 
 run_m search --query "card" --include-source --tier bookmark
 assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); r=[x for x in d["results"] if x["path"]=="Sources/2026-09-02_cafebabe/"][0]; print(r["result_type"], r["status"])')" "extract dismissed" "search: the extract result says dismissed"
 assert_eq "$(fm "$ex" dismissed_from)" "\"extracted\"" "dismissed_from records the prior word"
+run_gw --url "https://example.com/legacy-ex" --tier bookmark --capture-id bm-ex-again
+assert_eq "$rc $(result status) $(result judgement)" "0 skipped-duplicate dismissed" "a dismissed extract's judgement is told to a feeder too (from extract.md)"
 run_m triage restore 2026-09-02_cafebabe
 assert_eq "$(fm "$ex" status) [$(fm "$ex" dismissed)]" "extracted []" "restore: status extracted, the dismissed lines gone"
 assert_eq "$(shasum -a 256 "$ex" | cut -c1-64)" "$ex_sha" "...the file is byte-equal to the original (reviewer A P2-8)"
@@ -259,6 +268,7 @@ run_m triage dismiss "$bma" --why "not now"
 stub_reset
 run_m triage promote "$bma" -- --intent "second thoughts"
 assert_eq "$rc" "0" "promote of a dismissed card exits 0 (flags after -- reach mnemon add)"
+assert_not_contains "$out" "RESULT:judgement=" "...the promoted revision carries no judgement (it lapsed with the card)"
 newa="$(printf '%s\n' "$out" | grep '^RESULT:revision=' | cut -d= -f2)"
 assert_eq "$(fm "$VAULT/Sources/$newa/source.md" supersedes)" "\"$bma\"" "...superseding the dismissed card"
 run_m triage list --status dismissed

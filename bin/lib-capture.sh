@@ -909,6 +909,20 @@ cap_resource_identity() {
 # says; the resource kind may differ (--canonical-url makes a file or a text a url-kind resource).
 cap_input_kind() { cap_resource_kind "$ORIGIN"; }
 
+# The stored judgement about a revision (vault store §4, one rule with lib_vault.judgement):
+# `status: dismissed` of its extract.md, else — without an extract — of its triage.md. Prints the
+# word or nothing.
+cap_judgement() {   # <revision>
+  local d="$VAULT_PATH/Sources/$1" s=""
+  if [[ -f "$d/extract.md" ]]; then
+    s="$(_mnemon_yaml_literal status "$d/extract.md" | tr '[:upper:]' '[:lower:]')"
+  elif [[ -f "$d/triage.md" ]]; then
+    s="$(_mnemon_yaml_literal status "$d/triage.md" | tr '[:upper:]' '[:lower:]')"
+  fi
+  [[ "$s" == "dismissed" ]] && printf 'dismissed'
+  return 0
+}
+
 # An unfinished card: a bookmark revision without extract.md whose owner receipt (by capture_id)
 # exists in this ledger and has not reached `bookmarked` (a crash between the publication and the
 # final receipt). Finished like an incomplete full revision, never answered as a duplicate.
@@ -2433,8 +2447,12 @@ cap_result() {
   [[ -n "$compl" ]] && printf 'RESULT:completeness=%s\n' "$(cap_oneline "$compl")"
   [[ -n "$acq" ]] && printf 'RESULT:acquisition=%s\n' "$(cap_oneline "$acq")"
   # the tier of the revision the result names, printed when it is a bookmark (B1) — for a fresh
-  # card, a replay and a skipped-duplicate of one alike
-  [[ -n "$rev" && -f "$VAULT_PATH/Sources/$rev/source.md" && "$(cap_effective_tier "$rev")" == "bookmark" ]] && printf 'RESULT:tier=bookmark\n'
+  # card, a replay and a skipped-duplicate of one alike; and the stored judgement about it (B4):
+  # a feeder told `skipped-duplicate` can tell "already in the queue" from "dismissed"
+  if [[ -n "$rev" && -f "$VAULT_PATH/Sources/$rev/source.md" ]]; then
+    [[ "$(cap_effective_tier "$rev")" == "bookmark" ]] && printf 'RESULT:tier=bookmark\n'
+    [[ "$(cap_judgement "$rev")" == "dismissed" ]] && printf 'RESULT:judgement=dismissed\n'
+  fi
   # the archive sidecar's outcome when its transaction ran (A6)
   case "${REPORT_STATUS:-}" in ok) printf 'RESULT:report=ok\n' ;; failed|pending|conflict) printf 'RESULT:report=failed\n' ;; esac
   # only after an extraction (or a bookmark) that ran the reindex hook (§12 A8); a replay from the files prints none
