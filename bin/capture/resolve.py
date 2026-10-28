@@ -26,6 +26,15 @@ TRACKING_KEYS = (
 # The YouTube rule keeps `v` alone: every other parameter — the navigation context `list`, `index`, `t`,
 # `si`, `feature`, `pp` among them — is dropped, because the video is the resource (§3.1 step 6).
 
+# Host-scoped share parameters (§3.1 step 6, 2026-10-28, GH #12): a key that is a page key elsewhere
+# (`?s=alpha` and `?s=beta` are two pages on an unknown host) is a share tag on these hosts and is dropped
+# there only — X's `s` (the share source) and `t` (the share token), Substack's `r` (the sharer's referral).
+HOST_SHARE_KEYS = {
+    "x": ("s", "t"),
+    "substack": ("r",),
+}
+_X_HOSTS = frozenset(("x.com", "www.x.com", "mobile.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"))
+
 _UNRESERVED = frozenset(string.ascii_letters + string.digits + "-._~")
 _PCT = re.compile(r"%([0-9A-Fa-f]{2})")
 _BAD_PCT = re.compile(r"%(?![0-9A-Fa-f]{2})")
@@ -73,6 +82,28 @@ def is_tracking_key(key: str) -> bool:
         elif key == pattern:
             return True
     return False
+
+
+def _host_share_rule(host: str) -> Optional[str]:
+    """The name of the host-scoped share rule for this host (`x` · `substack`), else None."""
+    if host in _X_HOSTS:
+        return "x"
+    if host.endswith(".substack.com") and host != "www.substack.com":
+        return "substack"
+    return None
+
+
+def _drop_share_keys(kept: List[str], rule: str):
+    """Split the kept query parts into (kept, dropped keys) under a host share rule."""
+    keys = HOST_SHARE_KEYS[rule]
+    still, dropped = [], []
+    for part in kept:
+        key = part.split("=", 1)[0]
+        if unquote(key) in keys:
+            dropped.append(key)
+        else:
+            still.append(part)
+    return still, dropped
 
 
 def _normalize_pct(s: str) -> str:
@@ -147,6 +178,12 @@ def canonicalize(url: str, version: int = VERSION) -> Canonical:
             dropped_yt = [p.split("=", 1)[0] for p in kept if unquote(p.split("=", 1)[0]) != "v"]
             return Canonical("https://www.youtube.com/watch?v=" + video, 1, "youtube", dropped + dropped_yt,
                              dropped_fragment)
+    share_rule = _host_share_rule(host)
+    if share_rule:
+        kept, dropped_share = _drop_share_keys(kept, share_rule)
+        if dropped_share:
+            dropped = dropped + dropped_share
+            host_rule = share_rule
     result = scheme + "://" + netloc + path
     if kept:
         result += "?" + "&".join(kept)

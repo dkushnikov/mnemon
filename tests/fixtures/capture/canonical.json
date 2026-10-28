@@ -45,6 +45,13 @@
  {"url": "https://example.com:abc/", "error": "invalid-url", "note": "malformed port refused"},
  {"url": "https://example.com/%zz", "error": "invalid-url", "note": "malformed percent-escape refused"},
  {"url": "mailto:someone@example.com", "error": "invalid-url", "note": "mailto refused"},
+ {"url": "https://x.com/someone/status/1234567890123456789?s=20", "canonical_url": "https://x.com/someone/status/1234567890123456789", "kind": "page", "requested_version": null, "note": "X: the share source `s` is dropped on x.com (GH #12)"},
+ {"url": "https://twitter.com/someone/status/1234567890123456789?s=46&t=AbCdEf", "canonical_url": "https://twitter.com/someone/status/1234567890123456789", "kind": "page", "requested_version": null, "note": "twitter.com: share source and share token dropped; the host is not rewritten"},
+ {"url": "https://x.com/search?q=mnemon&s=20&f=live", "canonical_url": "https://x.com/search?q=mnemon&f=live", "kind": "page", "requested_version": null, "note": "X: other parameters kept in order"},
+ {"url": "https://somepub.substack.com/p/some-post?r=abc12&utm_medium=ios", "canonical_url": "https://somepub.substack.com/p/some-post", "kind": "page", "requested_version": null, "note": "Substack: the sharer's referral `r` is dropped with the utm (GH #12)"},
+ {"url": "https://lenny.substack.com/archive?sort=new&r=abc", "canonical_url": "https://lenny.substack.com/archive?sort=new", "kind": "page", "requested_version": null, "note": "Substack: `r` dropped on any path of a *.substack.com host, other keys kept"},
+ {"url": "https://example.com/post?r=abc12", "canonical_url": "https://example.com/post?r=abc12", "kind": "page", "requested_version": null, "note": "`r` is a page key on an unknown host"},
+ {"url": "https://substack.com/home?r=abc12", "canonical_url": "https://substack.com/home?r=abc12", "kind": "page", "requested_version": null, "note": "the apex substack.com is not a publication host: `r` kept"},
  {"url": "example.com/no-scheme", "error": "invalid-url", "note": "a scheme-less string refused"},
  {"url": "", "error": "invalid-url", "note": "empty refused"}
 ]

@@ -415,6 +415,16 @@ cap_dry_run() {
   fi
   if [[ "$kind" == "url" ]]; then
     echo "Fetch: render $( $RENDER && echo force || { $NO_RENDER && echo off || echo auto; } ), external $( { [[ "${EXTERNAL_FETCH:-off}" == auto ]] && ! $NO_EXTERNAL && ! $NO_RENDER; } && echo auto || echo off ), acquire timeout ${ACQUIRE_TIMEOUT:-300}s"
+    # the depth mode the flag set (GH #12): the fold itself is decided after acquisition, like the chunk plan
+    if [[ -n "${SITE_MODE:-}" ]]; then echo "Depth: off (a site capture folds nothing)"
+    elif [[ "${URL_KIND:-page}" == "arxiv" || "$ORIGIN" == "youtube" ]]; then echo "Depth: off ($ORIGIN captures are never folded)"
+    else
+      case "$DEPTH" in
+        auto)  echo "Depth: auto (decided after acquisition: a thin landing is probed and its same-entity targets folded)" ;;
+        force) echo "Depth: force (the landing is probed and folded whatever its size)" ;;
+        off)   echo "Depth: off" ;;
+      esac
+    fi
   fi
   echo "Vault state: $MNEMON_VAULT_STATE_DIR"
   if [[ "$TIER" == "bookmark" ]]; then

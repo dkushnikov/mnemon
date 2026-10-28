@@ -33,6 +33,15 @@ assert_not_contains "$out" "WebFetch" "prompt has no fetch instruction"
 assert_contains "$out" "=== EXTRACTOR ARGV ===" "dry-run prints the extractor argv"
 assert_contains "$out" "--restricted" "...with the fence"
 
+# --- Test 1e: the depth mode is in the plan (GH #12) ---
+assert_contains "$out" "Depth: auto (decided after acquisition" "the dry-run shows the default depth mode next to Fetch:"
+run_gw --url "https://example.com/test" --depth force --dry-run
+assert_contains "$out" "Depth: force" "--depth force is shown"
+run_gw --url "https://example.com/test" --depth off --dry-run
+assert_contains "$out" "Depth: off" "--depth off is shown"
+run_gw --url "https://arxiv.org/abs/2401.12345" --depth force --dry-run
+assert_contains "$out" "Depth: off (" "an arXiv capture says depth is off whatever the flag"
+
 # --- Test 2: Auto-detection of YouTube URLs ---
 run_gw --url "https://youtube.com/watch?v=abc123" --dry-run
 assert_contains "$out" "Origin: youtube" "YouTube URL auto-detected"

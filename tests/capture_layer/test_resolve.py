@@ -66,6 +66,27 @@ class Rules(unittest.TestCase):
         self.assertEqual(c.dropped_params, ["list", "index", "t", "si", "feature", "pp", "foo"])
         self.assertFalse(hasattr(R, "YOUTUBE_NAV_KEYS"))
 
+    def test_host_share_keys(self):
+        """GH #12: `s`/`t` on X and `r` on *.substack.com are share tags, dropped on those hosts only; the
+        rule names itself in host_rule and records the dropped keys; elsewhere the same keys are page keys."""
+        c = R.canonicalize("https://x.com/a/status/1?s=20&t=zz&lang=en")
+        self.assertEqual(c.url, "https://x.com/a/status/1?lang=en")
+        self.assertEqual(c.dropped_params, ["s", "t"])
+        self.assertEqual(c.host_rule, "x")
+        c = R.canonicalize("https://www.twitter.com/a/status/1?utm_source=m&s=20")
+        self.assertEqual((c.url, c.dropped_params), ("https://www.twitter.com/a/status/1", ["utm_source", "s"]))
+        c = R.canonicalize("https://pub.substack.com/p/post?r=abc&utm_medium=ios")
+        self.assertEqual((c.url, c.dropped_params, c.host_rule), ("https://pub.substack.com/p/post", ["utm_medium", "r"], "substack"))
+        c = R.canonicalize("https://x.com/a/status/1")
+        self.assertIsNone(c.host_rule)
+        self.assertEqual(c.dropped_params, [])
+        for url in ("https://example.com/p?s=20&t=zz", "https://example.com/p?r=abc", "https://substack.com/home?r=abc"):
+            c = R.canonicalize(url)
+            self.assertEqual(c.url, url, url)
+            self.assertIsNone(c.host_rule)
+        self.assertEqual(R.HOST_SHARE_KEYS, {"x": ("s", "t"), "substack": ("r",)})
+        self.assertEqual(R.resolve("https://x.com/a/status/1?s=20").kind, "page")
+
     def test_arxiv_resolution(self):
         res = R.resolve("https://arxiv.org/pdf/2401.12345v2")
         self.assertEqual(res.kind, "arxiv")
