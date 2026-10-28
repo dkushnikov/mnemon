@@ -797,10 +797,10 @@ PY
 VL_LOG="$TEST_TMPDIR/vault-lock.log"
 run env VL_LOG="$VL_LOG" "$ENG/bin/mnemon" add --url https://example.com/b --title T
 assert_eq "$rc" "0" "add with bin/vault-lock.py present exits 0"
-assert_eq "$(cat "$VL_LOG")" "--vault $VAULT_A" "add runs python3 bin/vault-lock.py --vault <vault> -- <gateway> source-add …"
+assert_eq "$(cat "$VL_LOG")" "--vault $VAULT_A --locked-result " "add runs python3 bin/vault-lock.py --vault <vault> --locked-result <capture id or empty> -- <gateway> source-add … (GH #30)"
 assert_contains "$out" "gateway-stub: source-add --url https://example.com/b --title T" "...which execs the gateway with the same arguments"
 run env VL_LOG="$VL_LOG" "$ENG/bin/mnemon" --instance beta add --url https://example.com/b2
-assert_eq "$(tail -1 "$VL_LOG")" "--vault $VAULT_B" "add locks the selected instance's vault"
+assert_eq "$(tail -1 "$VL_LOG")" "--vault $VAULT_B --locked-result " "add locks the selected instance's vault"
 run env VL_LOG="$VL_LOG" "$ENG/bin/mnemon" add --url https://example.com/c --dry-run
 assert_eq "$(grep -c . "$VL_LOG")" "2" "add --dry-run bypasses vault-lock.py"
 assert_contains "$out" "gateway-stub: source-add --url https://example.com/c --dry-run" "...and reaches the gateway directly"

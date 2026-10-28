@@ -59,7 +59,7 @@ Commands:
                              (docs/research.md); --propose: proposals only (stale → rebind, …)
   research apply <id> --by <who> | delete <page> | ask --task-id <id> --question <q> | synthesize … | triage --propose
   audit [--cutoff DATE]      Archive consistency audit
-  audit --canonical          Folders whose URLs coincide under canonicalization v1 (read-only)
+  audit --canonical          Folders whose URLs coincide under the current canonicalization (v2; read-only)
   init <name> --vault <path> [--archive <dir>] [--collection <name>]
        [--search-provider grep|qmd] [--reader-context <path> | --reader-context-path <path>]
        [--charter <path>] [--writer-host <host>] [--default] [--force] [--non-interactive]
