@@ -564,9 +564,12 @@ class JsonOutputTests(TempVaultMixin, unittest.TestCase):
         data = self._run("--query", "marker-token-here")
         self.assertEqual(data["provider"], "grep")
         self.assertEqual(data["configured_provider"], "qmd")
+        # GH #9: the note about the unimplemented qmd search is the doctor's (`qmd-search`), printed
+        # once there — never on every search
         human = self._proc("--query", "marker-token-here", "--human")
-        self.assertIn("search_provider is 'qmd'", human.stdout)
-        self.assertIn("not implemented", human.stdout)
+        self.assertNotIn("search_provider is 'qmd'", human.stdout)
+        self.assertNotIn("not implemented", human.stdout)
+        self.assertIn("Found 1 result(s)", human.stdout)
 
     def test_vault_override_reports_no_configured_provider(self):
         data = self._run("--query", "marker-token-here", "--vault", str(self.vault),

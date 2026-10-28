@@ -736,10 +736,8 @@ def _print_human(output: dict) -> None:
         note = f" (fallback: no file matched all tokens; relaxed to '{output['fallback_token']}')"
     else:
         note = ""
-    configured = output.get("configured_provider")
-    if configured not in (None, SEARCH_METHOD):
-        print(f"note: search_provider is '{configured}' in the instance config, but mnemon search "
-              f"scans with {SEARCH_METHOD} — a {configured}-backed search is not implemented.")
+    # the configured provider is in the JSON (`configured_provider`); the one human-facing note about
+    # it is `mnemon doctor`'s `qmd-search` line, not a line on every search (GH #9)
     print(f"Found {output['count']} result(s) for '{output['query']}'{note}:\n")
     for i, r in enumerate(output["results"], 1):
         rating = f"rating {r['rating']}" if r["rating"] is not None else "unrated"

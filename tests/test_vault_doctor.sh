@@ -680,6 +680,40 @@ assert_eq "$rc" "0" "doctor --list thin exits 0"
 assert_eq "$out" "$LIST_THIN" "doctor --list thin prints only that list, equal to the tool's"
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" doctor --data --list data/thin
 assert_eq "$out" "$LIST_THIN" "--data --list data/thin: the same list"
+# GH #15: `--list captures` lists every receipt the pipeline check counts (the dispatcher's own list)
+CAPV="$TEST_TMPDIR/capv"; mkdir -p "$CAPV/Sources/2026-10-20_ok000001"
+printf -- '---\ntype: source\nsource_type: article\norigin: url\nurl: "https://example.com/ok"\ntitle: "Ok"\ncaptured: 2026-10-20\ncapture_id: "c-ok"\n---\nbody\n' > "$CAPV/Sources/2026-10-20_ok000001/source.md"
+printf 'instance: capv\nvault_path: %s\nsearch_provider: grep\n' "$CAPV" > "$TEST_TMPDIR/capv.yaml"
+CAPSTATE="$(python3 - "$CAPV" "$XDG_STATE_HOME" <<'PY'
+import hashlib, os, sys
+vault = os.path.realpath(sys.argv[1]).rstrip("/")
+print(os.path.join(sys.argv[2], "mnemon", "vaults", hashlib.sha256(vault.encode("utf-8")).hexdigest()[:16]))
+PY
+)"
+mkdir -p "$CAPSTATE/captures"
+printf '{"schema":"mnemon-capture-receipt/1","capture_id":"c-wall","state":"failed","revision":null,"error_class":"blocked","retryable":false,"stage":"download","error":"bot-wall: ERROR: [youtube] abc: Sign in to confirm you are not a bot"}\n' > "$CAPSTATE/captures/c-wall.json"
+printf '{"schema":"mnemon-capture-receipt/1","capture_id":"c-login","state":"failed","revision":null,"error_class":"blocked","retryable":false,"error":"login wall: status 401 (no escalation past it)"}\n' > "$CAPSTATE/captures/c-login.json"
+printf '{"schema":"mnemon-capture-receipt/1","capture_id":"c-ext","state":"extract-failed","revision":"2026-10-20_ok000001","error_class":"timeout","retryable":true,"error":"claude timed out"}\n' > "$CAPSTATE/captures/c-ext.json"
+printf '{"schema":"mnemon-capture-receipt/1","capture_id":"c-int","state":"integrity-error","revision":"2026-10-20_ok000001","error_class":"evidence-mismatch","retryable":false,"error":"source.md body differs"}\n' > "$CAPSTATE/captures/c-int.json"
+printf '{"schema":"mnemon-capture-receipt/1","capture_id":"c-gone","state":"extracted","revision":"2026-10-19_gone0000","error_class":null,"retryable":null,"error":null}\n' > "$CAPSTATE/captures/c-gone.json"
+printf '{"schema":"mnemon-capture-receipt/1","capture_id":"c-ok","state":"extracted","revision":"2026-10-20_ok000001","error_class":null,"retryable":null,"error":null}\n' > "$CAPSTATE/captures/c-ok.json"
+printf 'not json\n' > "$CAPSTATE/captures/c-bad.json"
+run "$MNEMON" --config "$TEST_TMPDIR/capv.yaml" doctor
+assert_contains "$out" "warn captures — 3 failed/extract-failed receipt(s) — finish with: mnemon add --resume c-ext; all of them: mnemon doctor --list captures" "the captures line names one id and the door to all of them"
+assert_contains "$out" "1 integrity-error receipt(s)" "...and counts the integrity error"
+assert_contains "$out" "list: mnemon doctor --list captures" "...naming the list door for the other kinds too"
+run "$MNEMON" --config "$TEST_TMPDIR/capv.yaml" doctor --list captures
+assert_eq "$rc" "0" "doctor --list captures exits 0"
+assert_eq "$(printf '%s\n' "$out" | grep -c .)" "6" "...one line per counted receipt: 3 failed/extract-failed, 1 integrity, 1 missing files, 1 unreadable (the consistent one is not listed)"
+assert_eq "$(printf '%s\n' "$out" | cut -f1 | tr '\n' ' ')" "c-ext c-login c-wall c-int c-gone c-bad " "...failed first (by id), then integrity, missing files, unreadable"
+assert_eq "$(printf '%s\n' "$out" | awk -F'\t' '$1 == "c-wall" { print $2 "|" $3 "|" $4 }')" "failed/blocked|-|bot-wall: ERROR: [youtube] abc: Sign in to confirm you are not a bot [stage download] [not retryable]" "...a failed receipt: state/class, no revision, the error with its stage and retryable"
+assert_eq "$(printf '%s\n' "$out" | awk -F'\t' '$1 == "c-ext" { print $2 "|" $3 }')" "extract-failed/timeout|2026-10-20_ok000001" "...an extract-failed receipt names its revision"
+assert_eq "$(printf '%s\n' "$out" | awk -F'\t' '$1 == "c-gone" { print $2 "|" $3 }')" "extracted/missing-files|2026-10-19_gone0000" "...a receipt whose files are gone"
+assert_eq "$(printf '%s\n' "$out" | awk -F'\t' '$1 == "c-bad" { print $2 }')" "unreadable" "...an unreadable file"
+run "$MNEMON" --config "$TEST_TMPDIR/capv.yaml" doctor --list pipeline/captures
+assert_eq "$(printf '%s\n' "$out" | grep -c .)" "6" "pipeline/captures is the same list"
+run "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" doctor --list captures
+assert_eq "$rc [$out]" "0 []" "an instance without failed receipts: an empty list, exit 0"
 run env MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_TODAY="$TODAY" "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" doctor --data
 fails="$(printf '%s\n' "$out" | grep -c '^fail ' || true)"; depfails="$(printf '%s\n' "$out" | grep -c '^fail \(deps\|fence\|writer\)' || true)"
 assert_eq "$fails" "$depfails" "the clean vault adds no fail line (only this host's deps/fence may)"

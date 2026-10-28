@@ -440,6 +440,12 @@ run "$MNEMON" init qinst --vault "$TEST_TMPDIR/vault-q" --collection kb-q --sear
 QCACHE="$TEST_TMPDIR/cache"
 run env XDG_CACHE_HOME="$QCACHE" PATH="$QSTUB:$PATH" "$MNEMON" --instance qinst doctor
 assert_contains "$out" "ok qmd — $QSTUB/qmd" "doctor: ok qmd when search_provider is qmd and qmd is on PATH"
+# GH #9: the one note that mnemon search scans with grep is the doctor's qmd-search line, not a line on every search
+assert_contains "$out" "warn qmd-search — search_provider is qmd, but mnemon search scans with grep" "doctor: the qmd-search note, once"
+assert_eq "$(printf '%s\n' "$out" | grep -c 'qmd-search')" "1" "...exactly one qmd-search line"
+qout="$out"; run "$MNEMON" doctor
+assert_not_contains "$out" "qmd-search" "...and none for a grep instance"
+out="$qout"
 assert_contains "$out" "warn qmd-collection — not probed (qmd never ran here" "doctor: no qmd cache dir → the collection is not probed"
 assert_contains "$out" "no $QCACHE/qmd" "...naming the missing cache dir"
 [[ -e "$QMD_LOG" ]] && fail "doctor runs no qmd command without its cache dir" "$(cat "$QMD_LOG")" || pass "doctor runs no qmd command without its cache dir"
@@ -677,7 +683,7 @@ receipt c-card bookmarked '"2026-10-15_aaaaaaaa"'      # a card whose source.md 
 receipt c-card-gone bookmarked '"2026-10-15_yyyyyyyy"' # a card whose folder is gone: missing (phase 3-capture)
 printf 'not a receipt\n' > "$VSTATE_A/captures/junk.json"
 run "$MNEMON" doctor
-assert_contains "$out" "warn captures — 2 failed/extract-failed receipt(s) — finish with: mnemon add --resume c-failed; 3 receipt(s) point at missing files; 1 unreadable receipt(s)" "doctor: captures warns about failed receipts (with the --resume hint), missing files (a bookmarked receipt's gone card among them) and unreadable receipts"
+assert_contains "$out" "warn captures — 2 failed/extract-failed receipt(s) — finish with: mnemon add --resume c-failed; all of them: mnemon doctor --list captures; 3 receipt(s) point at missing files; 1 unreadable receipt(s); list: mnemon doctor --list captures" "doctor: captures warns about failed receipts (with the --resume hint), missing files (a bookmarked receipt's gone card among them) and unreadable receipts"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^fail captures' || true)" "0" "...as a warning, never a failure"
 receipt c-integ integrity-error '"2026-10-15_aaaaaaaa"'
 run "$MNEMON" doctor

@@ -74,13 +74,15 @@ Commands:
                              the vault lock; one result record per envelope (docs/inbox.md)
   fence-probe                Probe the extractor fence of the installed Claude Code and
                              record a pass for its version (needed before extraction)
-  doctor [--instance <name>] [--json] [--data [--list <check>]]
+  doctor [--instance <name>] [--json] [--data [--list <check>]] [--list captures]
                              Health checks: ok|warn|fail <check> — <detail>; --data adds the
                              19 vault store checks (store/… data/… human/…; docs/specs/
                              2026-10-16-vault-store.md) and the research document (research/…:
                              collections, wiki states; docs/specs/2026-10-27-research-interface.md),
                              --list <check> prints every item of one of them (<id> <class or
-                             reason> <rating> <words>, tab-separated; research/<name> for those)
+                             reason> <rating> <words>, tab-separated; research/<name> for those);
+                             --list captures prints every receipt the `captures` check counts
+                             (<capture_id> <state/error_class> <revision or -> <error>)
   config get <key> | path | list | keys | dump
                              Resolved configuration (keys: the scalar keys and defaults)
   release [--dry-run] [--now] [--drain-timeout <s>] [--rollback <ref>]
@@ -751,7 +753,8 @@ for sm in sorted(glob.glob(os.path.join(glob.escape(vault), "Sources", "*", "sou
         malformed.append(folder)
 parts = []
 if failed:
-    parts.append("%d failed/extract-failed receipt(s) — finish with: mnemon add --resume %s" % (failed, first_failed))
+    parts.append("%d failed/extract-failed receipt(s) — finish with: mnemon add --resume %s%s" % (
+        failed, first_failed, "; all of them: mnemon doctor --list captures" if failed > 1 else ""))
 if integrity:
     parts.append("%d integrity-error receipt(s) — a published source.md is missing or was edited (operator: restore it, then replay)" % integrity)
 if missing:
@@ -762,6 +765,8 @@ if malformed:
     parts.append("%d malformed-frontmatter folder(s) — source.md header without a closing --- within 256 KB, unreadable to the lookup: %s"
                  % (len(malformed), ", ".join(malformed[:5]) + (", …" if len(malformed) > 5 else "")))
 if parts:
+    if integrity or missing or unreadable:
+        parts.append("list: mnemon doctor --list captures")
     print("warn\t" + ("none (no %s yet); " % cdir if not have_ledger else "") + "; ".join(parts))
 elif not have_ledger:
     print("ok\tnone (no %s yet)" % cdir)
@@ -773,6 +778,51 @@ PY
   status="${out%%$tab*}"
   detail="${out#*$tab}"
   _check "$status" captures "$detail"
+}
+
+# `mnemon doctor --list captures` (GH #15): every receipt the `captures` check counts, one per line,
+# tab-separated — <capture_id> <state/error_class> <revision or -> <error or reason> — failed and
+# extract-failed receipts (the --resume candidates) first, then integrity errors, receipts whose
+# revision files are missing, and unreadable files. Read-only; exit 0 (an empty list is a list).
+_doctor_captures_list() {
+  local cdir
+  cdir="$(_vault_state_dir)/captures"
+  python3 - "$cdir" "$VAULT_PATH" <<'PY'
+import glob, json, os, sys
+cdir, vault = sys.argv[1], sys.argv[2]
+rows = {"failed": [], "integrity": [], "missing": [], "unreadable": []}
+def one(s):
+    return " ".join(str(s).split()) if s is not None else ""
+for path in (sorted(glob.glob(os.path.join(glob.escape(cdir), "*.json"))) if os.path.isdir(cdir) else []):
+    cid = os.path.basename(path)[:-5]
+    try:
+        with open(path, encoding="utf-8") as fh:
+            rec = json.load(fh)
+    except Exception as exc:
+        rows["unreadable"].append((cid, "unreadable", "-", "not a readable receipt: %s" % one(exc)))
+        continue
+    if not isinstance(rec, dict) or rec.get("schema") != "mnemon-capture-receipt/1":
+        rows["unreadable"].append((cid, "unreadable", "-", "not a mnemon-capture-receipt/1 document"))
+        continue
+    cid = rec.get("capture_id") or cid
+    state = rec.get("state") or "?"
+    rev = rec.get("revision") or "-"
+    cls = rec.get("error_class") or "-"
+    err = one(rec.get("error")) or "-"
+    retry = rec.get("retryable")
+    if state in ("failed", "extract-failed"):
+        stage = rec.get("stage")
+        detail = err + ((" [stage %s]" % stage) if stage else "") + (" [retryable]" if retry is True else " [not retryable]" if retry is False else "")
+        rows["failed"].append((cid, "%s/%s" % (state, cls), rev, detail))
+    elif state == "integrity-error":
+        rows["integrity"].append((cid, "%s/%s" % (state, cls), rev, err))
+    elif state in ("source-published", "extracted", "bookmarked"):
+        if not isinstance(rev, str) or rev == "-" or not os.path.isfile(os.path.join(vault, "Sources", rev, "source.md")):
+            rows["missing"].append((cid, "%s/missing-files" % state, rev, "the receipt names a revision whose source.md is not in the vault"))
+for key in ("failed", "integrity", "missing", "unreadable"):
+    for cid, kind, rev, detail in rows[key]:
+        print("%s\t%s\t%s\t%s" % (cid, kind, rev, detail))
+PY
 }
 
 # ingest — per known inbox: results still pending — a retryable failed, exhausted, incomplete
@@ -912,14 +962,16 @@ cmd_doctor() {
       --instance) [[ $# -lt 2 ]] && usage_error "doctor: --instance requires a value"; _select_instance "$2"; _apply_selectors; shift 2 ;;
       --json)     DOCTOR_JSON=true; shift ;;
       --data)     with_data=true; shift ;;
-      --list)     [[ $# -lt 2 ]] && usage_error "doctor: --list requires a check name (e.g. thin or data/thin)"; list_check="$2"; with_data=true; shift 2 ;;
+      --list)     [[ $# -lt 2 ]] && usage_error "doctor: --list requires a check name (e.g. thin, data/thin or captures)"; list_check="$2"; with_data=true; shift 2 ;;
       -h|--help)  usage; exit 0 ;;
       *)          usage_error "doctor: unknown option $1" ;;
     esac
   done
-  # --list prints only that list: every item of one data check, tab-separated (read-only)
+  # --list prints only that list: every item of one data check, tab-separated (read-only); the
+  # pipeline check `captures` is the dispatcher's own, so its list is answered here (GH #15)
   if [[ -n "$list_check" ]]; then
     _resolve_or_die
+    case "$list_check" in captures|pipeline/captures) _doctor_captures_list; exit $? ;; esac
     exec python3 "$BIN_DIR/vault-doctor.py" --list "$list_check"
   fi
 
@@ -1034,8 +1086,11 @@ cmd_doctor() {
   _doctor_egress
   _doctor_canonical
 
-  # qmd — required only when search_provider is qmd
+  # qmd — required only when search_provider is qmd. The one place that says what the setting does
+  # today (GH #9): `mnemon search` scans with grep whatever the provider — the note used to be
+  # printed on every search; it is a doctor line now
   if $have_config && [[ "$SEARCH_PROVIDER" == qmd ]]; then
+    _check warn qmd-search "search_provider is qmd, but mnemon search scans with grep (no qmd-backed search yet: the JSON reports provider=grep, configured_provider=qmd); the setting drives the post-capture qmd refresh and the qmd-collection check"
     if ! command -v qmd >/dev/null 2>&1; then
       _check fail qmd "search_provider is qmd but qmd is not installed"
     else
