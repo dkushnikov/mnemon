@@ -55,6 +55,10 @@ Commands:
                              (extract.md status, or triage.md without one), promote captures the
                              resource in full (the new revision supersedes the card)
   triage <input> [...]       Content-aware URL triage of a URL list against the vault
+  research update --page <name> --kind <kind> --collection <dossier>… [--reason <why>] [--dry-run] [--json]
+                             Build or rebuild a Wiki/ page from its dossiers in the extractor fence
+                             (docs/research.md); --propose: proposals only (stale → rebind, …)
+  research apply <id> --by <who> | delete <page> | ask --task-id <id> --question <q> | synthesize … | triage --propose
   audit [--cutoff DATE]      Archive consistency audit
   audit --canonical          Folders whose URLs coincide under canonicalization v1 (read-only)
   init <name> --vault <path> [--archive <dir>] [--collection <name>]
@@ -1158,7 +1162,7 @@ cmd_doctor() {
 # config
 # ---------------------------------------------------------------------------
 
-CONFIG_EXPORTS="MNEMON_ROOT MNEMON_CONFIG MNEMON_CONFIG_FILE MNEMON_CONFIG_SOURCE MNEMON_INSTANCE MNEMON_STATE_DIR MNEMON_VAULT_STATE_DIR VAULT_PATH READER_CONTEXT_PATH CHARTER_PATH SEARCH_PROVIDER QMD_COLLECTION DEFAULT_MODEL DEFAULT_LANGUAGE WHISPER_MODEL AUTO_DETECT_ORIGIN ARCHIVE_DIR WRITER_HOST EXTRACT_TIMEOUT EXTRACT_INLINE_MAX_BYTES EXTRACT_MAX_USD EXTERNAL_FETCH EXTERNAL_FETCHERS FETCH_USER_AGENT FETCH_TIMEOUT FETCH_CONNECT_TIMEOUT FETCH_READ_TIMEOUT FETCH_MAX_BYTES RENDER_TIMEOUT RENDER_MAX_BYTES ACQUIRE_TIMEOUT CONVERT_TIMEOUT TRANSCRIBE_TIMEOUT SITE_MAX_PAGES SITE_TIMEOUT THIN_WORDS EXTRACT_MAX_PARTS DOCTOR_THIN_WORDS DOCTOR_STUB_WORDS DOCTOR_ARXIV_WORDS DOCTOR_RATING_HI_SHARE DOCTOR_WIKI_PAGES_PER_COLLECTION DOCTOR_WIKI_WORDS"
+CONFIG_EXPORTS="MNEMON_ROOT MNEMON_CONFIG MNEMON_CONFIG_FILE MNEMON_CONFIG_SOURCE MNEMON_INSTANCE MNEMON_STATE_DIR MNEMON_VAULT_STATE_DIR VAULT_PATH READER_CONTEXT_PATH CHARTER_PATH SEARCH_PROVIDER QMD_COLLECTION DEFAULT_MODEL DEFAULT_LANGUAGE WHISPER_MODEL AUTO_DETECT_ORIGIN ARCHIVE_DIR WRITER_HOST EXTRACT_TIMEOUT EXTRACT_INLINE_MAX_BYTES EXTRACT_MAX_USD EXTERNAL_FETCH EXTERNAL_FETCHERS FETCH_USER_AGENT FETCH_TIMEOUT FETCH_CONNECT_TIMEOUT FETCH_READ_TIMEOUT FETCH_MAX_BYTES RENDER_TIMEOUT RENDER_MAX_BYTES ACQUIRE_TIMEOUT CONVERT_TIMEOUT TRANSCRIBE_TIMEOUT SITE_MAX_PAGES SITE_TIMEOUT THIN_WORDS EXTRACT_MAX_PARTS DOCTOR_THIN_WORDS DOCTOR_STUB_WORDS DOCTOR_ARXIV_WORDS DOCTOR_RATING_HI_SHARE DOCTOR_WIKI_PAGES_PER_COLLECTION DOCTOR_WIKI_WORDS RESEARCH_LOG_PATH RESEARCH_PACKAGE_MAX_BYTES RESEARCH_TIMEOUT RESEARCH_MAX_USD RESEARCH_RECUSAL_TAGS"
 
 cmd_config_list() {
   local dir inst_dir def f name vault marker count=0
@@ -1688,6 +1692,28 @@ case "$cmd" in
               promote)         shift; exec python3 "$BIN_DIR/mnemon-triage.py" --vault "$VAULT_PATH" --mnemon "$0" promote "$@" ;;
             esac
             exec python3 "$BIN_DIR/triage-urls.py" --vault "$VAULT_PATH" "$@" ;;
+  research) _resolve_or_die
+            # the research operations (docs/research.md, research/1): update · apply · delete · synthesize
+            # write the vault — the single-writer rule, then bin/vault-lock.py; `update --propose`,
+            # `update --dry-run`, ask and triage are read-only (the journal is outside the pages)
+            case "${1:-}" in
+              update|apply|delete|synthesize)
+                _rv="$1"; shift
+                if [[ "$_rv" == update ]] && { _has_flag --propose "$@" || _has_flag --dry-run "$@"; }; then
+                  exec python3 "$BIN_DIR/mnemon-research.py" --vault "$VAULT_PATH" update "$@"
+                fi
+                if [[ -n "${WRITER_HOST:-}" && "$WRITER_HOST" != "$(_host)" ]]; then
+                  printf 'mnemon research %s: this host (%s) must not write vault %s (writer_host %s)\n' "$_rv" "$(_host)" "$VAULT_PATH" "$WRITER_HOST" >&2
+                  exit 2
+                fi
+                exec python3 "$BIN_DIR/vault-lock.py" --vault "$VAULT_PATH" -- python3 "$BIN_DIR/mnemon-research.py" --vault "$VAULT_PATH" "$_rv" "$@" ;;
+              ask|triage)
+                _rv="$1"; shift
+                exec python3 "$BIN_DIR/mnemon-research.py" --vault "$VAULT_PATH" "$_rv" "$@" ;;
+              ""|-h|--help)
+                exec python3 "$BIN_DIR/mnemon-research.py" --help ;;
+              *) usage_error "research: expected update | apply <id> | delete <page> | ask | synthesize | triage --propose (docs/research.md)" ;;
+            esac ;;
   audit)    _resolve_or_die
             # --canonical (capture layer §3.10, D5): groups Sources/*/source.md by the v1 canonical form of
             # their URLs and prints the groups of ≥ 2; never writes, never merges
