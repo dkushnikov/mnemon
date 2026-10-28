@@ -1,6 +1,6 @@
 ---
 name: source-search
-description: Search the Mnemon knowledge library for sources, extracts, synthesis notes and collections (research dossiers). Use whenever the user asks "what do I know about X", "find sources about", "search knowledge", "have I saved anything about", references a topic they might have captured, or when you need to check for prior context before answering a substantive question. Prefer this over manual Grep on the vault — it handles tokenization, tier selection, domain filtering, and rating-based ranking in one call.
+description: Search the Mnemon knowledge library for sources, extracts, synthesis notes, collections (research dossiers) and wiki pages (what the evidence says now). Use whenever the user asks "what do I know about X", "find sources about", "search knowledge", "have I saved anything about", references a topic they might have captured, or when you need to check for prior context before answering a substantive question. Prefer this over manual Grep on the vault — it handles tokenization, tier selection, domain filtering, and rating-based ranking in one call.
 ---
 
 # /source-search — Search the Mnemon Knowledge Library
@@ -19,7 +19,9 @@ All the logic lives in the engine. Call the dispatcher via Bash — this is the 
   [--domain <domain>] \
   [--limit <n>] \
   [--include-source] \
-  [--include-synthesis]
+  [--include-synthesis] \
+  [--include-collections] \
+  [--include-wiki [--wiki-limit <n>] [--include-orphans]]
 ```
 
 The command prints a JSON object to stdout. Parse it and format the results for the user (see "Output format" below).
@@ -36,6 +38,9 @@ The command prints a JSON object to stdout. Parse it and format the results for 
 | `--include-source` | off | Also search `source.md` (raw captured content), not just `extract.md`. Use when the user is looking for a specific phrase that might only appear in the raw source. |
 | `--include-synthesis` | off | Also search the `Synthesis/` directory (the reader's own notes). Use when the user might be looking for their own writing, not just captured material. |
 | `--include-collections` | off | Also search `Collections/` (research dossiers: a question and the revisions filed under it). Use when the user asks what has been gathered on a topic, or which dossier a source belongs to. |
+| `--include-wiki` | off | Also search `Wiki/` pages — what the evidence says about a topic now, built by an agent with locators into the sources. They come as a **separate block** (`wiki` in the JSON) with its own limit; pages the doctor marks `suppressed` (vetoed by the owner), `unbound` (a broken locator or seal) or not probed are never shown, `orphan` pages (no open dossier) only with `--include-orphans`. Use when the user asks what the evidence says, not which sources exist. |
+| `--wiki-limit` | 5 | Max pages in the wiki block. |
+| `--include-orphans` | off | With `--include-wiki`: show orphan pages too. |
 
 ### Multi-word queries
 
@@ -93,7 +98,9 @@ The command returns JSON shaped like:
 }
 ```
 
-`result_type` says what the result is — `extract` or `source` (a captured revision), `synthesis` (the reader's note), `collection` (a research dossier; `status` is `open`, `inbox` or `closed`). `tier` is the **capture tier** of a Sources result — `full`, or `bookmark` for a lightweight capture — and `null` for a synthesis or collection result; a bookmark-tier source has no full extract, say so when you show it. (Before `mnemon-search/2` the `tier` key carried the result type; read `result_type` now.) A collection's `path` + `file` is `Collections/<name>.md`; several collections live in one folder and are distinct results.
+`result_type` says what the result is — `extract` or `source` (a captured revision), `synthesis` (the reader's note), `collection` (a research dossier; `status` is `open`, `inbox` or `closed`), `wiki` (a page; only inside the `wiki` block). `tier` is the **capture tier** of a Sources result — `full`, or `bookmark` for a lightweight capture — and `null` for a synthesis or collection result; a bookmark-tier source has no full extract, say so when you show it. (Before `mnemon-search/2` the `tier` key carried the result type; read `result_type` now.) A collection's `path` + `file` is `Collections/<name>.md`; several collections live in one folder and are distinct results.
+
+With `--include-wiki` the JSON carries a `wiki` key (`null` without the flag): `{"count": n, "limit": m, "results": [...]}` — the same result keys plus `kind` (`concept` · `comparison` · `contradiction` · `open-question`), `updated` and `states` (the doctor's derived states the page still carries, e.g. `["stale"]`; `[]` = clean). The block is ordered by `updated` desc, not by rating (pages have none), and its snippets never come from the page's `## Atlas reading` section (the agent's opinion, not evidence). Show the block **after** the sources, as "What the wiki says", with each page's kind and states — a `stale` or `inputs-changed` page is still usable but say it may lag the sources; cite the page by `Wiki/<name>` and let the user open its locators.
 
 Format it for the user like this:
 
@@ -119,9 +126,10 @@ If the first pass returns few or zero results and the user seemed to expect more
 1. Re-run with `--include-source` — the phrase might be in the raw capture, not the summary
 2. Re-run with `--include-synthesis` — the reader may have written about it themselves
 3. Re-run with `--include-collections` — a dossier may already gather the sources on this question
-4. Re-run with a simpler / broader query — strip modifiers, keep the topic word
+4. Re-run with `--include-wiki` — a page may already state what the evidence says (its locators lead to the sources)
+5. Re-run with a simpler / broader query — strip modifiers, keep the topic word
 
-Don't do all three silently — tell the user what you're broadening and why.
+Don't do all four silently — tell the user what you're broadening and why.
 
 ## If the command fails
 
