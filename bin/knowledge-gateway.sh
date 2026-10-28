@@ -48,6 +48,14 @@ Options:
   --recapture           New revision of an already captured resource (--force is an alias)
   --supersedes <rev>[,<rev>…]  The revision(s) the new one supersedes (implies --recapture; each must
                         exist; repeatable — one re-capture can resolve a group of duplicate revisions)
+  --tier full|bookmark  The capture tier (default full). A bookmark is a deterministic card — url, title,
+                        intent — published as source.md with `tier: bookmark`, no fetch, no model, no
+                        extract.md; for a URL or a text, never a file. A later full capture of the same
+                        resource promotes it (the new revision supersedes the card); `mnemon triage`
+                        lists, dismisses and promotes bookmarks
+  --canonical-url <url> With --file / --file-text / text: identify the resource by this URL (its canonical
+                        v1 form), not by the file's bytes — provenance and dedup by document (a Google
+                        Doc exported twice is one resource); the literal URL goes to `url:`. Not with --url
   --keep-run            Keep the attempt directory after a successful extraction
   --import-source <s>   Import source label (apple-notes, safari, telegram-saved, a producer id…)
   --import-ref <id>     The envelope id when the capture came through an inbox
@@ -71,7 +79,7 @@ Options:
   --assume-cost <usd>   With --resume: reconcile every extractor call whose cost is unknown at this
                         cost (the budget rule of a chunked extraction)
 
-Exit codes: 0 extracted / skipped-duplicate / replay · 1 failed or integrity-error · 2 usage or
+Exit codes: 0 extracted / bookmarked / skipped-duplicate / replay · 1 failed or integrity-error · 2 usage or
 contract (unknown context, ref:mcp, writer_host, capture-id reuse with a different request, an
 invalid URL, a refused site plan) · 3 extractor or capture-layer environment missing before
 publication · 4 source published, extract not · 75 lock held
@@ -103,6 +111,8 @@ CAPTURE_ID_GIVEN=false
 RESUME=""
 RECAPTURE=false
 SUPERSEDES=""
+TIER=full
+CANONICAL_URL_GIVEN=""
 KEEP_RUN=false
 MANIFEST=""
 IMPORT_SOURCE=""
@@ -145,6 +155,8 @@ while [[ $# -gt 0 ]]; do
     --resume)        _need "$@"; RESUME="$2"; shift 2 ;;
     --recapture|--force) RECAPTURE=true; BOUND_GIVEN=true; shift ;;
     --supersedes)    _need "$@"; SUPERSEDES="${SUPERSEDES:+$SUPERSEDES,}$2"; RECAPTURE=true; BOUND_GIVEN=true; shift 2 ;;
+    --tier)          _need "$@"; TIER="$2"; BOUND_GIVEN=true; shift 2 ;;
+    --canonical-url) _need "$@"; CANONICAL_URL_GIVEN="$2"; BOUND_GIVEN=true; shift 2 ;;
     --keep-run)      KEEP_RUN=true; shift ;;
     --manifest)      _need "$@"; MANIFEST="$2"; shift 2 ;;
     --import-source) _need "$@"; IMPORT_SOURCE="$2"; shift 2 ;;
@@ -170,6 +182,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$DEPTH" in auto|off|force) ;; *) echo "ERROR: --depth takes auto|off|force" >&2; exit 2 ;; esac
+case "$TIER" in full|bookmark) ;; *) echo "ERROR: --tier takes full|bookmark" >&2; exit 2 ;; esac
+CANONICAL_URL_GIVEN="$(printf '%s' "$CANONICAL_URL_GIVEN" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+if [[ -n "$CANONICAL_URL_GIVEN" && -n "$URL" ]]; then
+  echo "ERROR: --canonical-url goes with --file / --file-text / a text on stdin; the identity of a --url capture is computed from the URL itself" >&2; exit 2
+fi
 if $RENDER && $NO_RENDER; then echo "ERROR: --render and --no-render are exclusive" >&2; exit 2; fi
 if [[ -n "$ASSUME_COST" ]]; then
   [[ "$ASSUME_COST" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "ERROR: --assume-cost takes a non-negative number of dollars" >&2; exit 2; }
@@ -264,6 +281,27 @@ cap_contract_checks() {
   if [[ "$ORIGIN" == "ref:mcp" ]]; then
     cap_die2 "ref:mcp is not supported in phase 1 (D11): there is no acquisition step for MCP content. Capture it through an inbox producer (mnemon ingest) or paste it as --origin text."
   fi
+  # the tier contract (phase 3-capture, B1): a bookmark is a card for a URL or a text — a file is
+  # captured in full or not at all; a site capture is an acquisition mode of a full capture
+  if [[ "$TIER" == "bookmark" && "$ORIGIN" != "batch" ]]; then
+    case "$(cap_input_kind)" in
+      url|text) ;;
+      *) cap_die2 "--tier bookmark takes a URL or a text (origin $ORIGIN is a $(cap_input_kind) — capture it in full, or bookmark its URL with --origin url --url …)" ;;
+    esac
+    [[ -z "$SITE_MODE" ]] || cap_die2 "--tier bookmark and --site are exclusive (a site capture is a full capture of the landing)"
+    [[ -z "$RESUME" ]] || cap_die2 "--tier bookmark and --resume are exclusive (a bookmark has no extraction to finish)"
+  fi
+  # the declared identity of a file or text (B3): --canonical-url names the document the bytes
+  # came from; the resource is that URL's canonical form, the bytes stay the input
+  if [[ -n "$CANONICAL_URL_GIVEN" && "$ORIGIN" != "batch" ]]; then
+    case "$(cap_input_kind)" in
+      text|file) ;;
+      *) cap_die2 "--canonical-url goes with --file / --file-text / a text on stdin (origin $ORIGIN is a $(cap_input_kind))" ;;
+    esac
+    [[ -z "$SITE_MODE" ]] || cap_die2 "--canonical-url and --site are exclusive"
+    cap_canonical_lookup "$CANONICAL_URL_GIVEN"    # exit 2 on an invalid URL, before any write
+    URL="$CANONICAL_URL_GIVEN"                      # the literal goes to url:, the computed one to canonical_url:
+  fi
   # the routing contract of §12 A12: an explicit --origin youtube needs a YouTube URL
   if [[ "$ORIGIN" == "youtube" && -n "$URL" ]]; then
     cap_canonical_lookup "$URL"
@@ -330,6 +368,10 @@ cap_dry_run() {
   if [[ "$kind" == "url" && -n "$URL" ]]; then
     cap_canonical_lookup "$URL"
     key="$CANONICAL_URL (canonical v${CANONICAL_VERSION:-1} of $URL)"
+  elif [[ -n "$CANONICAL_URL_GIVEN" ]]; then
+    cap_canonical_lookup "$CANONICAL_URL_GIVEN"
+    key="$CANONICAL_URL (canonical v${CANONICAL_VERSION:-1} of $CANONICAL_URL_GIVEN, declared by --canonical-url; the $kind bytes are the input)"
+    kind=url
   fi
   case "$ORIGIN" in
     url)     if [[ -n "$SITE_MODE" ]]; then raw_ext="site/"; else raw_ext=html; fi ;;
@@ -356,6 +398,7 @@ cap_dry_run() {
     echo "URL kind: $URL_KIND${REQUESTED_VERSION:+ (requested version $REQUESTED_VERSION)}"
   fi
   echo "Request schema: $schema"
+  echo "Tier: $TIER"
   echo "Revision: $(cap_today)_<resource_id> (allocated under the vault lock at run time)"
   [[ -n "$FILE_PATH" ]] && echo "Origin path: $FILE_PATH"
   echo "Raw store: $raw_note"
@@ -369,6 +412,11 @@ cap_dry_run() {
     echo "Fetch: render $( $RENDER && echo force || { $NO_RENDER && echo off || echo auto; } ), external $( { [[ "${EXTERNAL_FETCH:-off}" == auto ]] && ! $NO_EXTERNAL && ! $NO_RENDER; } && echo auto || echo off ), acquire timeout ${ACQUIRE_TIMEOUT:-300}s"
   fi
   echo "Vault state: $MNEMON_VAULT_STATE_DIR"
+  if [[ "$TIER" == "bookmark" ]]; then
+    echo "=== BOOKMARK CARD ==="
+    echo "no fetch, no extractor call: source.md with \`tier: bookmark\`, its body the card (title, url, intent) or the text; no extract.md"
+    return 0
+  fi
   echo "=== CHUNK PLAN ==="
   content=""
   [[ "$ORIGIN" == "ref:vault" && -f "$REF_PATH" ]] && content="$REF_PATH"
@@ -437,11 +485,16 @@ cap_restore_from_receipt() {   # globals from the receipt's request + metadata (
     "LEGACY_MATCH=" + s(.legacy_match // false),
     "REQUEST_SCHEMA=" + s(.request.schema // "mnemon-request/1"), "CANONICAL_URL=" + s(.canonical_url), "CANONICAL_VERSION=" + s(.canonical_version),
     "REQ_RENDER=" + s(.request.render), "REQ_EXTERNAL=" + s(.request.external), "REQ_SITE=" + s(.request.site),
-    "REQUESTED_VERSION=" + s(.request.requested_version), "SITE_PLAN_SHA256=" + s(.site_plan_sha256), "REPORT_STATE=" + s(.report_state)' "$r")"
+    "REQUESTED_VERSION=" + s(.request.requested_version), "SITE_PLAN_SHA256=" + s(.site_plan_sha256), "REPORT_STATE=" + s(.report_state),
+    "TIER=" + s(.request.tier // "full")' "$r")"
   eval "$assignments"
   FILE_PATH=""
-  if [[ "$RESOURCE_KIND" == "file" ]]; then FILE_PATH="$INPUT_PATH"; fi
-  if [[ "$RESOURCE_KIND" == "text" && -n "$INPUT_PATH" && "$INPUT_PATH" != "$RUNS_DIR/$CAPTURE_ID/attempt-1/capture.md" ]]; then FILE_TEXT="$INPUT_PATH"; fi
+  # the input is located by the origin's own kind (a file or a text), whatever the resource kind:
+  # a --canonical-url capture is a url-kind resource whose input is the file (B3)
+  CANONICAL_URL_GIVEN=""
+  if [[ "$RESOURCE_KIND" == "url" && "$(cap_input_kind)" != "url" ]]; then CANONICAL_URL_GIVEN="$URL"; fi
+  if [[ "$(cap_input_kind)" == "file" ]]; then FILE_PATH="$INPUT_PATH"; fi
+  if [[ "$(cap_input_kind)" == "text" && -n "$INPUT_PATH" && "$INPUT_PATH" != "$RUNS_DIR/$CAPTURE_ID/attempt-1/capture.md" ]]; then FILE_TEXT="$INPUT_PATH"; fi
   # identity and the request schema come from the receipt, never recomputed (D5); the bound
   # flags of a /2 request are restored as flags so a re-acquisition runs the same chain
   CAP_BIND_SCHEMA="$REQUEST_SCHEMA"
@@ -462,7 +515,7 @@ cap_restore_from_receipt() {   # globals from the receipt's request + metadata (
   fi
   [[ "$ORIGIN" == "youtube" ]] && URL_KIND=youtube
   KEEP_LOCATOR=false
-  [[ "$RESOURCE_KIND" == "text" && -z "$FILE_TEXT" ]] && KEEP_LOCATOR=true
+  [[ "$(cap_input_kind)" == "text" && -z "$FILE_TEXT" ]] && KEEP_LOCATOR=true
   [[ "$SITE_MODE" == "auto" ]] && KEEP_LOCATOR=true
   return 0
 }
@@ -493,6 +546,14 @@ cap_binding_check() {
   cap_resource_identity
   # --recapture resolves `supersedes` to the latest revision at capture time; the receipt wins.
   if $RECAPTURE && [[ -z "$SUPERSEDES" ]]; then SUPERSEDES="$(cap_receipt_get "$CAPTURE_ID" '.request.supersedes | if type == "array" then join(",") else (. // "") end')"; fi
+  # a promotion (B2) set recapture/supersedes implicitly at capture time: the same full request
+  # replayed without --recapture is the same request — the receipt's implicit pair is adopted
+  # when what it superseded is a bookmark
+  if ! $RECAPTURE && [[ "$TIER" != "bookmark" && "$(cap_receipt_get "$CAPTURE_ID" '.request.recapture // false')" == "true" ]]; then
+    local _rsup
+    _rsup="$(cap_receipt_get "$CAPTURE_ID" '.request.supersedes | if type == "array" then join(",") else (. // "") end')"
+    if [[ -n "$_rsup" && "$_rsup" != *,* && "$(cap_effective_tier "$_rsup")" == "bookmark" ]]; then RECAPTURE=true; SUPERSEDES="$_rsup"; fi
+  fi
   cap_canonical_request
   [[ -n "${tmp:-}" ]] && rm -f "$tmp"
   CAP_BIND_SCHEMA=""
@@ -505,7 +566,7 @@ cap_binding_check() {
 # Resolve the input for a re-acquisition (started / failed receipts): the locator must still hold
 # the recorded bytes.
 cap_restore_input() {
-  case "$RESOURCE_KIND" in
+  case "$(cap_input_kind)" in
     text)
       [[ -n "$INPUT_PATH" && -f "$INPUT_PATH" ]] || cap_fail_exit input-missing "the input locator ${INPUT_PATH:-?} is gone; the capture cannot be replayed"
       [[ "$(cap_sha256 "$INPUT_PATH")" == "$INPUT_SHA256" ]] || cap_fail_exit input-missing "the input at $INPUT_PATH no longer matches the recorded hash"
@@ -555,6 +616,11 @@ cap_replay() {
       fi
       # hash equal or not: the RESULT comes from the files as they are
       cap_result extracted ok "" "" true
+      exit 0 ;;
+    bookmarked)
+      # a bookmark is final at publication (B1): the replay verifies the card and answers from it
+      cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+      cap_result bookmarked none "" "" true
       exit 0 ;;
     source-published|extract-failed)
       cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
@@ -635,6 +701,15 @@ cap_recover_acquire() {
   local staged_match=false
   cap_new_attempt "$CAPTURE_ID"
   cap_receipt_update "$CAPTURE_ID" '.state="started" | .error_class=null | .error=null | .retryable=null'
+  if [[ "$TIER" == "bookmark" ]]; then
+    # a crashed bookmark (started/failed before publication) is redone from the request: no raw,
+    # no extractor — the card is deterministic (B1)
+    RAW_STORE=none; RAW_PATH=""; RAW_STAGED=""; RAW_KIND=none
+    cap_restore_input
+    cap_acquire_fresh
+    cap_publish_source || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
+    cap_finish_bookmarked true "$KEEP_LOCATOR"
+  fi
   if ! cap_preflight_extractor; then cap_fail_exit "$PREFLIGHT_CLASS" "$PREFLIGHT_MSG"; fi
   if [[ "$RAW_STORE" != "none" && -n "$RAW_PATH" ]]; then
     RAW_DIR="$(dirname "$RAW_PATH")"
@@ -692,6 +767,8 @@ cap_recover_acquire() {
 cap_acquire_fresh() {
   RAW_SHA256=""; RAW_BYTES=""
   DEPTH_MANIFEST_FILE=""
+  # a bookmark acquires nothing: the card is written from the request (B1)
+  if [[ "$TIER" == "bookmark" ]]; then cap_acquire_card || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"; return 0; fi
   # (the depth preflight of §4.2 runs inside cap_acquire_url, after the landing fetch, on the staged raw)
   cap_acquire || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
 }
@@ -741,11 +818,23 @@ cap_fresh() {
   if [[ -n "$CAP_HEAD" ]]; then
     if [[ "$CAP_HEAD_MANAGED" == "true" ]]; then latest="$CAP_HEAD false"; else latest="$CAP_HEAD true"; fi
   fi
+  if [[ -n "$latest" ]] && $RECAPTURE && [[ "$TIER" == "bookmark" && "$(cap_effective_tier "${latest%% *}")" != "bookmark" ]]; then
+    # a bookmark never supersedes a full capture (B2): the card would downgrade the resource
+    cap_die2 "--recapture --tier bookmark: Sources/${latest%% *}/ is a full capture of this resource — a bookmark never supersedes it (re-capture in full, or leave it)"
+  fi
+  if [[ -n "$latest" ]] && ! $RECAPTURE && [[ "$TIER" != "bookmark" && "$(cap_effective_tier "${latest%% *}")" == "bookmark" ]]; then
+    # promotion (B2, R5 "dedup does not block the promote"): a full capture of a bookmarked
+    # resource is a new revision that supersedes the card — no --recapture needed
+    echo "NOTE: Sources/${latest%% *}/ is a bookmark of this resource — promoting it: the new revision supersedes the card" >&2
+    RECAPTURE=true
+    [[ -n "$SUPERSEDES" ]] || SUPERSEDES="${latest%% *}"
+    cap_canonical_request
+  fi
   if [[ -n "$latest" ]] && ! $RECAPTURE; then
     folder="${latest%% *}"; legacy="${latest##* }"
     folder_cid="$(_mnemon_yaml_literal capture_id "$VAULT_PATH/Sources/$folder/source.md")"
     REVISION="$folder"
-    if [[ "$legacy" == "true" || -f "$VAULT_PATH/Sources/$folder/extract.md" ]]; then
+    if [[ "$legacy" == "true" || -f "$VAULT_PATH/Sources/$folder/extract.md" || "$TIER" == "bookmark" ]]; then
       [[ -n "$incoming" ]] && rm -f "$incoming"
       # every success path verifies the published source first (§3.4 step 5, §9.5): a duplicate
       # has no receipt of its own, so the folder's own capture.text_sha256 is the reference —
@@ -756,6 +845,9 @@ cap_fresh() {
         echo "WARNING: the landing is already captured at Sources/$folder/ — skipping; a site capture of a captured landing needs --recapture (the site revision supersedes it)" >&2
       elif [[ "${URL_KIND:-}" == "arxiv" && -n "${REQUESTED_VERSION:-}" ]]; then
         echo "WARNING: already captured at Sources/$folder/ (arXiv version $(_mnemon_yaml_literal arxiv_version "$VAULT_PATH/Sources/$folder/source.md")) — skipping; another version is a --recapture" >&2
+      elif [[ "$TIER" == "bookmark" ]]; then
+        # a bookmark adds nothing to a resource the vault already holds — bookmarked, captured or extracted
+        echo "WARNING: already in the vault at Sources/$folder/ ($(cap_effective_tier "$folder")) — skipping the bookmark (a full capture promotes a bookmark; --recapture --tier bookmark refreshes a card)" >&2
       else
         echo "WARNING: already captured at Sources/$folder/ — skipping (use --recapture for a new revision)" >&2
       fi
@@ -798,7 +890,7 @@ cap_fresh() {
   REVISION="$(cap_allocate_revision "$RESOURCE_ID")"
   cap_new_attempt "$CAPTURE_ID"
   INPUT_PATH=""
-  case "$RESOURCE_KIND" in
+  case "$(cap_input_kind)" in
     text)
       if [[ -n "$incoming" ]]; then mv "$incoming" "$ATTEMPT_DIR/capture.md"; TEXT_INPUT="$ATTEMPT_DIR/capture.md"; INPUT_PATH="$TEXT_INPUT"
       else INPUT_PATH="$FILE_TEXT"; fi ;;
@@ -816,6 +908,13 @@ cap_fresh() {
   esac
   TEXT_SHA256=""
   CAP_INIT_ATTEMPTS=1 cap_receipt_create started
+  if [[ "$TIER" == "bookmark" ]]; then
+    # no extractor runs for a card, so none is preflighted (B1); the raw store stays none
+    RAW_STORE=none; RAW_PATH=""; RAW_STAGED=""; RAW_KIND=none
+    cap_acquire_fresh
+    cap_publish_source || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
+    cap_finish_bookmarked false "$KEEP_LOCATOR"
+  fi
   if ! cap_preflight_extractor; then cap_fail_exit "$PREFLIGHT_CLASS" "$PREFLIGHT_MSG"; fi
   cap_acquire_fresh
   cap_publish_source || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
@@ -831,11 +930,15 @@ cap_resolve_resume() {
     if [[ "$(cap_receipt_get "$target" '.state')" == "extracted" && -f "$VAULT_PATH/Sources/$(cap_receipt_get "$target" '.resolved_to_revision // .revision')/extract.md" ]]; then
       cap_die2 "--resume: capture $target is complete (nothing to finish)"
     fi
+    if [[ "$(cap_receipt_get "$target" '.state')" == "bookmarked" ]]; then
+      cap_die2 "--resume: capture $target is a bookmark (nothing to finish) — promote it with mnemon add --url <url> (a full capture supersedes the card), or mnemon triage promote $(cap_receipt_get "$target" '.revision // ""')"
+    fi
     return 0
   fi
   if [[ -d "$VAULT_PATH/Sources/$target" ]]; then
     [[ -f "$VAULT_PATH/Sources/$target/extract.md" ]] && cap_die2 "--resume: revision $target is complete (nothing to finish)"
     [[ -f "$VAULT_PATH/Sources/$target/source.md" ]] || cap_die2 "--resume: Sources/$target/ has no source.md"
+    [[ "$(cap_effective_tier "$target")" == "bookmark" ]] && cap_die2 "--resume: revision $target is a bookmark (nothing to finish) — promote it: mnemon triage promote $target, or mnemon add --url <url> (a full capture supersedes the card)"
     cid="$(_mnemon_yaml_literal capture_id "$VAULT_PATH/Sources/$target/source.md")"
     if [[ -n "$cid" ]] && cap_receipt_exists "$cid"; then
       CAPTURE_ID="$cid"; CAPTURE_ID_GIVEN=true
@@ -899,9 +1002,11 @@ run_batch() {
 
   local i
   for i in $(seq 0 $((total - 1))); do
-    local item_origin item_url item_title item_source_type item_ref_path item_file item_capture_id has_content
+    local item_origin item_url item_title item_source_type item_ref_path item_file item_capture_id has_content item_tier item_canonical
     item_origin=$(jq -r ".[$i].origin // empty" "$MANIFEST")
     item_url=$(jq -r ".[$i].url // empty" "$MANIFEST")
+    item_tier=$(jq -r ".[$i].tier // empty" "$MANIFEST")
+    item_canonical=$(jq -r ".[$i].canonical_url // empty" "$MANIFEST")
     item_title=$(jq -r ".[$i].title // empty" "$MANIFEST")
     item_source_type=$(jq -r ".[$i].source_type // empty" "$MANIFEST")
     item_ref_path=$(jq -r ".[$i].ref_path // empty" "$MANIFEST")
@@ -921,6 +1026,9 @@ run_batch() {
     [[ -n "$item_source_type" ]] && item_args+=(--source-type "$item_source_type")
     [[ -n "$item_ref_path" ]]    && item_args+=(--ref-path "$item_ref_path")
     [[ -n "$item_capture_id" ]]  && item_args+=(--capture-id "$item_capture_id")
+    # the item's tier outranks the batch's --tier; a canonical_url is per item only (B1, B3)
+    if [[ -n "$item_tier" ]]; then item_args+=(--tier "$item_tier"); elif [[ "$TIER" != "full" ]]; then item_args+=(--tier "$TIER"); fi
+    [[ -n "$item_canonical" ]]   && item_args+=(--canonical-url "$item_canonical")
     if [[ "$has_content" == "yes" ]]; then
       if $DRY_RUN; then
         item_args+=(--origin "${item_origin:-text}")
@@ -985,6 +1093,9 @@ cap_main() {
     echo "ERROR: Cannot determine origin. Provide --origin or --url." >&2; usage
   fi
   cap_contract_checks
+  if [[ "$ORIGIN" == "batch" && -n "$CANONICAL_URL_GIVEN" ]]; then
+    cap_die2 "--canonical-url names one document; in a batch give each item its own canonical_url key"
+  fi
 
   if $DRY_RUN; then
     if [[ "$ORIGIN" == "batch" ]]; then run_batch; return $?; fi

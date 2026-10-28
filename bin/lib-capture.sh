@@ -52,6 +52,10 @@
 #   resource_sha256 = sha256("<kind>:" + key) (the identity); resource_id = sha256(key)[:8] (the
 #   folder label, may collide). input_sha256 = sha256 of the input bytes for text/file, null
 #   otherwise.
+#   Phase 3-capture (capture layer §13): a /2 request carries "tier":"bookmark" only for a
+#   bookmark card (a full request keeps its hash); with --canonical-url a text or file input is a
+#   url-kind resource keyed by the canonical form of the given URL ("url" = the literal), its
+#   input_sha256 still binding the bytes.
 #
 # ─── Input locator (§3.1) ───────────────────────────────────────────────────────────────────────
 #   receipt.input_path: the --file / --file-text path as given, or runs/<id>/attempt-1/capture.md
@@ -875,7 +879,7 @@ cap_canonical_lookup() {   # <url>
 # is identified by its canonical URL (D5) — except under a phase-1 request schema (CAP_BIND_SCHEMA
 # = mnemon-request/1, a replay of a /1 receipt), where the literal trimmed URL is the key.
 cap_resource_identity() {
-  RESOURCE_KIND="$(cap_resource_kind "$ORIGIN")"
+  RESOURCE_KIND="$(cap_input_kind)"
   INPUT_SHA256=""
   case "$RESOURCE_KIND" in
     url)
@@ -890,8 +894,29 @@ cap_resource_identity() {
     file) RESOURCE_KEY="$(cap_sha256 "$FILE_PATH")"; INPUT_SHA256="$RESOURCE_KEY" ;;
     ref)  RESOURCE_KEY="$REF_PATH" ;;
   esac
+  # --canonical-url (B3): a file or a text whose document is named — the resource is that URL's
+  # canonical form (a url-kind resource), the bytes stay the input (INPUT_SHA256 binds them)
+  if [[ -n "${CANONICAL_URL_GIVEN:-}" ]] && [[ "$RESOURCE_KIND" == "text" || "$RESOURCE_KIND" == "file" ]]; then
+    cap_canonical_lookup "$CANONICAL_URL_GIVEN"
+    RESOURCE_KIND=url
+    RESOURCE_KEY="$CANONICAL_URL"
+  fi
   RESOURCE_SHA256="$(cap_sha256_str "${RESOURCE_KIND}:${RESOURCE_KEY}")"
   RESOURCE_ID="$(cap_sha256_str "$RESOURCE_KEY" | cut -c1-8)"
+}
+
+# The kind of the INPUT, from the origin alone (text · file · url · ref) — what cap_resource_kind
+# says; the resource kind may differ (--canonical-url makes a file or a text a url-kind resource).
+cap_input_kind() { cap_resource_kind "$ORIGIN"; }
+
+# The effective capture tier of a published revision (vault store §4): `tier:` of its source.md,
+# else the legacy placeholder `status: bookmark` → bookmark, else full. Prints the word.
+cap_effective_tier() {   # <revision>
+  local f="$VAULT_PATH/Sources/$1/source.md" t
+  [[ -f "$f" ]] || { printf 'full'; return 0; }
+  t="$(_mnemon_yaml_literal tier "$f" | tr '[:upper:]' '[:lower:]')"
+  if [[ -z "$t" && "$(_mnemon_yaml_literal status "$f")" == "bookmark" ]]; then t=bookmark; fi
+  printf '%s' "${t:-full}"
 }
 
 # The bound render / external / site fields of a /2 request (§12 A4) from the flags, the config
@@ -935,13 +960,15 @@ cap_canonical_request() {
       --arg schema "$CAP_REQUEST_SCHEMA" --arg origin "$ORIGIN" --arg kind "$RESOURCE_KIND" --arg key "$RESOURCE_KEY" \
       --arg input "$INPUT_SHA256" --arg url "$URL" --arg ref "$REF_PATH" --arg context "$CONTEXT" \
       --arg st "$SOURCE_TYPE" --argjson recapture "$recapture" --arg sup "$SUPERSEDES" --arg depth "$DEPTH" \
-      --arg render "$REQ_RENDER" --arg external "$REQ_EXTERNAL" --arg site "$REQ_SITE" --arg rv "$REQ_RV" \
+      --arg render "$REQ_RENDER" --arg external "$REQ_EXTERNAL" --arg site "$REQ_SITE" --arg rv "$REQ_RV" --arg tier "${TIER:-full}" \
       'def nz: if . == "" then null else . end;
        def sup: if . == "" then null else (split(",") | if length == 1 then .[0] else . end) end;
        {schema:$schema, origin:$origin, resource_kind:$kind, resource_key:$key, input_sha256:($input|nz),
         url:($url|nz), ref_path:($ref|nz), context:$context, source_type:($st|nz), recapture:$recapture,
         supersedes:($sup|sup), render:$render, external:$external, site:($site|nz),
-        requested_version:(if $rv == "" then null else ($rv|tonumber) end), canonical_version:1, depth:$depth}')"
+        requested_version:(if $rv == "" then null else ($rv|tonumber) end), canonical_version:1, depth:$depth}
+       + (if $tier == "bookmark" then {tier:$tier} else {} end)')"
+       # (`tier` is bound only when it is bookmark — every full request keeps the hash it always had, B1)
   fi
   REQUEST_SHA256="$(cap_sha256_str "$REQUEST_JSON")"
 }
@@ -987,7 +1014,7 @@ cap_reserved_revisions() {
   shopt -s nullglob
   local f
   for f in "$CAPTURES_DIR"/*.json; do
-    jq -r 'select(.state != "extracted" and (.revision // "") != "" and (.resolved_to_revision // "") == "") | .revision' "$f" 2>/dev/null || true
+    jq -r 'select(.state != "extracted" and .state != "bookmarked" and (.revision // "") != "" and (.resolved_to_revision // "") == "") | .revision' "$f" 2>/dev/null || true
   done
   shopt -u nullglob
 }
@@ -2131,6 +2158,8 @@ cap_source_frontmatter() {   # > stdout
   printf 'source_type: %s\n' "$SOURCE_TYPE"
   printf 'content_format: %s\n' "$CONTENT_FORMAT"
   printf 'origin: %s\n' "$ORIGIN"
+  # the capture tier is a stored fact (vault store §4): written only for a bookmark, absent = full
+  [[ "${TIER:-full}" == "bookmark" ]] && printf 'tier: bookmark\n'
   [[ -n "$URL" ]] && printf 'url: %s\n' "$(cap_q "$URL")"
   # the computed identity of a url-kind resource (D5); the page-declared one is declared_canonical_url
   [[ "$RESOURCE_KIND" == "url" && -n "${CANONICAL_URL:-}" ]] && printf 'canonical_url: %s\n' "$(cap_q "$CANONICAL_URL")"
@@ -2388,10 +2417,13 @@ cap_result() {
   [[ -n "$canon" && "${RESOURCE_KIND:-}" == "url" ]] && printf 'RESULT:canonical_url=%s\n' "$(cap_oneline "$canon")"
   [[ -n "$compl" ]] && printf 'RESULT:completeness=%s\n' "$(cap_oneline "$compl")"
   [[ -n "$acq" ]] && printf 'RESULT:acquisition=%s\n' "$(cap_oneline "$acq")"
+  # the tier of the revision the result names, printed when it is a bookmark (B1) — for a fresh
+  # card, a replay and a skipped-duplicate of one alike
+  [[ -n "$rev" && -f "$VAULT_PATH/Sources/$rev/source.md" && "$(cap_effective_tier "$rev")" == "bookmark" ]] && printf 'RESULT:tier=bookmark\n'
   # the archive sidecar's outcome when its transaction ran (A6)
   case "${REPORT_STATUS:-}" in ok) printf 'RESULT:report=ok\n' ;; failed|pending|conflict) printf 'RESULT:report=failed\n' ;; esac
-  # only after an extraction that ran the reindex hook (§12 A8); a replay from the files prints none
-  [[ "$status" == extracted && -n "${REINDEX_STATUS:-}" ]] && printf 'RESULT:reindex=%s\n' "$REINDEX_STATUS"
+  # only after an extraction (or a bookmark) that ran the reindex hook (§12 A8); a replay from the files prints none
+  [[ ( "$status" == extracted || "$status" == bookmarked ) && -n "${REINDEX_STATUS:-}" ]] && printf 'RESULT:reindex=%s\n' "$REINDEX_STATUS"
   [[ "$replayed" == true ]] && printf 'RESULT:replayed=true\n'
   return 0
 }
@@ -2863,6 +2895,46 @@ cap_finish_extracted() {   # <replayed true|false> <keep_locator true|false>
   cap_reindex
   cap_cleanup_attempts "$CAPTURE_ID" "$2"
   cap_result extracted ok "" "" "$1"
+  cap_success_exit
+}
+
+# The bookmark card (phase 3-capture B1): the capture-text is written from the request — no fetch,
+# no converter, no model. A url: `# <title or url>`, the url, the intent when given; a text: the
+# text itself (exact). Sets the same acquisition globals cap_acquire does.
+cap_acquire_card() {
+  local title="${TITLE:-}"
+  ACQ_TITLE=""; ACQ_PAGES=""; ACQ_META_LINES=""; ACQ_AUTHOR=""; ACQ_PUBLISHED=""
+  RAW_KIND=none; RAW_STORE=none; RAW_SHA256=""; RAW_BYTES=""
+  cap_capx_reset
+  case "$(cap_input_kind)" in
+    text)
+      cap_acquire_exact || return 1
+      CONTENT_FORMAT=text ;;
+    url)
+      [[ -n "$title" ]] && title="$(cap_norm "$title" 300)"
+      {
+        printf '# %s\n\n%s\n' "$(cap_oneline "${title:-$URL}")" "$(cap_oneline "$URL")"
+        if [[ -n "${INTENT:-}" ]]; then printf '\n%s\n' "$(cap_oneline "$INTENT")"; fi
+      } > "$ATTEMPT_DIR/capture.md" || { FAIL_CLASS=convert; FAIL_MSG="could not write the card into $ATTEMPT_DIR"; return 1; }
+      FIDELITY=exact; CONTENT_FORMAT=markdown ;;
+    *) FAIL_CLASS=unsupported; FAIL_MSG="a bookmark takes a URL or a text (origin $ORIGIN)"; return 1 ;;
+  esac
+  CAPTURE_METHOD=bookmark
+  CAPX_COMPLETENESS=unknown
+  TEXT_SHA256="$(cap_sha256 "$ATTEMPT_DIR/capture.md")"
+  TEXT_BYTES="$(cap_bytes "$ATTEMPT_DIR/capture.md")"
+  cap_receipt_update "$CAPTURE_ID" '.text_sha256=$h | .text_bytes=$b' --arg h "$TEXT_SHA256" --argjson b "$TEXT_BYTES"
+  return 0
+}
+
+# The tail of a published bookmark: receipt bookmarked (terminal) → reindex → cleanup → RESULT.
+cap_finish_bookmarked() {   # <replayed true|false> <keep_locator true|false>
+  cap_crash_at after-bookmark-published
+  cap_receipt_update "$CAPTURE_ID" '.state="bookmarked" | .finalized_at=$now | .error_class=null | .error=null | .retryable=null'
+  cap_alias_account bookmarked
+  cap_reindex
+  cap_cleanup_attempts "$CAPTURE_ID" "$2"
+  cap_result bookmarked none "" "" "$1"
   cap_success_exit
 }
 
