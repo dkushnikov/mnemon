@@ -348,6 +348,18 @@ def take_snapshot(scan: dict, cfg: dict, page: str, kind: str, names: List[str])
     if ch.get("unreadable"):
         raise Refused("snapshot", "the charter could not be read (%s)" % ch.get("path"))
     charter_sha = ch.get("sha256") if ch.get("exists") else None
+    charter_text = None
+    if ch.get("exists"):
+        data = read_bytes(ch["path"])
+        if data is None or sha256_bytes(data) != charter_sha:
+            raise Refused("snapshot", "the charter changed or could not be read while the snapshot was taken (%s)" % ch.get("path"))
+        charter_text = data.decode("utf-8", "replace")
+    collection_text: Dict[str, str] = {}
+    for c in open_ones:
+        data = read_bytes(os.path.join(scan["vault"], lr.COLLECTIONS_DIR, c["name"] + ".md"))
+        if data is None or sha256_bytes(data) != c["sha256"]:
+            raise Refused("snapshot", "Collections/%s.md changed or could not be read while the snapshot was taken" % c["name"])
+        collection_text[c["name"]] = data.decode("utf-8", "replace")
     # every dependency the validator will need must be readable now: an unreadable source.md anywhere
     # leaves the supersedes graph unknown and the page not probed, never clean (interface §9)
     if scan["snapshot"].get("sources_unlisted"):
@@ -400,6 +412,7 @@ def take_snapshot(scan: dict, cfg: dict, page: str, kind: str, names: List[str])
         "collections": [c["name"] for c in supporting],
         "open": [c["name"] for c in open_ones],
         "collection_sha": {c["name"]: c["sha256"] for c in open_ones},
+        "collection_text": collection_text, "charter_text": charter_text,
         "veto": {c["name"]: (c.get("status"), c.get("wiki"), tuple(c.get("suppressed_pages") or []), c.get("recusal")) for c in supporting},
         "tags": sorted({t for c in open_ones for t in (c.get("tags") or [])}),
         "domains": sorted({d for c in open_ones for d in (c.get("domains") or [])}),
@@ -611,16 +624,10 @@ def build_package(snap: dict, cfg: dict, existing: Optional[dict], recusal: bool
     out.append("Protocol: %s" % snap["protocol"])
     out.append("Template: %s" % snap["template"])
     out.append("\n=== CHARTER ===")
-    ch = scan["charter"]
-    if ch.get("exists"):
-        data = read_bytes(ch["path"])
-        out.append(data.decode("utf-8", "replace") if data is not None else "(no charter)")
-    else:
-        out.append("(no charter)")
+    out.append(snap["charter_text"] if snap["charter_text"] is not None else "(no charter)")   # the bytes the snapshot hashed
     for n in snap["open"]:
         out.append("\n=== DOSSIER: %s ===" % n)
-        data = read_bytes(os.path.join(scan["vault"], lr.COLLECTIONS_DIR, n + ".md"))
-        out.append(dossier_without_notes(data.decode("utf-8", "replace")) if data is not None else "(unreadable)")
+        out.append(dossier_without_notes(snap["collection_text"][n]))                         # likewise, never re-read
     out.append("\n=== TEMPLATE ===")
     out.append("%s — sections of the evidential body, in order: %s." % (
         snap["template"], ", ".join("`%s` → `## %s`" % (f, SECTION_OF[f]) for f in KIND_SECTIONS[snap["kind"]])))
@@ -711,17 +718,24 @@ def field_problems(fields: dict, kind: str, recusal: bool) -> List[str]:
     for f, v in fields.items():
         if not isinstance(v, str):
             continue
-        fence = False
+        fence = None
         for line in v.split("\n"):
             s = line.lstrip()
-            if s.startswith("```") or s.startswith("~~~"):
-                fence = not fence
-                continue
-            if fence:
+            if fence is None:
+                fo = lr.FENCE_OPEN_RE.match(s)
+                if fo:
+                    fence = (fo.group(1)[0], len(fo.group(1)))
+                    continue
+            else:
+                fc = lr.FENCE_CLOSE_RE.match(s)
+                if fc and fc.group(1)[0] == fence[0] and len(fc.group(1)) >= fence[1]:
+                    fence = None
                 continue
             if HEADING_IN_FIELD_RE.match(line):
                 problems.append("`%s`: a `#`/`##` heading inside a field (%r) would move the body boundary — use `###` or deeper" % (f, line.strip()[:60]))
                 break
+        if fence is not None:
+            problems.append("`%s`: a fence (%s) is left open — the sections after it would be swallowed into the body" % (f, fence[0] * fence[1]))
         for m in WIKILINK_RE.finditer(v):
             link = lr.classify_body_link(m.group(1))
             if link["kind"] != "sources" and f != "atlas_reading":
@@ -961,6 +975,7 @@ def cmd_update(args, cfg: dict) -> int:
     # publication (§3.8): one file, one rename
     crash = os.environ.get("MNEMON_TEST_RESEARCH_CRASH") if test_hooks() else None
     try:
+        os.makedirs(os.path.dirname(snap["target_path"]), exist_ok=True)      # a fresh vault has no Wiki/ yet
         atomic_write(snap["target_path"], page_text.encode("utf-8"), crash=crash)
     except Exception as exc:
         journal_write(cfg, dict(base, outcome="stopped", **{"class": "write"}, detail=str(exc), attempts=attempts, cost_usd=cost))
@@ -1184,9 +1199,13 @@ def cmd_apply(args, cfg: dict) -> int:
 # ---------------------------------------------------------------------------------------------
 
 def rewrite_links(text: str, page: str, target: str) -> Tuple[str, int]:
+    """The incoming links rewritten in the body only: the frontmatter is left byte for byte (a
+    `suppressed_pages` entry written as `[[Wiki/<page>]]` is the owner's veto and must outlive the file)."""
     pat = re.compile(r"\[\[Wiki/" + re.escape(page) + r"(?:\.md)?(?:#[^|\]]*)?(?:\|[^\]]*)?\]\]")
-    new, n = pat.subn("[[%s]]" % target, text)
-    return new, n
+    block, body, _offset = lr.split_frontmatter(text)
+    head = text[:len(text) - len(body)] if block is not None else ""
+    new, n = pat.subn("[[%s]]" % target, body)
+    return head + new, n
 
 
 def cmd_delete(args, cfg: dict) -> int:
@@ -1241,7 +1260,8 @@ def cmd_delete(args, cfg: dict) -> int:
             if data is None:
                 continue
             text = data.decode("utf-8", "surrogateescape")
-            n = len(link_re.findall(text))
+            _blk, body_only, _o = lr.split_frontmatter(text)
+            n = len(link_re.findall(body_only))
             if not n:
                 continue
             if target is None:
@@ -1643,7 +1663,7 @@ def main(argv: List[str]) -> int:
     except Refused as exc:
         page = getattr(args, "page", None) if isinstance(getattr(args, "page", None), str) else None
         try:
-            if cfg is not None and exc.cls not in ("usage", "config"):
+            if cfg is not None and exc.cls not in ("usage", "config") and not getattr(args, "dry_run", False):
                 journal_write(cfg, {"op": op, "page": page, "outcome": "refused", "class": exc.cls, "detail": exc.msg})
         except Exception:
             pass

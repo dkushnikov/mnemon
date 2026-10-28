@@ -25,10 +25,10 @@ Show the map as printed, one note at a time, and ask the owner for a verdict per
 | Verdict | What then |
 |---|---|
 | **ratify** | the owner sets `status: stable` by hand; nothing for the agent to do |
-| **reclassify** | execute the map through the doors, in this order: the items appended to the dossier the owner names (`Collections/<dossier>.md`, `## Items`, append only, the role the owner gives); the page built with `/research-update` (`--kind` from the map); the position moved into that page's `## Atlas reading` by a `--reason` rebuild only if the owner wants it kept; a thesis the owner recognises as theirs → `/research-synthesize --status seed`; then, and only then, the old note removed — its name, date and `drafted_by` go into the page's `## Log` line (the `--reason`) and into `migrated_from` of the dossier |
+| **reclassify** | execute the map through the doors, in this order: the items appended to the dossier the owner names (`Collections/<dossier>.md`, `## Items`, append only, the role the owner gives); the page built with `/research-update` (`--kind` from the map, `--reason` naming the note — that is the provenance its `## Log` carries); a thesis the owner recognises as theirs → `/research-synthesize --status seed`; the **position paragraph cannot be moved** in v1 — no door takes it as a payload (`docs/research.md` §6, §12): report it, and remove the old note only if the owner explicitly accepts losing that text; then, and only then, the old note removed, `migrated_from` of the dossier written by the owner |
 | **drop** | remove the note (the vault's git keeps it) |
 
-Never remove a note before its map is executed and confirmed; never set `stable`; never copy the draft's prose into a page.
+Never remove a note before its map is executed and confirmed; never set `stable`; never copy the draft's prose into a page; never claim a rebuild carried the position over — it did not.
 
 ## Display
 

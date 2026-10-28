@@ -1533,6 +1533,43 @@ class ResearchOperationTests(unittest.TestCase):
         self.assertEqual((rc, d["outcome"]), (0, "dry-run"), "a revision listed by two dossiers is one entry")
         self.assertEqual(d["sections"].count("=== SOURCE: %s ===" % A), 1)
 
+    # --- the Codex code-review amendments (2026-10-28) ---
+    def test_first_page_of_a_fresh_vault_creates_wiki_dir(self):
+        shutil.rmtree(self.vault / "Wiki")
+        rc, d, _ = self.update("First", "concept", TRUST, answer="concept-one-locator")
+        self.assertEqual((rc, d["outcome"]), (0, "published"), d)
+        self.assertTrue((self.vault / "Wiki" / "First.md").exists())
+
+    def test_open_fence_in_a_field_is_rejected(self):
+        ans = {"state_of_evidence": "- x — [[Sources/%s/source#Alpha paper]]" % A, "open_questions": "```\n- a fence left open", "atlas_reading": "opinion"}
+        rc, d, _ = self.update("P", "concept", TRUST, answer=ans, extra=["--recusal", "off"])
+        self.assertEqual((rc, d["class"]), (4, "invalid-output"), d)
+        self.assertTrue(any("left open" in p for p in d["problems"]), d["problems"])
+        ans["open_questions"] = "```\ncode\n```\n- closed"
+        rc, d, _ = self.update("P", "concept", TRUST, answer=ans, extra=["--recusal", "off"])
+        self.assertEqual((rc, d["outcome"]), (0, "published"), d)
+        self.assertNotIn("opinion", self.cli_json("ask", "--task-id", "t", "--question", "q", "--page", "P")[1]["pages"][0]["body"])
+
+    def test_package_is_built_from_the_snapshot_bytes(self):
+        dossier = self.vault / "Collections" / (TRUST + ".md")
+        rc, d, _ = self.update("P", "contradiction", TRUST, answer="hostile-unlisted", env={"STUB_MUTATE": str(dossier)})
+        self.assertEqual((rc, d["class"]), (4, "invalid-output"), d)
+        self.assertIn("- mutated by the stub", dossier.read_text(encoding="utf-8"), "the dossier moved after the first attempt")
+        self.assertNotIn("mutated by the stub", self.prompt(), "the retry's package is the snapshot's dossier, not a re-read")
+
+    def test_delete_keeps_a_decorated_suppressed_pages_entry(self):
+        self.write_dossier("Veto link", ["- [[Sources/%s/extract]] — **a** — n" % A], extra='suppressed_pages: ["[[Wiki/Vetoed page]]"]\n')
+        page = self.vault / "Wiki" / "Vetoed page.md"
+        page.write_text(page.read_text(encoding="utf-8").replace('collections: ["[[Collections/Vetoed]]"]', 'collections: ["[[Collections/Vetoed]]", "[[Collections/Veto link]]"]'), encoding="utf-8")
+        rc, d, _ = self.cli_json("delete", "Vetoed page")
+        self.assertEqual((rc, d["outcome"]), (0, "deleted"), d)
+        self.assertIn('suppressed_pages: ["[[Wiki/Vetoed page]]"]', (self.vault / "Collections" / "Veto link.md").read_text(encoding="utf-8"), "the veto outlives the file")
+
+    def test_dry_run_refusal_writes_no_journal_line(self):
+        rc, d, _ = self.update("P", "concept", "No such dossier", answer="concept-one-locator", extra=["--dry-run"])
+        self.assertEqual((rc, d["class"]), (2, "collection"))
+        self.assertEqual(self.journal(), [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
