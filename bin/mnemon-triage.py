@@ -6,8 +6,8 @@
     mnemon triage restore <revision>
     mnemon triage promote <revision> [<mnemon add flags>…]
 
-`mnemon triage <input-file> …` (the URL-list triage, bin/triage-urls.py) is untouched: the
-dispatcher routes the four verbs here and everything else there.
+The dispatcher routes exactly these four verbs here; the URL-list triage spike (`triage <file>`,
+bin/triage-urls.py) was retired 2026-10-28 (GH #29) — anything else is an unknown subcommand.
 
 The queue is every **current** revision of effective tier `bookmark` (`tier: bookmark` in source.md,
 or the legacy placeholder `status: bookmark`), read through bin/lib_vault.py — the same scan the

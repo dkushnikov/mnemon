@@ -1,8 +1,9 @@
 ---
 type: design-spec
-status: review-v2
+status: abandoned
 created: 2026-05-31
-revised: 2026-05-31
+revised: 2026-10-28
+abandoned: "2026-10-28 — the v0.8 spike (bin/triage-urls.py, `mnemon triage <file>`) was retired (GH #29) after a field test inverted verdicts on a real list; URL-queue scoring returns as a phase-4 stage over the bookmark queue, designed fresh"
 project: Mnemon — content-aware URL triage
 author: maintainer
 revision_history:

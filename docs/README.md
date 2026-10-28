@@ -72,7 +72,7 @@ You → /source-add URL → mnemon add → knowledge-gateway.sh ─ acquire ─�
 - **Claude Code** 2.1.296+ (required) — any subscription (Pro, Max, API key); `mnemon fence-probe` once per version records that its `--restricted` fence holds (extraction refuses to run without the record)
 - **git**, **bash**, **python3**, **jq**, **shasum** (required) — the engine
 - **pyyaml** (Python package, optional) — depth-aware capture (`--depth auto`); without it the depth fold is skipped
-- **defuddle** 0.6+ (optional) — the first converter candidate of URL captures (`pandoc` and the DOM text are the others), URL triage (`mnemon triage`) and depth probing
+- **defuddle** 0.6+ (optional) — the first converter candidate of URL captures (`pandoc` and the DOM text are the others) and depth probing
 - **Poppler** (`pdftotext`, `pdfinfo`; optional) — PDF captures; without it a PDF is refused before anything is published
 - **pandoc** 3+ (optional) — a converter candidate of URL captures and document conversion on import
 - **Google Chrome** or **Chromium** (optional) — the rendered stage of the fetch chain (JavaScript shells, bot walls, `--render`); without it such pages fail as `environment` unless an external fetcher is allowed
@@ -107,7 +107,7 @@ Each skill runs the installed engine's dispatcher. From the shell, the same and 
 | `mnemon status` | Library dashboard — one `Extracted` (folders with `extract.md`) and the stored `status:` words as a breakdown |
 | `mnemon status --brief [--json] [--budget <s>]` | One line of the vault store for a briefing: counters, seeds / drafts with their ages, the data checks' summary (`N fail · N warn · probed a/b`), the research document's (`research: N pages · K fail · M warn`); read-only; the whole run is a worker process killed at `--budget` seconds (default 10), and the line then says `not probed (budget … exceeded)` rather than guess ([specs/2026-10-16-vault-store.md](specs/2026-10-16-vault-store.md)) |
 | `mnemon reindex [--no-hand-edit-report]` | Rebuild the vault's `index.md` from `Sources/`, `Collections/`, `Wiki/` and `Synthesis/` — every row regenerated, replaced rows preserved in `_inputs/index-hand-edits-<date>.md` (not the qmd index); a `## Collections` section lists each collection's status, item count and question, a `## Wiki` section each page's kind, revisions, dossiers and `updated`, both through the research reader |
-| `mnemon triage` | Content-aware URL triage |
+| `mnemon triage list [--status …] [--json]` · `dismiss <rev> [--why …]` · `restore <rev>` · `promote <rev> [<add flags>]` | The bookmark queue: current `tier: bookmark` revisions with their derived status; `dismiss` stores the judgement about a resource on its latest revision (any tier), `promote` captures a card in full ([capture.md](capture.md) §15) |
 | `mnemon research update --page <name> --kind <kind> --collection <dossier>… [--reason <why>] [--recusal on\|off] [--dry-run] [--json]` | Build or rebuild a `Wiki/` page from a recorded package — the supporting dossiers, the charter and every item's `source.md` — in the extractor's fence; validated by the research reader, published as one file with its prints (`based_on`, `inputs`, `body_sha256`); an unchanged package is a no-op, a hand-edited page is never overwritten ([research.md](research.md)) |
 | `mnemon research update --propose [--collection <dossier>] [--page <name>]` · `apply <id> --by <who>` · `delete <page>` | Read-only proposals (a stale page → a rebind of the dossier line, a rebuild, a delete); one approved rebind applied; a suppressed or orphan page removed with its incoming links rewritten |
 | `mnemon research ask --task-id <id> --question <q> [--collection …] [--page …] [--domain <d>] [--limit <n>] [--json]` · `--record --page <name> --outcome used\|not-used\|no-page` | The usable pages' evidential bodies with their locators (never `## Atlas reading`), journaled per task; the use recorded afterwards |
@@ -194,7 +194,7 @@ mnemon/
 │   ├── capture-fetch.py, capture-text.py, capture-site.py, canonical-audit.py
 │   ├── vault-lock.py, fence-probe.sh
 │   ├── mnemon-config.sh       # config loader
-│   └── media-extract.py, kb-*.py, triage-urls.py, archive-audit.py, importers/
+│   └── media-extract.py, kb-*.py, archive-audit.py, importers/
 ├── plugins/mnemon/            # Claude Code plugin: /source-add, /source-search, /source-status
 ├── templates/core/            # 7 extraction templates
 ├── protocols/                 # Schema and convention docs

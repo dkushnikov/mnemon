@@ -54,7 +54,6 @@ Commands:
                              derived status; dismiss stores the judgement on the latest revision
                              (extract.md status, or triage.md without one), promote captures the
                              resource in full (the new revision supersedes the card)
-  triage <input> [...]       Content-aware URL triage of a URL list against the vault
   research update --page <name> --kind <kind> --collection <dossier>… [--reason <why>] [--dry-run] [--json]
                              Build or rebuild a Wiki/ page from its dossiers in the extractor fence
                              (docs/research.md); --propose: proposals only (stale → rebind, …)
@@ -1678,7 +1677,8 @@ case "$cmd" in
   triage)   _resolve_or_die
             # the bookmark queue (phase 3-capture B4): list · dismiss · restore · promote go to
             # bin/mnemon-triage.py — the two writers under the vault lock, promote execs `mnemon add`
-            # (which takes the lock itself); anything else is the URL-list triage (triage-urls.py)
+            # (which takes the lock itself). The URL-list triage spike (triage-urls.py, `triage <file>`)
+            # was retired 2026-10-28 (GH #29): anything else is an unknown subcommand.
             case "${1:-}" in
               list)            shift; exec python3 "$BIN_DIR/mnemon-triage.py" --vault "$VAULT_PATH" list "$@" ;;
               dismiss|restore) _tv="$1"; shift
@@ -1690,8 +1690,8 @@ case "$cmd" in
                                fi
                                exec python3 "$BIN_DIR/vault-lock.py" --vault "$VAULT_PATH" -- python3 "$BIN_DIR/mnemon-triage.py" --vault "$VAULT_PATH" "$_tv" "$@" ;;
               promote)         shift; exec python3 "$BIN_DIR/mnemon-triage.py" --vault "$VAULT_PATH" --mnemon "$0" promote "$@" ;;
-            esac
-            exec python3 "$BIN_DIR/triage-urls.py" --vault "$VAULT_PATH" "$@" ;;
+              *)               usage_error "triage: expected list | dismiss <rev> | restore <rev> | promote <rev> (the URL-list triage \`triage <file>\` was retired; docs/capture.md §15)" ;;
+            esac ;;
   research) _resolve_or_die
             # the research operations (docs/research.md, research/1): update · apply · delete · synthesize
             # write the vault — the single-writer rule, then bin/vault-lock.py; `update --propose`,

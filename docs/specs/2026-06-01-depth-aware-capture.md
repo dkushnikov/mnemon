@@ -247,7 +247,7 @@ v2 spec approved (мейнтейнер: «верю тебе»). Council confiden
 - ✅ **D2 deterministic orchestration** — `bin/kb-depth-fold.py` (probe→fetch high-conf→composite+manifest) + gateway preflight-glue (зеркало `--render`, probe→fold→stdin→`claude -p` verbatim). Любой сбой → обычный захват.
 - ✅ **D4 composite identity + manifest + dedup** — `folded_sources`/`depth` manifest в source.md; gateway dedup матчит url в любом url-поле (canonical+aliases+folded_sources).
 - ✅ **D5 --depth** — `auto|off|force` в gateway; капы (≤1 хоп, ≤4, byte-cap).
-- ✅ **D6a triage false-skip** — `triage-urls.py apply_depth_probe_boost`: probe на skip-boundary (substance≤2, thin) → high-conf → escalate skip→capture. `MNEMON_TRIAGE_DEPTH_PROBE=0` отключает.
+- ✅ **D6a triage false-skip** — `triage-urls.py apply_depth_probe_boost`: probe на skip-boundary (substance≤2, thin) → high-conf → escalate skip→capture. `MNEMON_TRIAGE_DEPTH_PROBE=0` отключает. **2026-10-28: хук ушёл вместе со спайком `triage-urls.py` (GH #29); D6a возвращается с phase-4 скорингом над bookmark-очередью.**
 - ✅ **D6b injection-isolation** — fetched-контент помечен untrusted в extract-prompt.
 - ✅ Тесты: `tests/test_depth.sh` (lib_url, thin/SPA, D6a-gate, D4-dedup) PASS; gateway regression **69/0**.
 - ⬜ **Остаток (не блокирует прямой захват):** `/source-add` `--depth`/ask-on-ambiguous в plugins/mnemon (ранее mnemon-plugin repo) · live-E2E gateway-capture (в dev пропущен, чтобы не плодить дубль openviking) · same-entity для GitLab/HF/arXiv (deferred, v1=GitHub) · exact commit_sha вместо ref в manifest (v2).

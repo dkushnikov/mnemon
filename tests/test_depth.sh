@@ -98,14 +98,8 @@ err="$( MNEMON_TEST_HOOKS= python3 "$BIN/kb-probe-deeper.py" "https://example-sp
 [[ "$err" == *"MNEMON_FETCH_URL_REWRITE"* && "$err" == *"MNEMON_TEST_HOOKS"* ]] && ok "hooks warning names the ignored variables" || bad "hooks warning: $err"
 unset MNEMON_TEST_HOOKS MNEMON_POLICY_ALLOW_LOOPBACK MNEMON_FETCH_URL_REWRITE RENDER_URL_CMD
 
-echo "== D6a: depth-probe gate no-ops when disabled / high-substance =="
-MNEMON_TRIAGE_DEPTH_PROBE=0 python3 - "$BIN" <<'PY' && ok "D6a gate no-op" || bad "D6a gate"
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location('t', sys.argv[1] + '/triage-urls.py')
-m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-assert m.apply_depth_probe_boost('https://x.test/', 2, 'short') == (2, None)
-assert m.apply_depth_probe_boost('https://x.test/', 4, None) == (4, None)
-PY
+echo "== D6a: the triage spike is gone (GH #29) — no triage-urls.py in bin/ =="
+[[ -e "$BIN/triage-urls.py" ]] && bad "bin/triage-urls.py still present (retired 2026-10-28)" || ok "bin/triage-urls.py retired"
 
 echo "== D4: gateway dedup matches url aliases (canonical_url, final_url, posted_url, folded_sources) =="
 # The real gateway against the capture stubs (tests/fixtures/capture/setup.sh): a folder whose

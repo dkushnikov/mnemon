@@ -752,11 +752,14 @@ assert_eq "$rc" "0" "audit via dispatcher exits 0"
 assert_contains "$out" "GAP A" "audit runs archive-audit.py with the instance config"
 run python3 "$MNEMON_ROOT/bin/archive-audit.py" --cutoff 2026-01-01
 assert_eq "$rc" "0" "archive-audit.py resolves config through the engine when --config is absent"
-run "$MNEMON" triage --help
-assert_eq "$rc" "0" "triage --help via dispatcher exits 0"
-assert_contains "$out" "--vault" "triage help mentions --vault"
-run python3 "$MNEMON_ROOT/bin/triage-urls.py" "$CFG_DIR/default"
-assert_eq "$rc" "2" "triage-urls.py without --vault is an error (no hardcoded vault)"
+# the URL-list triage spike was retired (GH #29): `triage <file>` is an unknown subcommand, usage error
+printf 'https://example.com/a\n' > "$TEST_TMPDIR/urls.txt"
+run "$MNEMON" triage "$TEST_TMPDIR/urls.txt"
+assert_eq "$rc" "2" "triage <file> is an unknown subcommand (the URL-list spike is retired)"
+assert_contains "$out" "triage: expected list | dismiss <rev> | restore <rev> | promote <rev>" "...naming the four verbs"
+run "$MNEMON" triage
+assert_eq "$rc" "2" "triage without a verb is a usage error"
+[[ -e "$MNEMON_ROOT/bin/triage-urls.py" ]] && fail "bin/triage-urls.py is gone" "still present" || pass "bin/triage-urls.py is gone"
 run "$MNEMON" --instance nosuch reindex
 assert_eq "$rc" "2" "config-dependent subcommand fails with the loader's status (2: missing instance)"
 assert_contains "$out" "instances/nosuch.yaml" "...naming the missing instance file"

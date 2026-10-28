@@ -5,8 +5,7 @@
 slash, sorts and filters the query and drops the fragment so kb-probe-deeper.py / kb-depth-fold.py can tell
 whether two links point at the same page of the same site. The identity of a captured url resource is the
 versioned canonical form of `bin/capture/resolve.py` (`canonicalize`, v1), which does none of those things
-on purpose (docs/specs/2026-10-15-capture-layer.md §3.1). `triage-urls.py` keeps its own advisory
-normalizer. Importable module (underscore name); the design specs refer to it as `lib-url.py`.
+on purpose (docs/specs/2026-10-15-capture-layer.md §3.1). Importable module (underscore name); the design specs refer to it as `lib-url.py`.
 
 No third-party deps — stdlib only.
 """

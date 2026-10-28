@@ -281,10 +281,14 @@ assert_eq "$rc" "0" "a legacy placeholder promotes"
 assert_eq "$(fm "$VAULT/Sources/$(printf '%s\n' "$out" | grep '^RESULT:revision=' | cut -d= -f2)/source.md" supersedes)" "\"2026-09-01_feedf00d\"" "...superseded by the full capture"
 
 # ---------------------------------------------------------------------------------------------
-echo "--- 7. the URL-list triage is untouched ---"
+echo "--- 7. the URL-list triage spike is retired (GH #29): any other verb is a usage error ---"
+printf 'https://example.com/list\n' > "$TEST_TMPDIR/urls.txt"
+run_m triage "$TEST_TMPDIR/urls.txt"
+assert_eq "$rc" "2" "triage <file> exits 2"
+assert_contains "$err" "triage: expected list | dismiss <rev> | restore <rev> | promote <rev>" "...naming the four verbs"
+assert_contains "$err" "retired" "...and saying the URL-list triage was retired"
 run_m triage --help
-assert_eq "$rc" "0" "triage --help still answers (triage-urls.py)"
-assert_contains "$out" "--vault" "...its own usage"
+assert_eq "$rc" "2" "triage --help is no longer the spike's usage (exit 2, the dispatcher's message)"
 
 cleanup_capture_test
 summary
