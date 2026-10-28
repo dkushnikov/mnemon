@@ -565,6 +565,17 @@ class FixtureVaultTests(unittest.TestCase):
         self.assertEqual((r["result_type"], r["tier"], r["status"], r["path"], r["kind"], r["domains"], r["rating"]),
                          ("wiki", None, None, "Wiki/", "contradiction", ["learning", "mc/ai"], None))
         self.assertFalse(any("Mentions trust here too" in r["snippet"] for r in out["wiki"]["results"]), "## Atlas reading is cut")
+        out = self._search("--query", "maintained_by", "--include-wiki", "--include-orphans")
+        self.assertEqual(out["wiki"]["count"], 0, "the frontmatter is not searched (P2-10)")
+        out = self._search("--query", "complementary", "--include-wiki")
+        self.assertEqual(out["wiki"]["count"], 0, "a word only in ## Atlas reading never matches")
+        self.assertEqual(lr.WIKI_DIR, "Wiki")
+        text = "---\ntype: wiki\n---\n# T\nbody\n## Atlas reading ##\nopinion\n```\n## not a heading\nstill opinion\n```\n## Log\n- log\n"
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("mnemon_search", BIN_DIR / "mnemon-search.py")
+        ms = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ms)
+        self.assertEqual(ms.searchable_wiki_text(text), "# T\nbody\n## Log\n- log\n", "Codex 3: the reader's heading and fence rules cut the section")
         out = self._search("--query", "trust", "--include-wiki", "--include-orphans", "--wiki-limit", "2")
         self.assertEqual([r["file"] for r in out["wiki"]["results"]], ["Orphan page.md", "Edited outside.md"])
         out = self._search("--query", "quotas", "--include-wiki", "--include-orphans", "--domain", "mc/ai")
@@ -572,23 +583,47 @@ class FixtureVaultTests(unittest.TestCase):
         out = self._search("--query", "nothing-matches-this-token-anywhere", "--include-wiki")
         self.assertEqual((out["count"], out["wiki"]["count"]), (0, 0))
 
-    def test_search_refuses_an_unlistable_wiki_folder(self):
+    def test_search_refuses_an_unlistable_wiki_or_collections_folder(self):
+        if os.geteuid() == 0:
+            self.skipTest("root lists everything")
         tmp = tempfile.mkdtemp()
+        env = {k: v for k, v in os.environ.items() if k not in ("MNEMON_CONFIG", "MNEMON_INSTANCE", "MNEMON_CONFIG_DIR")}
+
+        def search(copy, *args):
+            return subprocess.run([sys.executable, str(BIN_DIR / "mnemon-search.py"), "--vault", str(copy), "--query", "page", *args],
+                                  capture_output=True, text=True, env=env)
         try:
             copy = Path(tmp) / "v"
             shutil.copytree(FIXTURE, copy)
             os.chmod(copy / "Wiki", 0)
             try:
-                env = {k: v for k, v in os.environ.items() if k not in ("MNEMON_CONFIG", "MNEMON_INSTANCE", "MNEMON_CONFIG_DIR")}
-                p = subprocess.run([sys.executable, str(BIN_DIR / "mnemon-search.py"), "--vault", str(copy), "--query", "trust", "--include-wiki"],
-                                   capture_output=True, text=True, env=env)
+                p = search(copy, "--include-wiki")
                 self.assertEqual(p.returncode, 2)
                 self.assertIn("Wiki/ could not be listed", p.stderr)
-                p = subprocess.run([sys.executable, str(BIN_DIR / "mnemon-search.py"), "--vault", str(copy), "--query", "trust"],
-                                   capture_output=True, text=True, env=env)
+                p = search(copy)
                 self.assertEqual(p.returncode, 0, "without the flag the folder is never touched")
             finally:
                 os.chmod(copy / "Wiki", 0o755)
+            # P1-2: an unlistable Collections/ hides every veto — exit 2 under --include-wiki, even with --include-orphans
+            os.chmod(copy / "Collections", 0)
+            try:
+                p = search(copy, "--include-wiki", "--include-orphans")
+                self.assertEqual(p.returncode, 2)
+                self.assertIn("Collections/ could not be listed", p.stderr)
+                p = search(copy, "--include-source")
+                self.assertEqual(p.returncode, 0, "without the wiki or collections flag the folder is never touched")
+            finally:
+                os.chmod(copy / "Collections", 0o755)
+            # a not-probed page (an unreadable vetoing dossier) is kept out of the block like an unbound one
+            os.chmod(copy / "Collections" / "Vetoed.md", 0)
+            try:
+                p = search(copy, "--include-wiki", "--include-orphans", "--wiki-limit", "20")
+                self.assertEqual(p.returncode, 0, p.stderr)
+                files = [r["file"] for r in json.loads(p.stdout)["wiki"]["results"]]
+                self.assertNotIn("Vetoed page.md", files)
+                self.assertIn("Orphan page.md", files)
+            finally:
+                os.chmod(copy / "Collections" / "Vetoed.md", 0o644)
         finally:
             shutil.rmtree(tmp)
 
@@ -808,7 +843,7 @@ class WikiValidatorTests(unittest.TestCase):
     def test_integrity_error_is_unbound_and_weak(self):
         self.v.source(REV_M, managed_source(self.body + "edited\n", capture_sha=sha(self.body)))
         p = self._page([(REV_M, sha(self.body), "capture")])
-        self.assertEqual(p["states"], ["unbound", "weak-evidence"])
+        self.assertEqual(p["states"], ["unbound", "inputs-changed", "weak-evidence"], "the text changed: inputs-changed whatever the seal (P2-7)")
         self.assertIn("integrity error", p["reasons"]["unbound"][0])
 
     def test_weak_evidence(self):
@@ -834,12 +869,11 @@ class WikiValidatorTests(unittest.TestCase):
         legacy_body = "# Beta\n\nLegacy text.\n"
         p = self._page([(REV_L, sha(legacy_body), "observed")], body="# T\n- [[Sources/%s/source#Beta]]\n" % REV_L)
         self.assertEqual((p["severity"], p["states"], p["reasons"]["stale"]), ("warn", ["stale"], ["%s is superseded" % REV_L]))
-        # a dangling supersedes target elsewhere makes the graph incomplete: a superseded candidate is
-        # not probed, never "current" (interface §9); the check research/wiki-stale is not probed as a whole
+        # a dangling supersedes target elsewhere changes nothing for a known successor edge (P2-4):
+        # the verdict stays stale and the page usable
         self.v.source("2026-06-04_44444444", legacy_source("# D\n", supersedes="2026-01-01_00000000"), extract=False)
         p = self._page([(REV_L, sha(legacy_body), "observed")], body="# T\n- [[Sources/%s/source#Beta]]\n" % REV_L)
-        self.assertEqual((p["severity"], p["states"], p["usable"]), (None, [], False))
-        self.assertEqual(p["not_probed"], ["stale: the supersedes graph is incomplete (%s)" % REV_L])
+        self.assertEqual((p["severity"], p["states"], p["usable"], p["not_probed"]), ("warn", ["stale"], True, []))
 
     def test_stale_not_probed_only_for_superseded_candidates(self):
         """A revision that nothing supersedes is current whatever the graph's holes elsewhere."""
@@ -931,6 +965,107 @@ class WikiValidatorTests(unittest.TestCase):
         self.assertEqual(p["reasons"]["unresolved"], ["line %d: [[Collections/Gone]] does not exist" % n, "line %d: [[Synthesis/None]] does not exist" % n,
                                                       "line %d: [[Loose]] (not a link into Sources/, Collections/, Wiki/ or Synthesis/)" % n])
         self.assertEqual(p["reasons"]["unbound"], ["line %d: link outside the instance: /abs" % n])
+
+    def test_unreadable_vetoing_dossier_is_not_probed(self):
+        """Reviewer A P1-1: a veto that cannot be read is unknown, never absent."""
+        if os.geteuid() == 0:
+            self.skipTest("root reads everything")
+        self.v.collection("Off", "", extra="wiki: off\n")
+        self.v.wiki("P", wiki_page("P", [(REV_M, sha(self.body), "capture")], BODY % REV_M, collections=("Dossier", "Off")))
+        self.assertEqual(self.v.page("P")["states"], ["suppressed"])
+        os.chmod(self.v.root / "Collections" / "Off.md", 0)
+        try:
+            p = self.v.page("P")
+        finally:
+            os.chmod(self.v.root / "Collections" / "Off.md", 0o644)
+        self.assertEqual((p["severity"], p["usable"], p["states"]), (None, False, []))
+        self.assertEqual(p["not_probed"], ["collection `Off` could not be read (its veto cannot be evaluated)"])
+        # ...and an unreadable dossier listed as the only support withholds the orphan verdict too
+        os.chmod(self.v.root / "Collections" / "Dossier.md", 0)
+        try:
+            p = self._page([(REV_M, sha(self.body), "capture")], collections=("Dossier",))
+        finally:
+            os.chmod(self.v.root / "Collections" / "Dossier.md", 0o644)
+        self.assertEqual((p["severity"], p["states"]), (None, []))
+
+    def test_unlistable_collections_folder_is_not_probed(self):
+        """Reviewer A P1-2: without the dossiers no veto and no orphan verdict exist."""
+        if os.geteuid() == 0:
+            self.skipTest("root lists everything")
+        os.chmod(self.v.root / "Collections", 0)
+        try:
+            p = self._page([(REV_M, sha(self.body), "capture")])
+        finally:
+            os.chmod(self.v.root / "Collections", 0o755)
+        self.assertEqual((p["severity"], p["usable"], p["states"]), (None, False, []))
+        self.assertTrue(p["not_probed"][0].startswith("Collections/ could not be listed"), p["not_probed"])
+
+    def test_unreadable_charter_is_not_probed(self):
+        if os.geteuid() == 0:
+            self.skipTest("root reads everything")
+        (self.v.root / "_meta").mkdir()
+        (self.v.root / "_meta" / "charter.md").write_text("# Charter\n", encoding="utf-8")
+        os.chmod(self.v.root / "_meta" / "charter.md", 0)
+        try:
+            p = self._page([(REV_M, sha(self.body), "capture")], charter=sha("# Charter\n"))
+        finally:
+            os.chmod(self.v.root / "_meta" / "charter.md", 0o644)
+        self.assertEqual((p["severity"], p["states"], p["not_probed"]), (None, [], ["the charter could not be read (inputs cannot be compared)"]))
+
+    def test_protocol_version_and_capture_text_change(self):
+        self.v.wiki("P", wiki_page("P", [(REV_M, sha(self.body), "capture")], BODY % REV_M).replace('protocol: "research/1"', 'protocol: "research/0"'))
+        self.assertEqual(self.v.page("P")["reasons"]["inputs-changed"], ["protocol `research/0` ≠ engine `research/1`"])
+        # P2-7: a changed text is inputs-changed whatever the seal (and unbound, since the seal no longer holds)
+        self.v.source(REV_M, managed_source(self.body + "more\n", capture_sha=sha(self.body)))
+        p = self._page([(REV_M, sha(self.body), "capture")])
+        self.assertIn("text of %s changed" % REV_M, p["reasons"]["inputs-changed"])
+        self.assertEqual(p["states"], ["unbound", "inputs-changed", "weak-evidence"])
+
+    def test_cycle_is_not_probed_but_a_dangling_edge_elsewhere_is_not(self):
+        """P2-4: a known successor edge is a verdict; only a cycle member or an unreadable source is unknown."""
+        self.v.source(REV_N, legacy_source("# N\n", supersedes=REV_L))
+        self.v.source("2026-06-04_44444444", legacy_source("# D\n", supersedes="2026-01-01_00000000"), extract=False)
+        legacy_body = "# Beta\n\nLegacy text.\n"
+        p = self._page([(REV_L, sha(legacy_body), "observed")], body="# T\n- [[Sources/%s/source#Beta]]\n" % REV_L)
+        self.assertEqual((p["severity"], p["states"], p["not_probed"]), ("warn", ["stale"], []), "the dangling edge elsewhere changes nothing")
+        # a two-revision cycle: both members are not probed
+        self.v.source(REV_L, legacy_source(legacy_body, supersedes=REV_N))
+        p = self._page([(REV_L, sha(legacy_body), "observed")], body="# T\n- [[Sources/%s/source#Beta]]\n" % REV_L)
+        self.assertEqual((p["severity"], p["states"], p["not_probed"]), (None, [], ["stale: %s lies on a supersedes cycle" % REV_L]))
+        # an unreadable source.md anywhere: every stale verdict is unknown
+        if os.geteuid() != 0:
+            self.v.source(REV_L, legacy_source(legacy_body))
+            os.chmod(self.v.root / "Sources" / "2026-06-04_44444444" / "source.md", 0)
+            try:
+                p = self._page([(REV_M, sha(self.body), "capture")])
+            finally:
+                os.chmod(self.v.root / "Sources" / "2026-06-04_44444444" / "source.md", 0o644)
+            self.assertEqual(p["not_probed"], ["stale: a source.md could not be read, the supersedes graph is incomplete (%s)" % REV_M])
+
+    def test_suppressed_pages_link_forms_still_veto(self):
+        """P2-9: the owner's intent in a decorated entry holds while the dossier is reported."""
+        for form in ('"[[Wiki/P|the page]]"', '"Wiki/P"', '"P.md"'):
+            self.v.collection("Named", "", extra="suppressed_pages: [%s]\n" % form)
+            p = self._page([(REV_M, sha(self.body), "capture")], collections=("Dossier", "Named"))
+            self.assertEqual(p["states"], ["suppressed"], form)
+        self.assertEqual(lr.suppressed_page_name("[[Wiki/A b|x]]"), "A b")
+
+    def test_body_boundary(self):
+        """P2-2 / P2-3 / Codex 1 and 6: fences before the first heading, text outside the body, a consumable-only page."""
+        leading = "```\n# Inside a fence\n```\n# Real\n- [[Sources/%s/source#Alpha]]\n## Log\n- x\n" % REV_L
+        rec = lr.read_wiki_text(wiki_page("P", [(REV_M, sha(self.body), "capture")], leading), "P")
+        self.assertEqual([l["rev"] for l in rec["links"]], [REV_L], "the link after the leading fence is seen")
+        self.assertEqual(rec["body"]["cut"], "Log")
+        self.assertIn("text before the first heading (outside the evidential body)", rec["errors"])
+        p = self._page([(REV_M, sha(self.body), "capture")], body="preamble\n" + BODY % REV_M)
+        self.assertEqual((p["severity"], p["states"]), ("fail", ["schema"]))
+        rec = lr.read_wiki_text(wiki_page("P", [(REV_M, sha(self.body), "capture")], BODY % REV_M + "## Log\n- x\n## Open questions\n- hidden\n# Another\n"), "P")
+        self.assertEqual([e for e in rec["errors"] if "after" in e],
+                         ["section `Open questions` after `## Log` is outside the evidential body (only `## Atlas reading` and `## Log` may follow it)",
+                          "section `Another` after `## Log` is outside the evidential body (only `## Atlas reading` and `## Log` may follow it)"])
+        rec = lr.read_wiki_text(wiki_page("P", [(REV_M, sha(self.body), "capture")], "## Atlas reading\nopinion only\n"), "P")
+        self.assertIn("no evidential body (no heading before `## Atlas reading` / `## Log`)", rec["errors"])
+        self.assertEqual(rec["body"]["sha256"], None)
 
     def test_schema_fail_and_unreadable_pages(self):
         self.v.wiki("P", "---\ntype: wiki\n---\n# T\n")

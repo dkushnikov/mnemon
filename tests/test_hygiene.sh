@@ -33,7 +33,7 @@ PJ="$MNEMON_ROOT/plugins/mnemon/plugin.json"
 python3 -m json.tool "$MP" >/dev/null 2>&1 && pass "marketplace.json is valid JSON" || fail "marketplace.json is valid JSON" "python3 -m json.tool failed"
 python3 -m json.tool "$PJ" >/dev/null 2>&1 && pass "plugin.json is valid JSON" || fail "plugin.json is valid JSON" "python3 -m json.tool failed"
 jq_() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))' "$1" "$2"; }
-assert_eq "$(jq_ "$PJ" 'd["version"]')" "0.2.2" "plugin.json version is 0.2.2"
+assert_eq "$(jq_ "$PJ" 'd["version"]')" "0.3.0" "plugin.json version is 0.3.0"
 assert_eq "$(jq_ "$PJ" 'd["name"]')" "mnemon" "plugin.json name is mnemon"
 assert_eq "$(jq_ "$MP" 'd["name"]')" "mnemon" "marketplace name is mnemon"
 assert_eq "$(jq_ "$MP" 'len(d["plugins"])')" "1" "marketplace lists one plugin"

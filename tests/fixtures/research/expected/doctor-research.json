@@ -262,6 +262,7 @@
   },
   {
    "counts": {
+    "not_probed": 0,
     "stale": 1
    },
    "detail": "1 pages rest on a superseded revision (Stale page)",
