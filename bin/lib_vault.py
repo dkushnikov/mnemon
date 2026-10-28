@@ -264,6 +264,8 @@ def _new_record(name: str) -> dict:
         "src": {}, "src_nested": {}, "src_keys": [], "ex": {}, "ex_nested": {}, "ex_keys": [],
         "body_sha256": None, "body_words": None, "body_bytes": None, "ex_sections": [],
         "klass": None, "managed_missing": [], "underscore_keys": [],
+        # phase 3-capture: the triage sidecar of a revision without extract.md (B4) and the derived judgement
+        "has_triage": False, "triage": {}, "judgement": None, "effective_tier": "full",
     }
 
 
@@ -349,6 +351,21 @@ def read_folder(sources: str, name: str, snapshot: dict) -> dict:
     rec["rating"] = parse_int(rec["rating_raw"])
     rec["tier"] = (src.get("tier") or ex.get("tier") or "").strip().lower() or None
     rec["context"] = (src.get("context") or "").strip()
+    # the effective tier (vault store §4): the stored tier, else the legacy placeholder word, else full
+    rec["effective_tier"] = rec["tier"] or ("bookmark" if (src.get("status") or "").strip() == "bookmark" else "full")
+    # the judgement (B4, O6): `status: dismissed` of extract.md, or of triage.md for a revision without one
+    tp = os.path.join(folder, "triage.md")
+    if os.path.isfile(tp):
+        rec["has_triage"] = True
+        tdata = _read_bytes(tp, snapshot)
+        if tdata is not None:
+            tblock, _tstate = _header(tp, tdata, snapshot)
+            if tblock is not None:
+                rec["triage"], _n, _k = parse_block(tblock)
+    if (ex.get("status") or "").strip() == "dismissed" and rec["has_extract"]:
+        rec["judgement"] = "dismissed"
+    elif not rec["has_extract"] and (rec["triage"].get("status") or "").strip() == "dismissed":
+        rec["judgement"] = "dismissed"
     rec["cc_vault"] = (rec["ex_nested"].get("capture_context", {}).get("vault") or "").strip()
     rec["completeness"] = cap.get("completeness") if "completeness" in cap else None
     rec["raw_store"] = (cap.get("raw_store") or "").strip()
@@ -928,6 +945,26 @@ def counters(scan: dict) -> dict:
     for page in pages:
         filed.update(e["rev"] for e in page["based_on"] if e["rev"] in existing)
     queues = scan["inputs"]["queues"]
+    # phase 3-capture: `promoted(rev)` (vault store §4) — a bookmark with a full descendant in the
+    # supersedes graph (transitively: a card refreshed and then captured in full is promoted too)
+    successors = g["successors"]
+    tier_of = {r["name"]: r["effective_tier"] for r in folders}
+
+    def has_full_descendant(name: str) -> bool:
+        seen: set = set()
+        todo = list(successors.get(name, []))
+        while todo:
+            n = todo.pop()
+            if n in seen:
+                continue
+            seen.add(n)
+            if tier_of.get(n, "full") == "full":
+                return True
+            todo.extend(successors.get(n, []))
+        return False
+
+    bookmarks = [r for r in folders if r["has_source"] and r["effective_tier"] == "bookmark"]
+    promoted = sum(1 for r in bookmarks if has_full_descendant(r["name"]))
     c = {
         "folders": len(folders),
         "managed": sum(1 for r in folders if r["klass"] == "managed"),
@@ -970,6 +1007,12 @@ def counters(scan: dict) -> dict:
         "archive_entries": len(scan["archive"]["entries"]),
         "status": status_breakdown(folders),
         "synthesis_status": synthesis_breakdown(notes),
+        # phase 3-capture (additive): the capture tiers, the promotions and the bookmark queue
+        "tier": {"full": sum(1 for r in folders if r["has_source"] and r["effective_tier"] == "full"),
+                 "bookmark": len(bookmarks)},
+        "promoted": promoted,
+        "triage": {"bookmarked": sum(1 for r in bookmarks if r["current"] and r["judgement"] != "dismissed"),
+                   "dismissed": sum(1 for r in bookmarks if r["current"] and r["judgement"] == "dismissed")},
     }
     return c
 
@@ -1009,7 +1052,9 @@ def main(argv: List[str]) -> int:
                            ("wiki", c["wiki_pages"]), ("wiki_fail", c["wiki_fail"]),
                            ("status_extracted", st["extracted"]), ("status_dismissed", st["dismissed"]),
                            ("status_legacy_words", st["legacy_words"]), ("status_empty", st["empty"]),
-                           ("status_unknown", st["unknown"]), ("unreadable", scan["snapshot"]["unreadable"])):
+                           ("status_unknown", st["unknown"]), ("unreadable", scan["snapshot"]["unreadable"]),
+                           ("bookmarks", c["triage"]["bookmarked"] + c["triage"]["dismissed"]),
+                           ("bookmarks_dismissed", c["triage"]["dismissed"]), ("promoted", c["promoted"])):
             print("%s=%s" % (key, value))
         return 0
     print(json.dumps({"vault": scan["vault"], "snapshot": scan["snapshot"], "counters": c},
