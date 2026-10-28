@@ -279,14 +279,18 @@ def check_identity(scan: dict, cfg: dict) -> Check:
     # share-tagged X URLs before canonical v2, say) is a pre-rule duplicate — the rule moved, the
     # engine did nothing wrong — and warns with the audit door (reviewer A P2-1, 2026-10-28)
     klass = {r["name"]: r["klass"] for r in current}
-    recorded = {r["name"]: (r["canonical_url"] or r["url"] or "") for r in current}
+    # each member's identity under the version it was captured under (legacy and pre-key folders: v1)
+    recorded = {r["name"]: r["canonical_recorded"] for r in current}
     legacy_only = 0
     pre_rule = 0
     for key, members in groups:
-        distinct_recorded = len({recorded.get(m) for m in members}) > 1
-        if key.startswith("canonical ") and distinct_recorded and all(klass.get(m) == "managed" for m in members):
+        # pre-rule: distinct identities under their own recorded versions, one under the current rules —
+        # the rule moved, nothing bypassed the dedup (two `utm` variants were one identity under v1 too,
+        # so they stay a plain duplicate; reviewer A N1)
+        distinct_recorded = len({recorded.get(m) for m in members}) > 1 and None not in {recorded.get(m) for m in members}
+        if key.startswith("canonical ") and distinct_recorded:
             pre_rule += 1
-            c.add("warn", {"id": " + ".join(members), "reason": "pre-rule duplicate (%s) — captured as distinct identities under an older canonicalization, coinciding under the current rules; resolve: mnemon audit --canonical" % key,
+            c.add("warn", {"id": " + ".join(members), "reason": "pre-rule duplicate (%s) — distinct identities under the canonicalization they were captured with, one under the current rules; resolve: mnemon audit --canonical" % key,
                            "members": members, "rating": None, "words": None})
         elif any(klass.get(m) == "managed" for m in members):
             c.add("fail", {"id": " + ".join(members), "reason": "duplicate (%s)" % key, "members": members,

@@ -153,10 +153,14 @@ def body_bytes(data: bytes) -> Optional[bytes]:
     return data[i + 5:]
 
 
-def canonical_of(url: Optional[str]) -> Optional[str]:
+def canonical_of(url: Optional[str], version: Optional[int] = None) -> Optional[str]:
+    """The canonical form of a URL under the current rule set, or under `version` (a folder's recorded
+    `capture.canonical_version`, for the doctor's pre-rule test); None for no URL or an invalid one."""
     if not url:
         return None
     try:
+        if version is not None and version in resolve.VERSIONS:
+            return resolve.canonicalize(url, version).url
         return resolve.canonicalize(url).url
     except resolve.InvalidURL:
         return None
@@ -339,6 +343,14 @@ def read_folder(sources: str, name: str, snapshot: dict) -> dict:
     rec["url"] = src.get("url") or None
     rec["canonical_url"] = src.get("canonical_url") or None
     rec["canonical"] = canonical_of(rec["canonical_url"] or rec["url"])
+    # the canonicalization version the folder was captured under (capture.canonical_version; a folder
+    # without one — legacy, or phase 2 before the key — is read as v1), and its identity under THAT
+    # version: the doctor tells a pre-rule duplicate (distinct then, one now) from a dedup bypass
+    try:
+        rec["canonical_version"] = int(str(cap.get("canonical_version") or "1").strip())
+    except ValueError:
+        rec["canonical_version"] = 1
+    rec["canonical_recorded"] = canonical_of(rec["canonical_url"] or rec["url"], rec["canonical_version"])
     rec["resource_sha256"] = src.get("resource_sha256") or None
     # the revisions this one supersedes — one value or a block list, both forms — read by the
     # reindexer's rule; `supersedes` keeps the first of them for the consumers that expect one

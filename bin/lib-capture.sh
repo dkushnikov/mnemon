@@ -106,10 +106,12 @@
 #   retryable= [replayed=true] — values single-line, control characters removed, computed from the
 #   files. Exit 0 extracted / skipped-duplicate / replay of a complete capture · 1 failed or
 #   integrity-error · 2 usage/contract · 3 extractor environment missing before publication ·
-#   4 source published, extract not · 75 lock held — with `RESULT:status=locked`,
-#   `error_class=locked`, `retryable=true` and nothing else set (GH #30): vault-lock.py prints the
-#   block itself on its refusal (`--locked-result <capture_id>`, passed by the dispatcher's `add`
-#   and by cap_reexec_under_lock), the inherited-descriptor refusal prints it from cap_under_lock.
+#   4 source published, extract not · 75 lock held. The VAULT lock case prints a RESULT block too
+#   (GH #30): capture_id as requested (or empty), status=locked, error_class=locked, retryable=true,
+#   extract=none, revision/path/title/hash empty — vault-lock.py prints it on its own refusal
+#   (`--locked-result <capture_id>`, passed by the dispatcher's `add` and by cap_reexec_under_lock),
+#   the inherited-descriptor refusal prints it from cap_under_lock. The ENGINE lock refusal (a
+#   `mnemon release` in progress, mnemon-config.sh) exits 75 with its message and no RESULT lines.
 
 _LIB_CAPTURE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

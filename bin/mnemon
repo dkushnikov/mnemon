@@ -172,11 +172,11 @@ _has_flag() {
   return 1
 }
 
-# _flag_value <--flag> <args…>: the value of a flag given as `--flag v` or `--flag=v`; 1 when absent.
+# _flag_value <--flag> <args…>: the value of a flag given as `--flag v` (the gateway's one form; a
+# `--flag=v` is not a flag the gateway accepts and is not read here); 1 when absent.
 _flag_value() {
   local want="$1" a prev=""; shift
   for a in "$@"; do
-    case "$a" in "$want"=*) printf '%s' "${a#*=}"; return 0 ;; esac
     if [[ "$prev" == "$want" ]]; then printf '%s' "$a"; return 0; fi
     prev="$a"
   done

@@ -325,6 +325,9 @@ mixed = open(os.path.join(fix, "ytdlp-429-warning-then-private.stderr.txt"), enc
 assert m.classify_wall(mixed) is None, m.classify_wall(mixed)
 assert m._wall_line(mixed).startswith("ERROR: [youtube] abc123xyz00: Private video"), m._wall_line(mixed)
 assert m.classify_wall("WARNING: HTTP Error 429\nERROR: [youtube] x: Sign in to confirm you're not a bot.") == "bot-wall"
+# a traceback after an ERROR (yt-dlp -v) never names a wall (reviewer A N3)
+tb = "ERROR: [youtube] abc: Video unavailable\nTraceback (most recent call last):\n  File \"x.py\", line 1, in <module>\n    raise Exc(\"HTTP Error 429: Too Many Requests\")\nExc: HTTP Error 429: Too Many Requests"
+assert m.classify_wall(tb) is None, m.classify_wall(tb)
 # the age gate is a login wall (D6), never retryable
 assert m.classify_wall("ERROR: [youtube] x: Sign in to confirm your age. This video may be inappropriate for some users.") == "login"
 assert m._wall_line(ytdlp).startswith("ERROR: [youtube] abc123xyz00: Sign in to confirm"), m._wall_line(ytdlp)

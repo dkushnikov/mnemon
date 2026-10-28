@@ -241,16 +241,25 @@ def _wall_candidates(text):
     `ERROR` blocks exist only they decide: a transient 429 `WARNING:` before a permanent
     `ERROR: … Private video` must not make the capture retryable (reviewer A P2-3). Without any
     prefixed ERROR every line is its own candidate."""
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    blocks, cur = [], None
-    for ln in lines:
-        if ln.split(":", 1)[0].upper() in _PREFIXES:
-            cur = [ln]
+    raw = [ln for ln in text.splitlines() if ln.strip()]
+    blocks, cur, in_tb = [], None, False
+    for ln in raw:
+        s = ln.strip()
+        if s.split(":", 1)[0].upper() in _PREFIXES:
+            cur = [s]
+            in_tb = False
             blocks.append(cur)
         elif cur is not None:
-            cur.append(ln)
+            # a continuation line of the message; an indented line, and everything from a `Traceback`
+            # on until the next prefixed line (`-v` output), is the tool's own diagnostics and never
+            # names a wall (reviewer A N3)
+            if s.startswith("Traceback"):
+                in_tb = True
+            if in_tb or ln[:1].isspace():
+                continue
+            cur.append(s)
     errors = [b for b in blocks if b[0].upper().startswith("ERROR")]
-    return errors or [[ln] for ln in lines]
+    return errors or [[s.strip()] for s in raw]
 
 
 def _match_wall(block):

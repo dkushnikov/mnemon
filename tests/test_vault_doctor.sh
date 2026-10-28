@@ -777,11 +777,25 @@ VAULT="$TEST_TMPDIR/prerule"; mkdir -p "$VAULT/Sources" "$VAULT/_meta"
 XS1=2026-10-09_xs000001; XS2=2026-10-10_xs000002; XS3=2026-10-11_xs000003; XS4=2026-10-12_xs000004
 mk_pair "$XS1" 350 5 'url: "https://x.com/u/status/1?s=20"' 'canonical_url: "https://x.com/u/status/1?s=20"'
 mk_pair "$XS2" 350 5 'url: "https://x.com/u/status/1?s=46"' 'canonical_url: "https://x.com/u/status/1?s=46"'
-# ...while two managed revisions recorded under the SAME identity are a real dedup bypass (fail)
+# ...while two managed revisions recorded under the SAME identity are a real dedup bypass (fail), and so
+# are two `utm` variants: one identity under v1 already (reviewer A N1 — never excused as pre-rule)
 mk_pair "$XS3" 350 5 'url: "https://example.com/same"' 'canonical_url: "https://example.com/same"'
 mk_pair "$XS4" 350 5 'url: "https://example.com/same?utm_source=x"' 'canonical_url: "https://example.com/same"'
+XS5=2026-10-13_xs000005; XS6=2026-10-14_xs000006
+mk_pair "$XS5" 350 5 'url: "https://example.com/utm?utm_source=a"' 'canonical_url: "https://example.com/utm?utm_source=a"'
+mk_pair "$XS6" 350 5 'url: "https://example.com/utm?utm_source=b"' 'canonical_url: "https://example.com/utm?utm_source=b"'
+# a legacy + managed pair of one share-tagged post is pre-rule too (the P2-1 remainder)
+XL7=2026-09-13_xl000007; XM8=2026-10-15_xm000008
+mk_legacy "$XL7" 350 'url: "https://x.com/u/status/2?s=20"'; mk_extract "$XL7" 5
+mk_pair "$XM8" 350 5 'url: "https://x.com/u/status/2?s=46"' 'canonical_url: "https://x.com/u/status/2?s=46"'
 doc
 assert_eq "$(status_of store/identity)" "fail" "I2: the same-identity managed pair still fails"
+assert_contains "$(line_of store/identity)" "4 groups share a resource" "I2: four groups"
+assert_contains "$(line_of store/identity)" "pre-rule 2 (canonicalization moved; mnemon audit --canonical)" "I2: two pre-rule pairs (managed+managed and legacy+managed), the utm pair not among them"
+doc --json
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=[x for x in d["checks"] if x["name"]=="store/identity"][0]; r={i["id"]: i["reason"].split(" ")[0] for i in c["items"]}; print(r.get(sys.argv[1]+" + "+sys.argv[2]), r.get(sys.argv[3]+" + "+sys.argv[4]))' "$XS5" "$XS6" "$XL7" "$XM8")" "duplicate pre-rule" "I2 JSON: the utm pair is a plain duplicate (fail), the legacy+managed share pair pre-rule (warn)"
+rm -rf "$VAULT/Sources/$XS5" "$VAULT/Sources/$XS6" "$VAULT/Sources/$XL7" "$VAULT/Sources/$XM8"
+doc
 assert_contains "$(line_of store/identity)" "2 groups share a resource" "I2: two groups"
 assert_contains "$(line_of store/identity)" "pre-rule 1 (canonicalization moved; mnemon audit --canonical)" "I2: the pre-rule pair is counted apart with the audit door"
 doc --json

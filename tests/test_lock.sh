@@ -31,7 +31,7 @@ assert_eq "$(ls "$VSTATE/captures" | wc -l | tr -d ' ')" "$r0" "...no receipt wr
 
 # a lock held by another process → exit 75 (the holder signals readiness by creating a file after
 # its flock succeeded — exec'd under the lock, so the file proves the lock is held)
-python3 "$LOCK" --vault "$VAULT" -- bash -c ': > "$0"; sleep 4' "$TEST_TMPDIR/held-1" &
+python3 "$LOCK" --vault "$VAULT" -- bash -c ': > "$0"; sleep 12' "$TEST_TMPDIR/held-1" &   # long enough for the four refusals below (dispatcher runs resolve the instance first)
 holder=$!
 wait_file "$TEST_TMPDIR/held-1"
 assert_eq "$(python3 "$LOCK" --vault "$VAULT" --probe)" "held" "probe reports held while another process holds the lock"
@@ -48,9 +48,12 @@ out="$(cat "$TEST_TMPDIR/run.out")"
 assert_eq "$rc $(result status) $(result error_class) $(result retryable) $(result capture_id)" "75 locked locked true d-1" "mnemon add while the lock is held: exit 75 with the RESULT block (capture_id d-1)"
 assert_contains "$(cat "$TEST_TMPDIR/run.err")" "another writer holds the vault lock" "...and the lock message on stderr"
 [[ -f "$(receipt d-1)" ]] && fail "no receipt on 75 (dispatcher)" "exists" || pass "...no receipt written"
+rc=0; "$MNEMON_ROOT/bin/mnemon" --config "$CONFIG" add --url "https://example.com/l1-dispatch2" --ref-id d-2 >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+out="$(cat "$TEST_TMPDIR/run.out")"
+assert_eq "$rc $(result capture_id)" "75 d-2" "...the --ref-id alias is reported too"
 rc=0; "$MNEMON_ROOT/bin/mnemon" --config "$CONFIG" add --url "https://example.com/l1-dispatch2" --capture-id=d-2 >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
 out="$(cat "$TEST_TMPDIR/run.out")"
-assert_eq "$rc $(result capture_id)" "75 d-2" "...the --capture-id=<id> form is reported too"
+assert_eq "$rc [$(result capture_id)]" "75 []" "...a --capture-id=<id> is not the gateway's form: not read as an id (reviewer A N2)"
 rc=0; "$MNEMON_ROOT/bin/mnemon" --config "$CONFIG" add --url "https://example.com/l1-dispatch3" >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
 out="$(cat "$TEST_TMPDIR/run.out")"
 assert_eq "$rc [$(result capture_id)] $(result status)" "75 [] locked" "...without a capture id the field is empty"
