@@ -6,9 +6,11 @@ docs/specs/2026-10-16-vault-store.md: `mnemon doctor --data`, `mnemon status --b
 `Sources/*/`, `Collections/*.md`, `Synthesis/*.md`, `_inputs/*.md`, `_meta/`, the capture
 ledger and the archive listing; per-folder records with the folder class (managed · damaged ·
 legacy, S1), the supersedes graph and the derived axes (S2), the Synthesis link resolver, the
-collection records of the research reader (`lib_research.py`, phase 3a — `filed` counts their
-items), the declared queues (S5), the guide stamps (I11) and the counters of the
-`mnemon-doctor-data/1` document (S4; the `collections*` keys were added in v1.4, additively).
+collection and wiki records of the research reader (`lib_research.py`, phases 3a/3b — `filed`
+counts the collections' items and the pages' `based_on`; `research_context()` hands the
+validator what the derived states need), the declared queues (S5), the guide stamps (I11) and
+the counters of the `mnemon-doctor-data/1` document (S4; the `collections*` and `wiki*` keys
+were added in v1.4 / phase 3b, additively).
 
 Observational by construction: nothing is written, no directory is created, no lock is taken
 (the vault lock is probed on a private descriptor that is closed at once), no network. A file
@@ -482,12 +484,81 @@ def scan_collections(vault: str, snapshot: dict, existing: Optional[set] = None)
         return out
     for n in names:
         p = os.path.join(d, n + ".md")
+        data = _read_bytes(p, snapshot)
+        if data is None:
+            rec = lr.unreadable_record(n, "unreadable")
+            rec["sha256"] = None
+            out["notes"].append(rec)
+            continue
+        rec = lr.read_collection_text(data.decode("utf-8", "replace"), n, existing=existing)
+        rec["sha256"] = hashlib.sha256(data).hexdigest()      # the fingerprint a wiki page's `inputs` prints
+        out["notes"].append(rec)
+    return out
+
+
+def scan_wiki(vault: str, snapshot: dict) -> dict:
+    """Every `Wiki/*.md` as a wiki/1 record of the research reader (no states yet — validate_wiki
+    derives them from the research context); unreadable pages are counted, never raised."""
+    d = os.path.join(vault, lr.WIKI_DIR)
+    out = {"present": os.path.isdir(d), "notes": []}
+    if not out["present"]:
+        return out
+    try:
+        names = lr.list_wiki(vault)
+    except OSError as exc:
+        snapshot["unreadable"] += 1
+        snapshot["complete"] = False
+        snapshot["wiki_unlisted"] = "%s: %s" % (type(exc).__name__, exc)
+        out["unlisted"] = snapshot["wiki_unlisted"]
+        return out
+    for n in names:
+        p = os.path.join(d, n + ".md")
         text = _read_text(p, snapshot)
         if text is None:
-            out["notes"].append(lr.unreadable_record(n, "unreadable"))
+            out["notes"].append(lr.unreadable_wiki_record(n, "unreadable"))
             continue
-        out["notes"].append(lr.read_collection_text(text, n, existing=existing))
+        out["notes"].append(lr.read_wiki_text(text, n))
     return out
+
+
+def research_context(scan: dict, budget_words: Optional[int] = None) -> dict:
+    """What lib_research.validate_wiki needs, from one snapshot: the revisions (class, the capture
+    and body hashes, completeness, the supersedes verdict), the collections by name, the charter's
+    fingerprint, a lazy reader of `source.md` bodies (the locator check), local existence."""
+    vault = scan["vault"]
+    revisions: Dict[str, dict] = {}
+    for r in scan["folders"]:
+        revisions[r["name"]] = {
+            "has_source": r["has_source"], "has_extract": r["has_extract"], "klass": r["klass"],
+            "capture_sha256": r["text_sha256"], "body_sha256": r["body_sha256"], "completeness": r["completeness"],
+            "superseded": r["superseded"], "source_type": r["source_type"],
+            "unreadable": r["source_state"] == "unreadable",
+        }
+    bodies: Dict[str, Optional[str]] = {}
+
+    def source_text(rev: str) -> Optional[str]:
+        if rev not in bodies:
+            path = os.path.join(vault, "Sources", rev, "source.md")
+            try:
+                with open(path, "rb") as fh:
+                    data = fh.read()
+            except OSError:
+                bodies[rev] = None
+            else:
+                _blk, body = split_frontmatter(data.decode("utf-8", "replace"))
+                bodies[rev] = body if _blk is not None else data.decode("utf-8", "replace")
+        return bodies[rev]
+
+    def local_exists(path: str) -> bool:
+        return os.path.isfile(os.path.join(vault, path + ".md")) or os.path.isdir(os.path.join(vault, path))
+
+    return {
+        "revisions": revisions, "graph_complete": not scan["graph"]["current_incomplete"],
+        "collections": {c["name"]: c for c in scan.get("collections", {}).get("notes", [])},
+        "charter_sha256": scan["charter"].get("sha256"),
+        "source_text": source_text, "local_exists": local_exists,
+        "budget_words": budget_words,
+    }
 
 
 def scan_inputs(vault: str, snapshot: dict) -> dict:
@@ -548,13 +619,15 @@ def scan_charter(path: Optional[str], snapshot: dict) -> dict:
     """The charter's `## Contexts` (parsed like cap_charter_contexts: `### <name>`, first token,
     lowercased, deduplicated, fences skipped; `personal` without a charter) and the raw lines of
     `## Radius` (S5) for the doctor to parse."""
-    out = {"path": path, "exists": False, "contexts": ["personal"], "radius_lines": [], "has_radius": False}
+    out = {"path": path, "exists": False, "contexts": ["personal"], "radius_lines": [], "has_radius": False, "sha256": None}
     if not path or not os.path.isfile(path):
         return out
-    text = _read_text(path, snapshot)
-    if text is None:
+    data = _read_bytes(path, snapshot)
+    if data is None:
         return out
+    text = data.decode("utf-8", "replace")
     out["exists"] = True
+    out["sha256"] = hashlib.sha256(data).hexdigest()      # the fingerprint a wiki page's `inputs` prints
     contexts: List[str] = []
     fence = False
     section = None
@@ -723,6 +796,7 @@ def scan_vault(vault: str, state_dir: Optional[str] = None, archive_dir: Optiona
         "synthesis": scan_synthesis(vault, snapshot),
         "collections": scan_collections(vault, snapshot, existing={
             r["name"]: {f for f, has in (("extract", r["has_extract"]), ("source", r["has_source"])) if has} for r in folders}),
+        "wiki": scan_wiki(vault, snapshot),
         "inputs": scan_inputs(vault, snapshot),
         "reader_context": scan_reader_context(reader_context, snapshot),
         "charter": scan_charter(charter, snapshot),
@@ -837,6 +911,10 @@ def counters(scan: dict) -> dict:
     cols = scan.get("collections", {}).get("notes", [])
     for col in cols:
         filed.update(it["rev"] for it in col["items"] if it["rev"] in existing)
+    # phase 3b: a revision named in a wiki page's `based_on` is filed too (it was built on)
+    pages = scan.get("wiki", {}).get("notes", [])
+    for page in pages:
+        filed.update(e["rev"] for e in page["based_on"] if e["rev"] in existing)
     queues = scan["inputs"]["queues"]
     c = {
         "folders": len(folders),
@@ -868,6 +946,10 @@ def counters(scan: dict) -> dict:
         "collection_items_excluded": sum(c["counts"]["excluded"] for c in cols),
         "collection_items_malformed": sum(c["counts"]["malformed"] for c in cols),
         "collection_items_unresolved": sum(c["counts"]["unresolved"] or 0 for c in cols),
+        "wiki_pages": len(pages),
+        "wiki_fail": sum(1 for p in pages if p["state"] == "fail"),
+        "wiki_unreadable": sum(1 for p in pages if p["state"] == "unreadable"),
+        "wiki_based_on": sum(p["counts"]["based_on"] for p in pages),
         "queues_declared": len(queues),
         "queues_parked": sum(1 for q in queues if queue_is_parked(q, today)),
         "queues_untyped": len(scan["inputs"]["untyped"]),
@@ -912,6 +994,7 @@ def main(argv: List[str]) -> int:
         for key, value in (("folders", c["folders"]), ("extracted", c["extracted"]), ("captured", c["captured"]),
                            ("current", c["current"]), ("superseded", c["superseded"]), ("managed", c["managed"]),
                            ("collections", c["collections"]), ("collections_fail", c["collections_fail"]),
+                           ("wiki", c["wiki_pages"]), ("wiki_fail", c["wiki_fail"]),
                            ("status_extracted", st["extracted"]), ("status_dismissed", st["dismissed"]),
                            ("status_legacy_words", st["legacy_words"]), ("status_empty", st["empty"]),
                            ("status_unknown", st["unknown"]), ("unreadable", scan["snapshot"]["unreadable"])):
