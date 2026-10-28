@@ -313,14 +313,14 @@
   },
   {
    "counts": {
+    "bookmarks_excluded": 2,
     "features": {
-     "< 40 words": 5,
-     "bookmark": 0,
+     "< 40 words": 3,
      "fetch_status failed": 0
     },
-    "stubs": 5
+    "stubs": 3
    },
-   "detail": "5 placeholders: fetch_status failed 0 · bookmark 0 · < 40 words 5",
+   "detail": "3 placeholders: fetch_status failed 0 · < 40 words 3; 2 bookmark-tier revisions excluded (mnemon triage)",
    "fix": "operator",
    "items": [
     {
@@ -346,27 +346,9 @@
      "features": [
       "< 40 words"
      ],
-     "id": "2026-02-11_bbbbbbbb",
-     "rating": 5,
-     "words": 12
-    },
-    {
-     "class": "stub",
-     "features": [
-      "< 40 words"
-     ],
      "id": "2026-04-13_dddddddd",
      "rating": null,
      "words": 13
-    },
-    {
-     "class": "stub",
-     "features": [
-      "< 40 words"
-     ],
-     "id": "2026-05-14_ffffffff",
-     "rating": null,
-     "words": 14
     }
    ],
    "name": "data/stubs",

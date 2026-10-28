@@ -349,7 +349,7 @@ assert_contains "$(line_of data/thin)" "completeness partial/blocked 2" "Q1: exp
 assert_eq "$(status_of data/arxiv-abstract)" "warn" "Q2 warn"
 assert_contains "$(line_of data/arxiv-abstract)" "2 current arXiv revisions below 600 words (1 superseded): $T3, $T6" "Q2: current suspects; the superseded one is counted apart; the bookmark is not counted"
 assert_eq "$(status_of data/stubs)" "warn" "Q3 warn"
-assert_contains "$(line_of data/stubs)" "5 placeholders: fetch_status failed 1 · bookmark 1 · < 40 words 4" "Q3: OR of the source.md features, unique revisions (the short-type idea counts here: Q3 has no type exclusion)"
+assert_contains "$(line_of data/stubs)" "4 placeholders: fetch_status failed 1 · < 40 words 4; 2 bookmark-tier revisions excluded (mnemon triage)" "Q3: OR of the source.md features, unique revisions (the short-type idea counts here: Q3 has no type exclusion); bookmark-tier revisions (tier: bookmark, legacy status: bookmark) are excluded and counted — their door is the triage (phase 3-capture)"
 assert_eq "$(status_of data/rating-scale)" "warn" "Q4 warn above the threshold"
 assert_contains "$(line_of data/reader-context)" "synced 15 d ago, threshold 14 d" "Q5: age from synced, strictly over the threshold"
 assert_contains "$(line_of data/reader-context)" "(staleness_threshold_days \`abc\` invalid, default 14 used)" "Q5: an invalid threshold falls back to 14 with a note"
@@ -430,7 +430,7 @@ echo "--- the one-line brief: numbers equal --json; a budget that cannot be met 
 doc --archive "$ARCHIVE" --state-dir "$LEDGER" --brief
 assert_eq "$rc" "0" "--brief exits 0"
 assert_eq "$(printf '%s\n' "$out" | grep -c .)" "1" "--brief is one physical line"
-assert_eq "$out" "Dirty · 94 sources (18 managed · 87 current · 6 superseded) · 90 extracted · 10 synthesis (2 seeds / 124 d · 4 drafts / 137 d) · data: $TEXT_FAIL fail · $TEXT_WARN warn · probed 19/19 · research: 0 pages · 0 fail · 0 warn · diagnostics: 2 warn (unreadable 1)" "the brief's numbers are the JSON's counters and summary; the research part (phase 3b); diagnostics named apart; the unreadable file said"
+assert_eq "$out" "Dirty · 94 sources (18 managed · 87 current · 6 superseded) · 90 extracted · 10 synthesis (2 seeds / 124 d · 4 drafts / 137 d) · data: $TEXT_FAIL fail · $TEXT_WARN warn · probed 19/19 · research: 0 pages · 0 fail · 0 warn · 2 bookmarks · diagnostics: 2 warn (unreadable 1)" "the brief's numbers are the JSON's counters and summary; the research part (phase 3b); the bookmark queue (two current bookmark-tier revisions, none dismissed) only when it is not empty; diagnostics named apart; the unreadable file said"
 doc --archive "$ARCHIVE" --state-dir "$LEDGER" --brief --budget 0.001
 assert_eq "$rc" "0" "--budget 0.001 exits 0"
 assert_eq "$out" "Dirty · data: not probed (budget 0.001 s exceeded) · research: not probed (research: budget 0.001 s exceeded)" "a budget the run cannot meet: not probed — never 0 fail (both documents)"

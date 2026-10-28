@@ -9,7 +9,8 @@
 | Wiki | 10 |
 | Synthesis | 2 |
 
-_2 source(s) captured without extract.md (finish each with `mnemon add --resume <revision>`: 2026-04-13_dddddddd, 2026-05-14_ffffffff)._
+_1 source(s) captured without extract.md (finish each with `mnemon add --resume <revision>`: 2026-04-13_dddddddd)._
+_1 bookmark(s) without an extract (`tier: bookmark`; `mnemon triage list` · `promote <revision>` · `dismiss <revision>`): 2026-05-14_ffffffff._
 
 ## Collections
 

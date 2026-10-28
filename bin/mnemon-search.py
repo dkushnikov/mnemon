@@ -319,11 +319,16 @@ def _extract_snippet(text: str, tokens: list[str], width: int = 200) -> str | No
 
 def capture_tier(source_meta: dict, extract_meta: dict) -> str:
     """The capture tier of a Sources revision: `tier:` of source.md, else of extract.md
-    (a legacy placeholder), else `full` (absent = full, vault store §4)."""
+    (a legacy placeholder), else `bookmark` for the legacy placeholder word `status: bookmark` in
+    source.md (the effective tier of the vault store §4, as the doctor and the triage read it),
+    else `full` (absent = full)."""
     for meta in (source_meta, extract_meta):
         v = meta.get("tier")
         if isinstance(v, str) and v.strip():
             return v.strip().lower()
+    legacy = source_meta.get("status")
+    if isinstance(legacy, str) and legacy.strip().lower() == "bookmark":
+        return "bookmark"
     return "full"
 
 
@@ -351,6 +356,13 @@ def assemble_result(path: Path, result_type: str, snippet: str | None, vault: Pa
         extract_meta = parse_frontmatter(paired) if paired.is_file() else {}
         tier = capture_tier(meta, extract_meta)
         status = extract_meta.get("status")      # a source result's status is its extract's; none → null
+        if not paired.is_file():
+            # phase 3-capture (B4): a revision without an extract carries its judgement in triage.md
+            triage = path.with_name("triage.md")
+            if triage.is_file():
+                judgement = parse_frontmatter(triage).get("status")
+                if isinstance(judgement, str) and judgement.strip().lower() == "dismissed":
+                    status = "dismissed"
         merged = dict(meta)
         for key, value in extract_meta.items():
             if value not in (None, "", []):
@@ -506,6 +518,14 @@ def apply_domain_filter(results: list[dict], domain: str) -> list[dict]:
     return [r for r in results if any(needle == str(d).lower() for d in _as_list(r.get("domains")))]
 
 
+def apply_tier_filter(results: list[dict], tier: str) -> list[dict]:
+    """`--tier full|bookmark` (interface §7, phase 3-capture): keep the results whose `tier` equals
+    it; a result without a tier (synthesis, collection) never matches a tier filter."""
+    if not tier:
+        return results
+    return [r for r in results if r.get("tier") == tier]
+
+
 def dedupe_by_folder(results: list[dict]) -> list[dict]:
     """If both extract.md and source.md match the same folder, keep extract.md.
 
@@ -566,6 +586,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Search the Mnemon knowledge library.")
     parser.add_argument("--query", required=True, help="Search query (tokenized, AND semantics)")
     parser.add_argument("--domain", default="", help="Filter by domain tag (e.g. career, learning)")
+    parser.add_argument("--tier", default="", choices=("", "full", "bookmark"),
+                        help="Keep only Sources results of this capture tier (a result without a tier — "
+                             "synthesis, collection — never matches); bookmark cards without an extract "
+                             "are found with --include-source")
     parser.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--include-source", action="store_true",
                         help="Also search raw source.md (default: only extract.md)")
@@ -653,6 +677,7 @@ def main() -> int:
     results = [assemble_result(p, t, s, vault) for p, t, _, s in selected_hits]
     results = dedupe_by_folder(results)
     results = apply_domain_filter(results, args.domain)
+    results = apply_tier_filter(results, args.tier)
     results = rank_results(results)
     results = results[: args.limit]
 

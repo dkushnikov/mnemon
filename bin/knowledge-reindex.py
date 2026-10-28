@@ -439,6 +439,7 @@ def scan_sources(all_dirs: list[Path]) -> dict:
     names = {d.name for d in all_dirs}
     edges: dict[str, list[str]] = {}    # new → [old…] (a supersedes: names one or several revisions)
     legacy: set[str] = set()
+    bookmarks: set[str] = set()         # `tier: bookmark` in source.md (phase 3-capture): a card, never pending
     malformed: list[str] = []
     for d in all_dirs:
         src = d / 'source.md'
@@ -453,8 +454,10 @@ def scan_sources(all_dirs: list[Path]) -> dict:
         targets = [t for t in supersedes_targets(block) if t != d.name]
         if targets:
             edges[d.name] = targets
-        if (field_in_block(block, 'status') or '') == 'bookmark' or \
-           (field_in_block(block, 'fetch_status') or '') == 'failed':
+        if (field_in_block(block, 'tier') or '').strip().lower() == 'bookmark':
+            bookmarks.add(d.name)
+        elif (field_in_block(block, 'status') or '') == 'bookmark' or \
+             (field_in_block(block, 'fetch_status') or '') == 'failed':
             legacy.add(d.name)
 
     # cycles: a folder may have several outgoing edges, so the cycles are the strongly connected
@@ -472,7 +475,7 @@ def scan_sources(all_dirs: list[Path]) -> dict:
                 continue
             successors.setdefault(old, []).append(new)
     return {'successors': successors, 'dangling': dangling, 'cycles': cycles,
-            'cycle_edges': len(cycle_edges), 'legacy': legacy, 'malformed': malformed}
+            'cycle_edges': len(cycle_edges), 'legacy': legacy, 'bookmarks': bookmarks, 'malformed': malformed}
 
 
 def build_row(folder: Path, successors: dict[str, list[str]], sources_dir: Path) -> str | None:
@@ -632,12 +635,18 @@ def reindex(vault: Path, hand_edit_report: bool = True) -> dict:
     today = datetime.date.today().isoformat()
 
     legacy = sorted(d.name for d in no_extract if d.name in scan['legacy'])
-    pending = sorted(d.name for d in no_extract if d.name not in scan['legacy'])
+    bookmarks = sorted(d.name for d in no_extract if d.name in scan['bookmarks'])
+    pending = sorted(d.name for d in no_extract if d.name not in scan['legacy'] and d.name not in scan['bookmarks'])
     notes = []
     if pending:
         shown = ', '.join(pending[:5]) + (', …' if len(pending) > 5 else '')
         notes.append(f"_{len(pending)} source(s) captured without extract.md "
                      f"(finish each with `mnemon add --resume <revision>`: {shown})._")
+    if bookmarks:
+        # a card is complete as it is (phase 3-capture B1): its doors are the triage, not --resume
+        shown = ', '.join(bookmarks[:5]) + (', …' if len(bookmarks) > 5 else '')
+        notes.append(f"_{len(bookmarks)} bookmark(s) without an extract "
+                     f"(`tier: bookmark`; `mnemon triage list` · `promote <revision>` · `dismiss <revision>`): {shown}._")
     if legacy:
         shown = ', '.join(legacy[:5]) + (', …' if len(legacy) > 5 else '')
         notes.append(f"_{len(legacy)} legacy placeholder(s) without extract.md "
@@ -697,7 +706,7 @@ Universal reference storage. Sources captured and extracted by AI, synthesis wri
     return {'sources': sources_count, 'extracted': extracted_count, 'synthesis': synthesis_count,
             'collections': collections_count, 'collections_present': collections_present,
             'wiki': wiki_count, 'wiki_present': wiki_present,
-            'pending': len(pending), 'legacy': len(legacy), 'superseded': superseded_count,
+            'pending': len(pending), 'legacy': len(legacy), 'bookmarks': len(bookmarks), 'superseded': superseded_count,
             'dangling': len(scan['dangling']), 'preserved': preserved, 'malformed': len(scan['malformed'])}
 
 
@@ -730,7 +739,7 @@ def main(argv: list[str]) -> int:
         line += f", Collections={c['collections']}"
     if c['wiki_present']:
         line += f", Wiki={c['wiki']}"
-    for key, label in (('pending', 'Pending'), ('legacy', 'Legacy'), ('dangling', 'Dangling-supersedes'),
+    for key, label in (('pending', 'Pending'), ('bookmarks', 'Bookmarks'), ('legacy', 'Legacy'), ('dangling', 'Dangling-supersedes'),
                        ('preserved', 'Preserved'), ('malformed', 'Malformed-frontmatter')):
         if c[key]:
             line += f", {label}={c[key]}"

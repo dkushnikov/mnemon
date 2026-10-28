@@ -513,7 +513,7 @@ def check_ledger(scan: dict, cfg: dict) -> Check:
             c.add("warn", {"id": rc["revision"] or rc["id"], "reason": "receipt %s in integrity-error (the engine found the published source.md edited or missing)" % rc["id"],
                            "rating": None, "words": None})
             continue
-        if state not in ("extracted", "source-published") or not rc["revision"]:
+        if state not in ("extracted", "source-published", "bookmarked") or not rc["revision"]:
             continue
         rec = by_name.get(rc["revision"])
         if rec is None or not rec["has_source"]:
@@ -850,16 +850,20 @@ def check_arxiv(scan: dict, cfg: dict) -> Check:
 def check_stubs(scan: dict, cfg: dict) -> Check:
     c = Check("data/stubs")
     stub_words = cfg["stub_words"]
-    counts = {"fetch_status failed": 0, "bookmark": 0, "< %d words" % stub_words: 0}
+    counts = {"fetch_status failed": 0, "< %d words" % stub_words: 0}
     stubs: List[dict] = []
+    bookmarks = 0
     for r in scan["folders"]:
         if not r["current"] or r["source_state"] == "unreadable":
+            continue
+        if r["effective_tier"] == "bookmark":
+            # a bookmark card (`tier: bookmark`, or the legacy `status: bookmark` placeholder) is short by
+            # design and has its own door — `mnemon triage` (phase 3-capture); counted, never a stub
+            bookmarks += 1
             continue
         features: List[str] = []
         if r["fetch_status"].startswith("failed"):
             features.append("fetch_status failed")
-        if r["src_status"] == "bookmark":
-            features.append("bookmark")
         if r["body_words"] is not None and r["body_words"] < stub_words:
             features.append("< %d words" % stub_words)
         if not features:
@@ -869,11 +873,13 @@ def check_stubs(scan: dict, cfg: dict) -> Check:
         stubs.append(item(r, klass="stub", features=features))
     for i in rank(stubs):
         c.add("warn", i)
-    c.counts = {"stubs": len(stubs), "features": counts}
+    c.counts = {"stubs": len(stubs), "features": counts, "bookmarks_excluded": bookmarks}
     c.threshold = {"stub_words": stub_words}
     c.detail = "%d placeholders" % len(stubs)
     if stubs:
         c.detail += ": " + " · ".join("%s %d" % (k, v) for k, v in counts.items())
+    if bookmarks:
+        c.detail += "; %d bookmark-tier revisions excluded (mnemon triage)" % bookmarks
     return c
 
 
@@ -1631,6 +1637,11 @@ def brief_line(doc: dict, research: Optional[dict] = None) -> str:
             " · data: %d fail · %d warn · probed %d/%d · %s"
             % (label, c["folders"], c["managed"], c["current"], c["superseded"], c["extracted"], c["synthesis"],
                seed_part, draft_part, s["fail"], s["warn"], s["probed"], s["probed"] + s["not_probed"], research_brief(research)))
+    # phase 3-capture: the bookmark queue, only when there is one (D5: the brief is the session's door to it)
+    tri = c.get("triage") or {}
+    queue = (tri.get("bookmarked") or 0) + (tri.get("dismissed") or 0)
+    if queue:
+        line += " · %d bookmarks" % queue + (" (%d dismissed)" % tri["dismissed"] if tri.get("dismissed") else "")
     if s["diagnostics_fail"] or s["diagnostics_warn"]:
         diag = []
         if s["diagnostics_fail"]:

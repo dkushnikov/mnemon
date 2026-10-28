@@ -96,7 +96,11 @@ def readings() -> dict[str, object]:
     doc_text = doc_text.replace(str(VAULT), "<vault>").replace(state, "<state>")
     doc = json.loads(doc_text)
     doc.pop("generated_at", None)
-    doc["counters"] = {k: v for k, v in doc["counters"].items() if not (k.startswith("collection") or k.startswith("wiki"))}
+    # the phase 3a (`collection*`), phase 3b (`wiki*`) and phase 3-capture (`tier`, `triage`, `promoted`)
+    # counter keys are additive to mnemon-doctor-data/1 and normalized away: the document the branches
+    # must leave as it is
+    doc["counters"] = {k: v for k, v in doc["counters"].items()
+                       if not (k.startswith("collection") or k.startswith("wiki")) and k not in ("tier", "triage", "promoted")}
     out["doctor-data.json"] = doc
     res_text = run(str(BIN / "vault-doctor.py"), "--vault", str(VAULT), "--state-dir", state, "--today", "2026-10-27",
                    "--guide-version", str(_engine_guide()), "--wiki-words", WIKI_WORDS, "--research", "--json")
