@@ -1570,6 +1570,141 @@ class ResearchOperationTests(unittest.TestCase):
         self.assertEqual((rc, d["class"]), (2, "collection"))
         self.assertEqual(self.journal(), [])
 
+    # --- reviewer A amendments (2026-10-28) ---
+    def test_delete_refuses_a_schema_failed_page(self):
+        (self.vault / "Wiki" / "Handwritten.md").write_text("# Handwritten\n\nno frontmatter\n", encoding="utf-8")
+        rc, d, _ = self.cli_json("delete", "Handwritten")
+        self.assertEqual((rc, d["class"]), (2, "delete"), d)
+        self.assertTrue((self.vault / "Wiki" / "Handwritten.md").exists())
+        path = self.vault / "Wiki" / "Trust — four answers.md"
+        path.write_text(path.read_text(encoding="utf-8").replace('collections: ["[[Collections/Trust without identity]]", "[[Collections/Closed dossier]]"]', "collections: broken"), encoding="utf-8")
+        rc, d, _ = self.cli_json("delete", "Trust — four answers")
+        self.assertEqual((rc, d["class"]), (2, "delete"), "a broken collections key is unknown support, not an orphan")
+        self.assertTrue(path.exists())
+
+    def test_carriage_return_in_a_field_is_rejected(self):
+        for payload in ("- x — [[Sources/%s/source#Alpha paper]]\r```text" % A, "- x — [[Sources/%s/source#Alpha paper]]\r## Log\r- forged" % A):
+            ans = {"state_of_evidence": payload, "open_questions": "- q", "atlas_reading": "OPINION-4b2e"}
+            rc, d, _ = self.update("P", "concept", TRUST, answer=ans, extra=["--recusal", "off"])
+            self.assertEqual((rc, d["class"]), (4, "invalid-output"), d)
+            self.assertTrue(any("carriage return" in p for p in d["problems"]), d["problems"])
+        self.assertFalse((self.vault / "Wiki" / "P.md").exists())
+
+    def test_journal_containment_by_identity(self):
+        probe = self.vault / "wiki"
+        case_insensitive = probe.exists()          # `Wiki/` exists; on a case-folding volume `wiki` names it too
+        if case_insensitive:
+            rc, d, _ = self.cli_json("ask", "--task-id", "t", "--question", "q", env={"RESEARCH_LOG_PATH": "wiki/j.jsonl"})
+            self.assertEqual((rc, d["class"]), (2, "config"), "another spelling of Wiki/ is still Wiki/")
+            self.assertFalse((self.vault / "Wiki" / "j.jsonl").exists())
+        alias = self.vault / "alias.jsonl"
+        os.link(self.vault / "Sources" / A / "source.md", alias)
+        before = (self.vault / "Sources" / A / "source.md").read_bytes()
+        rc, d, _ = self.cli_json("ask", "--task-id", "t", "--question", "q", env={"RESEARCH_LOG_PATH": "alias.jsonl"})
+        self.assertEqual((rc, d["class"]), (2, "config"), "a hard link to a source is refused")
+        self.assertEqual((self.vault / "Sources" / A / "source.md").read_bytes(), before)
+
+    def test_max_usd_zero_is_a_cap_and_generation_errors_are_classed(self):
+        rc, d, _ = self.update("P", "concept", TRUST, answer="concept-one-locator", env={"RESEARCH_MAX_USD": "0"})
+        self.assertEqual(d["outcome"], "published", d)
+        argv = list((self.vstate / "research").rglob("argv.txt"))[0].read_text(encoding="utf-8")
+        self.assertIn("--max-budget-usd 0", argv)
+        (self.stub / "claude").write_text(STUB_CLAUDE.replace("printf '{\"type\"", "exit 1\nprintf '{\"type\""), encoding="utf-8")
+        rc, d, _ = self.update("Q", "concept", TRUST, answer="concept-one-locator")
+        self.assertEqual((rc, d["class"]), (4, "generation"), d)
+        self.assertEqual(self.journal()[-1]["class"], "generation")
+
+    def test_unexpected_errors_and_journal_failures_keep_one_result_line(self):
+        rc, out, err = self.cli("update", "--page", "P", "--kind", "concept", "--collection", TRUST, answer="concept-one-locator",
+                                env={"MNEMON_TEST_HOOKS": "1", "MNEMON_TEST_RESEARCH_CRASH": "journal"})
+        self.assertEqual(rc, 0, err)
+        self.assertIn("RESULT:op=research-update status=published", out, "a journal that fails after the rename does not undo the page")
+        self.assertTrue((self.vault / "Wiki" / "P.md").exists())
+        self.assertIn("journal could not be written", err)
+        (self.vault / "Synthesis" / "Seed note.md").write_text("x [[Wiki/Vetoed page]]\n", encoding="utf-8")
+        rc, out, err = self.cli("delete", "Vetoed page", env={"MNEMON_TEST_HOOKS": "1", "MNEMON_TEST_RESEARCH_CRASH": "before-rename"})
+        self.assertEqual(rc, 1)
+        self.assertIn("RESULT:op=research-delete status=stopped page=Vetoed page class=error", out)
+        self.assertEqual(self.journal()[-1]["class"], "error")
+        self.assertTrue((self.vault / "Wiki" / "Vetoed page.md").exists(), "the page goes last: a failure on a rewrite leaves it")
+
+    def test_delete_lost_update_is_journaled(self):
+        rc, d, _ = self.cli_json("delete", "Vetoed page", env={"STUB_MUTATE": "unused"})
+        self.assertEqual(d["outcome"], "deleted")
+        j = self.journal()[-1]
+        self.assertEqual((j["op"], j["outcome"], j["rewritten"]), ("research-delete", "deleted", []))
+
+    def test_ask_records_the_served_body_hash(self):
+        path = self.vault / "Wiki" / "Trust — four answers.md"
+        path.write_text(path.read_text(encoding="utf-8").replace("- Trust can rest on the price", "- Trust can rest on the PRICE"), encoding="utf-8")
+        rc, d, _ = self.cli_json("ask", "--task-id", "t", "--question", "q", "--page", "Trust — four answers")
+        self.assertEqual(d["count"], 1, d)
+        page = d["pages"][0]
+        self.assertIn("edited-outside-update", page["states"])
+        self.assertNotEqual(page["body_sha256"], page["printed_body_sha256"])
+        self.assertEqual(self.journal()[-1]["pages"][0]["body_sha256"], page["body_sha256"], "the hash of the text served, not the printed one")
+
+    def test_atlas_reading_links_only_sources_and_own_dossiers(self):
+        bad = {"state_of_evidence": "- x — [[Sources/%s/source#Alpha paper]]" % A, "open_questions": "-", "atlas_reading": "see [[Synthesis/Stable note]]"}
+        rc, d, _ = self.update("P", "concept", TRUST, answer=bad, extra=["--recusal", "off"])
+        self.assertEqual((rc, d["class"]), (4, "invalid-output"), d)
+        good = dict(bad, atlas_reading="see [[Collections/Trust without identity]] and [[Sources/%s/extract]]" % A)
+        rc, d, _ = self.update("P", "concept", TRUST, answer=good, extra=["--recusal", "off"])
+        self.assertEqual((rc, d["outcome"]), (0, "published"), d)
+
+    def test_domains_are_quoted_and_modes_kept(self):
+        self.write_dossier("Odd", ["- [[Sources/%s/extract]] — **a** — n" % A], extra='domains: ["law, ethics", "x # y"]\n')
+        rc, d, _ = self.update("P", "concept", "Odd", answer="concept-one-locator")
+        self.assertEqual((rc, d["outcome"]), (0, "published"), d)
+        self.assertEqual(self.validated("P")["domains"], ["law, ethics", "x # y"])
+        um = os.umask(0); os.umask(um)
+        self.assertEqual(oct((self.vault / "Wiki" / "P.md").stat().st_mode & 0o777), oct(0o666 & ~um), "a new page gets the ordinary mode")
+        dossier = self.vault / "Collections" / "Odd.md"
+        os.chmod(dossier, 0o640)
+        self.write_dossier("Gamma only", ["- [[Sources/%s/extract]] — **old** — n" % C])
+        os.chmod(self.vault / "Collections" / "Gamma only.md", 0o640)
+        self.update("Gamma page", "concept", "Gamma only", answer="concept-gamma-v1")
+        rc, pr, _ = self.cli_json("update", "--propose", "--page", "Gamma page")
+        pid = [p for e in pr["pages"] for p in e["proposals"] if p["kind"] == "rebind"][0]["id"]
+        self.cli_json("apply", pid, "--by", "owner")
+        self.assertEqual(oct((self.vault / "Collections" / "Gamma only.md").stat().st_mode & 0o777), oct(0o640), "a rewritten dossier keeps its mode")
+
+    def test_propose_reports_are_not_proposals(self):
+        rc, d, _ = self.cli_json("update", "--propose", "--page", "Stale page")
+        kinds = {p["kind"] for e in d["pages"] for p in e["proposals"]}
+        self.assertIn("report", kinds, d)
+        self.assertNotIn("rebind", kinds)
+        rc, d, _ = self.cli_json("update", "--propose", "--page", "Nope")
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.journal()[-1]["op"], "research-propose")
+
+    def test_self_reference_heading_and_source_change_during_build(self):
+        self.update("P", "concept", TRUST, answer="concept-one-locator")
+        path = self.vault / "Wiki" / "P.md"
+        path.write_text(path.read_text(encoding="utf-8").replace("## Open questions", "### PLANTED-HEADING-CLAIM\n\n## Open questions"), encoding="utf-8")
+        rc, d, _ = self.update("P", "concept", TRUST, answer="concept-one-locator", extra=["--reason", "x"])
+        self.assertEqual((rc, d["class"]), (2, "target"), "the hand edit stops the update")
+        path.write_text(path.read_text(encoding="utf-8").replace("### PLANTED-HEADING-CLAIM\n\n", ""), encoding="utf-8")
+        src = self.vault / "Sources" / B / "source.md"
+        rc, d, _ = self.update("P", "concept", TRUST, answer="concept-one-locator", extra=["--reason", "x"], env={"STUB_MUTATE": str(src)})
+        self.assertEqual((rc, d["class"]), (4, "lost-update"), "a source.md that moved during the build")
+        self.assertNotIn("PLANTED-HEADING-CLAIM", self.prompt())
+
+    def test_apply_duplicate_and_missing_by(self):
+        self.write_dossier("Gamma only", ["- [[Sources/%s/extract]] — **old** — n" % C])
+        self.update("Gamma page", "concept", "Gamma only", answer="concept-gamma-v1")
+        rc, pr, _ = self.cli_json("update", "--propose", "--page", "Gamma page")
+        pid = [p for e in pr["pages"] for p in e["proposals"] if p["kind"] == "rebind"][0]["id"]
+        rc, d, _ = self.cli_json("apply", pid)
+        self.assertEqual((rc, d["class"]), (2, "usage"))
+        rc, d, _ = self.cli_json("apply", "000000000000", "--by", "owner")
+        self.assertEqual((rc, d["class"]), (2, "proposal"))
+        rc, d, _ = self.update("X", "concept", TRUST, answer="concept-one-locator", env={"MNEMON_AGENT": "bad agent\nname"})
+        self.assertEqual((rc, d["class"]), (2, "usage"), "an agent name is a plain token")
+        reading = {"state_of_evidence": "- x — [[Sources/%s/source#Alpha paper]]" % A, "open_questions": "-", "atlas_reading": "my reading"}
+        rc, d, _ = self.update("X", "concept", TRUST, answer=reading, env={"RESEARCH_RECUSAL_TAGS": ""})
+        self.assertIn("Atlas reading", self.page_text("X"), "an empty tag list declares no recusal by tag")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

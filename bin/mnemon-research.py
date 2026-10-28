@@ -179,8 +179,19 @@ def atomic_write(path: str, data: bytes, prefix: str = ".research-", crash: Opti
     test hook point (`before-rename`) that raises after the temporary file is written; the file is
     removed on any failure before the rename (docs/research.md §3.8)."""
     d = os.path.dirname(path)
+    if crash is None and test_hooks():
+        crash = os.environ.get("MNEMON_TEST_RESEARCH_CRASH") or None
     fd, tmp = tempfile.mkstemp(prefix=prefix, suffix=".tmp", dir=d)
     try:
+        # the mode of a rewritten file is kept; a new file gets the ordinary 0666 & ~umask (mkstemp's
+        # 0600 would hide a page or a dossier from a reader running as another user)
+        try:
+            mode = os.stat(path).st_mode & 0o7777
+        except OSError:
+            um = os.umask(0)
+            os.umask(um)
+            mode = 0o666 & ~um
+        os.fchmod(fd, mode)
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
             fh.flush()
@@ -216,6 +227,17 @@ def read_bytes(path: str) -> Optional[bytes]:
 # Configuration — the dispatcher's exports, overridable by flags
 # ---------------------------------------------------------------------------------------------
 
+AGENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+def safe_agent(name: str) -> str:
+    """`maintained_by` / `drafted_by` are written unquoted (the Guide's form): the name must be a plain
+    token — a newline, a space or a ` #` could inject or truncate a frontmatter."""
+    if not AGENT_RE.match(name or ""):
+        raise Refused("usage", "the agent name %r must match %s (--agent or $MNEMON_AGENT)" % (name, AGENT_RE.pattern))
+    return name
+
+
 def build_cfg(args) -> dict:
     vault = os.path.abspath(os.path.expanduser(args.vault or os.environ.get("VAULT_PATH") or ""))
     if not vault or not os.path.isdir(vault):
@@ -238,7 +260,7 @@ def build_cfg(args) -> dict:
         "pages_per_collection": env_int("DOCTOR_WIKI_PAGES_PER_COLLECTION", 5),
         "wiki_words": env_int("DOCTOR_WIKI_WORDS", 3000),
         "log_path": os.environ.get("RESEARCH_LOG_PATH", ""),
-        "agent": getattr(args, "agent", None) or os.environ.get("MNEMON_AGENT") or "agent",
+        "agent": safe_agent(getattr(args, "agent", None) or os.environ.get("MNEMON_AGENT") or "agent"),
         "today": datetime.date.fromisoformat(args.today) if args.today else datetime.date.today(),
     }
 
@@ -261,13 +283,46 @@ def journal_path(cfg: dict) -> str:
         raise Refused("config", "research_log_path must lie inside the vault (%s): %s" % (vault, raw))
     rel = os.path.relpath(p, vault)
     top = rel.split(os.sep)[0]
-    if top in JOURNAL_FORBIDDEN_DIRS or rel in JOURNAL_FORBIDDEN_FILES:
+    forbidden = {d.lower() for d in JOURNAL_FORBIDDEN_DIRS}
+    files = {f.lower() for f in JOURNAL_FORBIDDEN_FILES}
+    if top.lower() in forbidden or rel.lower() in files:
         raise Refused("config", "research_log_path must not lie under %s (the journal is neither a page, a source, a dossier nor a note): %s"
-                      % ("/".join(sorted(JOURNAL_FORBIDDEN_DIRS)) if top in JOURNAL_FORBIDDEN_DIRS else rel, raw))
+                      % ("/".join(sorted(JOURNAL_FORBIDDEN_DIRS)) if top.lower() in forbidden else rel, raw))
+    # the same by identity: a protected folder reached through any name (a case-insensitive volume,
+    # a hard link to a directory) is still that folder
+    try:
+        parent_id = os.stat(parent)
+        parent_key = (parent_id.st_dev, parent_id.st_ino)
+    except OSError:
+        parent_key = None
+    walk = parent
+    chain = set()
+    while parent_key is not None and os.path.commonpath([walk, vault]) == vault:
+        try:
+            st = os.stat(walk)
+            chain.add((st.st_dev, st.st_ino))
+        except OSError:
+            break
+        if walk == vault:
+            break
+        walk = os.path.dirname(walk)
+    for d in JOURNAL_FORBIDDEN_DIRS:
+        try:
+            st = os.stat(os.path.join(vault, d))
+        except OSError:
+            continue
+        if (st.st_dev, st.st_ino) in chain:
+            raise Refused("config", "research_log_path lies under %s/ by identity (another spelling or a link of the folder): %s" % (d, raw))
     if not rel.endswith(".jsonl"):
         raise Refused("config", "research_log_path must name a .jsonl file: %s" % raw)
     if os.path.isdir(p) or os.path.islink(p):
         raise Refused("config", "research_log_path must be a regular file or absent: %s" % raw)
+    try:
+        st = os.stat(p)
+    except OSError:
+        st = None
+    if st is not None and st.st_nlink > 1:
+        raise Refused("config", "research_log_path has %d links — a hard link could alias a protected file: %s" % (st.st_nlink, raw))
     host_rule = os.environ.get("WRITER_HOST", "").strip()
     if host_rule and host_rule != cfg["host"]:
         raise Refused("writer-host", "research_log_path lies inside the vault, which host %s may not write (writer_host %s)" % (cfg["host"], host_rule))
@@ -275,6 +330,8 @@ def journal_path(cfg: dict) -> str:
 
 
 def journal_write(cfg: dict, record: dict) -> None:
+    if test_hooks() and os.environ.get("MNEMON_TEST_RESEARCH_CRASH") == "journal":
+        raise RuntimeError("test hook: the journal cannot be written")
     path = journal_path(cfg)
     rec = {"schema": JOURNAL_SCHEMA, "ts": utc_now(), "instance": cfg["instance"], "host": cfg["host"], "agent": cfg["agent"]}
     rec.update(record)
@@ -678,10 +735,13 @@ def run_fence(cfg: dict, prompt: str, attempt_dir: str) -> Tuple[str, Optional[d
         fh.write(prompt)
     with open(schema_path, "w", encoding="utf-8") as fh:
         json.dump(ANSWER_SCHEMA, fh)
-    argv = [sys.executable, os.path.join(BIN_DIR, "extract-run.py"), "--attempt-dir", attempt_dir, "--prompt", prompt_path,
+    runner = os.path.join(BIN_DIR, "extract-run.py")
+    if not os.path.isfile(runner):
+        raise Refused("environment", "the fence runner %s is missing from this engine" % runner, 3)
+    argv = [sys.executable, runner, "--attempt-dir", attempt_dir, "--prompt", prompt_path,
             "--schema", schema_path, "--model", cfg["model"], "--timeout", str(cfg["timeout"]), "--max-turns", "4",
             "--claude", cfg["claude"]]
-    if cfg.get("max_usd"):
+    if cfg.get("max_usd") is not None:
         argv += ["--max-budget-usd", str(cfg["max_usd"])]
     p = subprocess.run(argv, capture_output=True, text=True)
     cls = (p.stdout.strip().splitlines() or ["claude-exit"])[-1]
@@ -698,7 +758,7 @@ def run_fence(cfg: dict, prompt: str, attempt_dir: str) -> Tuple[str, Optional[d
 # Assembly and validation (§3.5, §3.6)
 # ---------------------------------------------------------------------------------------------
 
-def field_problems(fields: dict, kind: str, recusal: bool) -> List[str]:
+def field_problems(fields: dict, kind: str, recusal: bool, own_dossiers: Tuple[str, ...] = ()) -> List[str]:
     problems: List[str] = []
     props = ANSWER_SCHEMA["properties"]
     for f in ANSWER_SCHEMA["required"]:
@@ -711,6 +771,8 @@ def field_problems(fields: dict, kind: str, recusal: bool) -> List[str]:
             problems.append("`%s`: %d characters, above maxLength %d" % (f, len(v), props[f]["maxLength"]))
         elif "\x00" in v:
             problems.append("`%s`: a NUL byte" % f)
+        elif "\r" in v:
+            problems.append("`%s`: a carriage return — the reader treats a bare CR as a line break, the field check does not" % f)
     for f in KIND_SECTIONS[kind]:
         v = fields.get(f)
         if not isinstance(v, str) or not v.strip():
@@ -740,6 +802,9 @@ def field_problems(fields: dict, kind: str, recusal: bool) -> List[str]:
             link = lr.classify_body_link(m.group(1))
             if link["kind"] != "sources" and f != "atlas_reading":
                 problems.append("`%s`: a link that is not a Sources locator: [[%s]] — a page cites evidence, nothing else" % (f, m.group(1)[:80]))
+            elif f == "atlas_reading" and link["kind"] != "sources" and not (
+                    link["kind"] == "local" and link.get("path", "").startswith("Collections/") and link["path"][len("Collections/"):] in own_dossiers):
+                problems.append("`atlas_reading`: a link that is neither a Sources link nor one of the page's own dossiers: [[%s]]" % m.group(1)[:80])
             elif link["kind"] == "sources" and link.get("file") == "extract" and f != "atlas_reading":
                 pass    # navigation to an extract is allowed by the interface; the locator rule is the validator's
     return problems
@@ -761,6 +826,14 @@ def existing_log_lines(text: Optional[str]) -> List[str]:
     return []
 
 
+def expected_sections_of(kind: str, reading: bool) -> List[str]:
+    out = [SECTION_OF[f] for f in KIND_SECTIONS[kind]]
+    if reading:
+        out.append("Atlas reading")
+    out.append("Log")
+    return out
+
+
 def assemble_page(snap: dict, fields: dict, existing: Optional[dict], cfg: dict, recusal: bool, recusal_why: str,
                   reason: Optional[str], log_lines: List[str]) -> Tuple[str, str]:
     """(page text, body_sha256) — the frontmatter prints, the evidential sections, the consumable
@@ -772,7 +845,7 @@ def assemble_page(snap: dict, fields: dict, existing: Optional[dict], cfg: dict,
     visibility = (existing or {}).get("visibility") or "personal"
     fm: List[str] = ["---", "type: wiki", "kind: %s" % kind]
     fm.append("collections: [%s]" % ", ".join(quoted("[[Collections/%s]]" % n) for n in snap["collections"]))
-    fm.append("domains: [%s]" % ", ".join(snap["domains"]))
+    fm.append("domains: [%s]" % ", ".join(quoted(d) for d in snap["domains"]))
     fm.append("based_on:")
     for rev in sorted(snap["based_on"]):
         e = snap["based_on"][rev]
@@ -817,11 +890,16 @@ def assemble_page(snap: dict, fields: dict, existing: Optional[dict], cfg: dict,
     return text, sha
 
 
-def validate_page_text(text: str, page: str, ctx: dict, cfg: dict) -> Tuple[dict, List[str], List[str]]:
+def validate_page_text(text: str, page: str, ctx: dict, cfg: dict, expected_sections: Optional[List[str]] = None) -> Tuple[dict, List[str], List[str]]:
     """(record, rejections, warnings) of an assembled page on the vault's research context."""
     rec = lr.read_wiki_text(text, page, file="Wiki/%s.md" % page)
     if rec["state"] != "ok":
         return rec, ["schema: %s" % e for e in rec["errors"]], []
+    if expected_sections is not None:
+        _blk, body, offset = lr.split_frontmatter(text.replace("\r\n", "\n").replace("\r", "\n"))
+        _secs, names = lr._sections(body, offset)
+        if names != expected_sections or rec["body"]["cut"] != expected_sections[len([s for s in expected_sections if s not in lr.WIKI_CONSUMABLE_SECTIONS])]:
+            return rec, ["structure: the assembled page's sections are %s, the engine wrote %s — a field moved the boundary" % (names, expected_sections)], []
     rec = lr.validate_wiki(rec, ctx)
     rejections: List[str] = []
     warnings: List[str] = []
@@ -935,10 +1013,10 @@ def cmd_update(args, cfg: dict) -> int:
         cls, result = run_fence(cfg, prompt, attempt_dir)
         if cls != "ok" or result is None:
             journal_write(cfg, dict(base, outcome="stopped", **{"class": "generation"}, detail="%s (%s)" % (cls, attempt_dir), attempts=attempts))
-            raise Stopped("generation", "the fenced build did not return a result (%s); see %s" % (cls, attempt_dir), attempt_dir=attempt_dir)
+            raise Stopped("generation", "the fenced build did not return a result (%s); see %s" % (cls, attempt_dir), attempt_dir=attempt_dir, journaled=True)
         if result.get("is_error"):
             journal_write(cfg, dict(base, outcome="stopped", **{"class": "generation"}, detail="claude error result (%s)" % result.get("subtype"), attempts=attempts))
-            raise Stopped("generation", "claude answered with an error result (subtype %s); see %s" % (result.get("subtype", "?"), attempt_dir), attempt_dir=attempt_dir)
+            raise Stopped("generation", "claude answered with an error result (subtype %s); see %s" % (result.get("subtype", "?"), attempt_dir), attempt_dir=attempt_dir, journaled=True)
         try:
             cost += float(result.get("total_cost_usd") or 0)
         except (TypeError, ValueError):
@@ -948,17 +1026,18 @@ def cmd_update(args, cfg: dict) -> int:
             problems = ["no structured_output in the result"]
         else:
             fields = {k: v for k, v in fields.items() if k in ANSWER_SCHEMA["properties"]}
-            problems = field_problems(fields, kind, recusal)
+            problems = field_problems(fields, kind, recusal, tuple(snap["collections"]))
         if not problems:
             page_text, _sha = assemble_page(snap, fields, existing, cfg, recusal, recusal_why, args.reason, log_lines)
-            rec, problems, warnings = validate_page_text(page_text, page, ctx, cfg)
+            has_reading = bool((fields.get("atlas_reading") or "").strip()) and not recusal
+            rec, problems, warnings = validate_page_text(page_text, page, ctx, cfg, expected_sections_of(kind, has_reading))
         if not problems:
             break
         validation = "\n".join("- " + p for p in problems)
         if attempt == 2:
             journal_write(cfg, dict(base, outcome="stopped", **{"class": "invalid-output"}, detail=one_line(validation, 1000), attempts=attempts, cost_usd=cost))
             raise Stopped("invalid-output", "two answers rejected; the last: %s (see %s)" % ("; ".join(problems[:4]), attempt_dir),
-                          problems=problems, attempt_dir=attempt_dir)
+                          problems=problems, attempt_dir=attempt_dir, journaled=True)
 
     # recheck (§3.7): everything read is read again
     scan2, _ctx2 = take_scan(cfg)
@@ -966,11 +1045,11 @@ def cmd_update(args, cfg: dict) -> int:
         snap2 = take_snapshot(scan2, cfg, page, kind, names)
     except Refused as exc:
         journal_write(cfg, dict(base, outcome="stopped", **{"class": "lost-update"}, detail="recheck: %s" % exc.msg, attempts=attempts, cost_usd=cost))
-        raise Stopped("lost-update", "the recheck before publication failed: %s — nothing written" % exc.msg)
+        raise Stopped("lost-update", "the recheck before publication failed: %s — nothing written" % exc.msg, journaled=True)
     diffs = snapshot_differences(snap, snap2)
     if diffs:
         journal_write(cfg, dict(base, outcome="stopped", **{"class": "lost-update"}, detail="; ".join(diffs), attempts=attempts, cost_usd=cost))
-        raise Stopped("lost-update", "something moved between the snapshot and the publication: %s — nothing written" % "; ".join(diffs), differences=diffs)
+        raise Stopped("lost-update", "something moved between the snapshot and the publication: %s — nothing written" % "; ".join(diffs), differences=diffs, journaled=True)
 
     # publication (§3.8): one file, one rename
     crash = os.environ.get("MNEMON_TEST_RESEARCH_CRASH") if test_hooks() else None
@@ -979,7 +1058,7 @@ def cmd_update(args, cfg: dict) -> int:
         atomic_write(snap["target_path"], page_text.encode("utf-8"), crash=crash)
     except Exception as exc:
         journal_write(cfg, dict(base, outcome="stopped", **{"class": "write"}, detail=str(exc), attempts=attempts, cost_usd=cost))
-        raise Stopped("write", "the page could not be written: %s" % exc, 1)
+        raise Stopped("write", "the page could not be written: %s" % exc, 1, journaled=True)
     outcome = "rebuilt" if existing is not None else "published"
     uncited = sorted(set(snap["based_on"]) - set(rec.get("cited") or []))
     if uncited:
@@ -987,8 +1066,12 @@ def cmd_update(args, cfg: dict) -> int:
     detail = "%s Wiki/%s.md from %s on %d revisions (%s)%s" % (
         outcome, page, snap["collections"][0], len(snap["based_on"]), one_line(args.reason or ("package changed" if existing else "new page"), 120),
         "; recusal declared (%s)" % recusal_why if recusal else "")
-    journal_write(cfg, dict(base, outcome=outcome, **{"class": None}, detail=detail, body_sha256=rec["body_sha256"], attempts=attempts,
-                            cost_usd=cost, duration_ms=int((time.time() - started) * 1000), warnings=warnings))
+    try:
+        journal_write(cfg, dict(base, outcome=outcome, **{"class": None}, detail=detail, body_sha256=rec["body_sha256"], attempts=attempts,
+                                cost_usd=cost, duration_ms=int((time.time() - started) * 1000), warnings=warnings))
+    except Exception as jexc:   # §7: the page is the record; a journal that fails after the rename does not undo it
+        print("mnemon research: the page is published but the journal could not be written (%s)" % jexc, file=sys.stderr)
+        warnings.append("journal not written: %s" % jexc)
     return emit(args, op, outcome, None, page, detail, 0, body_sha256=rec["body_sha256"], fingerprint=snap["fingerprint"],
                 warnings=warnings, uncited=uncited, attempts=attempts, cost_usd=cost, states=rec.get("states"))
 
@@ -1083,11 +1166,11 @@ def compute_proposals(scan: dict, ctx: dict, cfg: dict, only_collection: Optiona
                     for it in items_on:
                         text = item_line_text(scan["vault"], n, it["line"]) or ""
                         if not heads:
-                            props.append({"id": proposal_id("rebind", n, c["sha256"], it["line"], text, e["rev"], "-"), "kind": "cite", "collection": n, "line": it["line"],
+                            props.append({"id": proposal_id("rebind", n, c["sha256"], it["line"], text, e["rev"], "-"), "kind": "report", "collection": n, "line": it["line"],
                                           "text": text, "from": e["rev"], "to": None, "reason": "superseded, but no current head is reachable (a cycle or a dangling edge)"})
                         for h in heads:
                             if h in listed:
-                                props.append({"id": proposal_id("rebind", n, c["sha256"], it["line"], text, e["rev"], h), "kind": "cite", "collection": n, "line": it["line"],
+                                props.append({"id": proposal_id("rebind", n, c["sha256"], it["line"], text, e["rev"], h), "kind": "report", "collection": n, "line": it["line"],
                                               "text": text, "from": e["rev"], "to": h,
                                               "reason": "%s is superseded by %s, which is already an item of %s: a rebind would duplicate a line — the owner removes or excludes the old line" % (e["rev"], h, n)})
                                 continue
@@ -1202,10 +1285,15 @@ def rewrite_links(text: str, page: str, target: str) -> Tuple[str, int]:
     """The incoming links rewritten in the body only: the frontmatter is left byte for byte (a
     `suppressed_pages` entry written as `[[Wiki/<page>]]` is the owner's veto and must outlive the file)."""
     pat = re.compile(r"\[\[Wiki/" + re.escape(page) + r"(?:\.md)?(?:#[^|\]]*)?(?:\|[^\]]*)?\]\]")
+    bom = ""
+    if text.startswith("\ufeff"):
+        bom, text = "\ufeff", text[1:]
     block, body, _offset = lr.split_frontmatter(text)
     head = text[:len(text) - len(body)] if block is not None else ""
+    embed = re.compile(r"!" + pat.pattern)
+    body, n_embed = embed.subn("[[%s]]" % target, body)          # an embed of a page becomes a plain link to the dossier
     new, n = pat.subn("[[%s]]" % target, body)
-    return head + new, n
+    return bom + head + new, n + n_embed
 
 
 def cmd_delete(args, cfg: dict) -> int:
@@ -1226,6 +1314,9 @@ def cmd_delete(args, cfg: dict) -> int:
     supporting = list(rec.get("collections") or [])
     suppressed = "suppressed" in rec.get("states", [])
     no_open = not any(cols.get(n, {}).get("status") == "open" for n in supporting)
+    if rec["state"] != "ok":
+        raise Refused("delete", "Wiki/%s.md fails the wiki/1 schema (%s): its support is unknown, nothing can be proven — the owner fixes or removes it by hand"
+                      % (page, "; ".join(rec["errors"][:3])))
     if rec.get("not_probed") and not suppressed:
         raise Refused("delete", "the page's dossiers could not be read (%s): neither case can be decided" % "; ".join(rec["not_probed"]))
     if not (suppressed or no_open):
@@ -1260,7 +1351,7 @@ def cmd_delete(args, cfg: dict) -> int:
             if data is None:
                 continue
             text = data.decode("utf-8", "surrogateescape")
-            _blk, body_only, _o = lr.split_frontmatter(text)
+            _blk, body_only, _o = lr.split_frontmatter(text[1:] if text.startswith("\ufeff") else text)
             n = len(link_re.findall(body_only))
             if not n:
                 continue
@@ -1278,7 +1369,8 @@ def cmd_delete(args, cfg: dict) -> int:
             continue
         text = data.decode("utf-8", "surrogateescape")
         lines = text.split("\n")
-        end = (other.get("body") or {}).get("end")
+        fresh = lr.read_wiki_text(data.decode("utf-8", "replace"), other["name"])     # the boundary of the bytes compared, not the scan's
+        end = (fresh.get("body") or {}).get("end")
         if end is None:
             end = len(lines) + 1
         head, tail = lines[:end - 1], lines[end - 1:]
@@ -1388,7 +1480,8 @@ def cmd_ask(args, cfg: dict) -> int:
         served.append({
             "name": p["name"], "kind": p.get("kind"), "updated": p.get("updated"), "states": list(p["states"]),
             "collections": [{"name": n, "status": cols.get(n, {}).get("status"), "question": cols.get(n, {}).get("question")} for n in pcols],
-            "domains": sorted(domains), "body_sha256": p.get("body_sha256"),
+            "domains": sorted(domains), "body_sha256": (p.get("body") or {}).get("sha256") or p.get("body_sha256"),
+            "printed_body_sha256": p.get("body_sha256"),
             "based_on": [e["rev"] for e in p.get("based_on") or []],
             "locators": [{"line": l["line"], "rev": l["rev"], "form": l["form"], "heading": l.get("heading"), "quote": l.get("quote")}
                          for l in p.get("locators") or [] if l.get("verified")],
@@ -1500,7 +1593,7 @@ def cmd_synthesize(args, cfg: dict) -> int:
 # triage --propose (§6)
 # ---------------------------------------------------------------------------------------------
 
-FIRST_PERSON_RE = re.compile(r"(?i)(?<![\w-])(I|I'm|I've|my|mine|я|мы|мне|мой|моя|моё|наша|наше|наш)(?![\w-])")
+FIRST_PERSON_RE = re.compile(r"(?<![\w-])(I|I'm|I've|[Mm]y|[Mm]ine|[Яя]|[Мм]ы|[Мм]не|[Мм]ой|[Мм]оя|[Мм]оё|[Нн]аша|[Нн]аше|[Нн]аш)(?![\w-])")
 
 
 def kind_of_heading(h: str) -> str:
@@ -1655,6 +1748,8 @@ def main(argv: List[str]) -> int:
         return 2
     op = {"update": "research-update", "apply": "research-apply", "delete": "research-delete", "ask": "research-ask",
           "synthesize": "research-synthesize", "triage": "research-triage"}[args.verb]
+    if args.verb == "update" and getattr(args, "propose", False):
+        op = "research-propose"
     cfg = None
     try:
         cfg = build_cfg(args)
@@ -1671,8 +1766,24 @@ def main(argv: List[str]) -> int:
         return emit(args, op, "refused", exc.cls, page, exc.msg, exc.code, **exc.extra)
     except Stopped as exc:
         page = getattr(args, "page", None) if isinstance(getattr(args, "page", None), str) else None
+        if cfg is not None and not exc.extra.pop("journaled", False):
+            try:
+                journal_write(cfg, {"op": op, "page": page, "outcome": "stopped", "class": exc.cls, "detail": exc.msg,
+                                    "rewritten": exc.extra.get("rewritten")})
+            except Exception as jexc:
+                print("mnemon research: the journal could not be written (%s)" % jexc, file=sys.stderr)
         print("mnemon research: %s" % exc.msg, file=sys.stderr)
         return emit(args, op, "stopped", exc.cls, page, exc.msg, exc.code, **exc.extra)
+    except Exception as exc:    # an unexpected error: still one RESULT line, one journal line, exit 1 (§8)
+        page = getattr(args, "page", None) if isinstance(getattr(args, "page", None), str) else None
+        msg = "%s: %s" % (type(exc).__name__, exc)
+        if cfg is not None:
+            try:
+                journal_write(cfg, {"op": op, "page": page, "outcome": "stopped", "class": "error", "detail": msg})
+            except Exception as jexc:
+                print("mnemon research: the journal could not be written (%s)" % jexc, file=sys.stderr)
+        print("mnemon research: unexpected error — %s" % msg, file=sys.stderr)
+        return emit(args, op, "stopped", "error", page, msg, 1)
 
 
 if __name__ == "__main__":
