@@ -39,6 +39,7 @@ envelopes in a directory → mnemon ingest <dir> → the same gateway, one resul
 - **Inbox** — automated feeders (a bot, a scanner, an import script) drop one JSON envelope per item into a directory; `mnemon ingest <dir>` captures them through the same gateway with one result record per envelope — see [`docs/inbox.md`](docs/inbox.md).
 - **Instances** — one per vault: `~/.config/mnemon/instances/<name>.yaml` holds the vault path, archive directory, search provider and model; `mnemon init` writes it. Several libraries (say, personal and work) coexist on one machine and are selected with `--instance <name>` or `MNEMON_INSTANCE`.
 - **Library** (`archive_dir` in the instance config) — saves original source files before extraction. Any directory — iCloud, NAS, local folder. Omit to disable.
+- **Research layers** — `Collections/` (a dossier: a question and the revisions that bear on it) and `Wiki/` (what the evidence says now: pages an agent builds with `mnemon research update` from a recorded package, in the same fence as the extractor, with locators into `source.md` and prints the doctor verifies; never by hand). The operations — build, propose, apply, delete, ask, synthesize, triage — are the protocol [`docs/research.md`](docs/research.md); the schemas and the derived states are [`docs/specs/2026-10-27-research-interface.md`](docs/specs/2026-10-27-research-interface.md).
 - **Brain** (`Sources/` in vault) — `source.md` (immutable metadata) + `extract.md` (AI-generated, re-generable). Searchable via `mnemon search` (a grep-style token scan over extracts — see below), Obsidian, or the [QMD](https://github.com/tobi/qmd) CLI if you index the vault with it. A **bookmark** (`mnemon add --tier bookmark`) is the cheap tier: a deterministic card in `source.md`, no fetch, no model, no extract — `mnemon triage list | promote | dismiss` is its queue, and a later full `add` of the same URL promotes it ([`docs/capture.md`](docs/capture.md) §15).
 - **Reader context** — a markdown profile of you that personalizes every extract's framing, key ideas, and rating. The same article produces different outputs for different readers.
 - **Templates** — Fabric-inspired extraction prompts per source type (article, video, podcast, paper, book, idea, conversation).
@@ -115,6 +116,8 @@ Then from any Claude Code session:
 /source-add https://example.com/article
 /source-search "organizational design"
 /source-status
+/research-update --page "Trust without identity — four answers" --kind contradiction --collection "Trust without identity"
+/research-ask "what does the evidence say about trust without identity?"
 ```
 
 Or from the shell: `mnemon add --url https://example.com/article`, `mnemon search --query "organizational design"`, `mnemon status`. A vault that should always use its own instance sets `"env": {"MNEMON_INSTANCE": "<name>"}` in its `.claude/settings.json`; otherwise the default instance (`~/.config/mnemon/default`) is used.

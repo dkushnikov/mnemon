@@ -92,6 +92,10 @@ In a Claude Code session (the plugin):
 | `/source-add <url>` | Capture and extract a source |
 | `/source-search <query>` | Search your knowledge library |
 | `/source-status` | Dashboard: totals, breakdowns, recent |
+| `/research-update` | Build or rebuild a `Wiki/` page from its dossiers (the engine's fenced build); `--propose` what the pages need, `apply` one approved rebind, `delete` a vetoed page |
+| `/research-ask` | Answer a question from the usable pages' evidential bodies and record the use |
+| `/research-synthesize` | Draft the owner's thought as a `seed`/`draft` note, inside the radius |
+| `/research-triage` | Map an agent-drafted Synthesis note into its destinations for the owner's verdict |
 
 Each skill runs the installed engine's dispatcher. From the shell, the same and more — `mnemon [--instance <name>] [--config <path>] <command>`:
 
@@ -104,6 +108,11 @@ Each skill runs the installed engine's dispatcher. From the shell, the same and 
 | `mnemon status --brief [--json] [--budget <s>]` | One line of the vault store for a briefing: counters, seeds / drafts with their ages, the data checks' summary (`N fail · N warn · probed a/b`), the research document's (`research: N pages · K fail · M warn`); read-only; the whole run is a worker process killed at `--budget` seconds (default 10), and the line then says `not probed (budget … exceeded)` rather than guess ([specs/2026-10-16-vault-store.md](specs/2026-10-16-vault-store.md)) |
 | `mnemon reindex [--no-hand-edit-report]` | Rebuild the vault's `index.md` from `Sources/`, `Collections/`, `Wiki/` and `Synthesis/` — every row regenerated, replaced rows preserved in `_inputs/index-hand-edits-<date>.md` (not the qmd index); a `## Collections` section lists each collection's status, item count and question, a `## Wiki` section each page's kind, revisions, dossiers and `updated`, both through the research reader |
 | `mnemon triage` | Content-aware URL triage |
+| `mnemon research update --page <name> --kind <kind> --collection <dossier>… [--reason <why>] [--recusal on\|off] [--dry-run] [--json]` | Build or rebuild a `Wiki/` page from a recorded package — the supporting dossiers, the charter and every item's `source.md` — in the extractor's fence; validated by the research reader, published as one file with its prints (`based_on`, `inputs`, `body_sha256`); an unchanged package is a no-op, a hand-edited page is never overwritten ([research.md](research.md)) |
+| `mnemon research update --propose [--collection <dossier>] [--page <name>]` · `apply <id> --by <who>` · `delete <page>` | Read-only proposals (a stale page → a rebind of the dossier line, a rebuild, a delete); one approved rebind applied; a suppressed or orphan page removed with its incoming links rewritten |
+| `mnemon research ask --task-id <id> --question <q> [--collection …] [--page …] [--domain <d>] [--limit <n>] [--json]` · `--record --page <name> --outcome used\|not-used\|no-page` | The usable pages' evidential bodies with their locators (never `## Atlas reading`), journaled per task; the use recorded afterwards |
+| `mnemon research synthesize --name <note> --status seed\|draft [--from-page <name>] < body.md` | A `Synthesis/` note with `drafted_by`, written only while the charter's radius holds; never `stable` |
+| `mnemon research triage --propose [--note <name>]` | The fragment map of every agent-drafted note, oldest first (read-only) |
 | `mnemon audit` | Archive audit |
 | `mnemon audit --canonical` | Folders whose URLs coincide under canonicalization v1 (read-only, nothing merged) |
 | `mnemon init <name> --vault <path> [--archive <dir>] [--collection <name>] [--search-provider grep\|qmd] [--reader-context <path> \| --reader-context-path <path>] [--charter <path>] [--writer-host <host>] [--default]` | Create an instance and scaffold its vault (`Sources/`, `Collections/`, `Synthesis/`, `_meta/`, the Guide, `Templates/Collection.md`, `Templates/Wiki.md`; never overwrites). `--reader-context` copies a profile into the vault, `--reader-context-path` references one in place; with neither, an existing `_meta/reader-context.md` or `reader-context.md` in the vault is used |
