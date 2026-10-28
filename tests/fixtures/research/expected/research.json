@@ -514,7 +514,1144 @@
    ],
    "updated": "2026-10-18",
    "wiki": "on"
+  },
+  {
+   "aliases": [],
+   "counts": {
+    "excluded": 0,
+    "items": 1,
+    "links_outside_items": 0,
+    "malformed": 0,
+    "unresolved": 0
+   },
+   "created": "2026-10-11",
+   "curated_by": "owner",
+   "domains": [
+    "mc/ai"
+   ],
+   "errors": [],
+   "extra": {},
+   "file": "Collections/Veto by name.md",
+   "items": [
+    {
+     "display": null,
+     "excluded": false,
+     "exists": true,
+     "file": "extract",
+     "fragment": null,
+     "line": 16,
+     "note": "a page named in suppressed_pages is vetoed, any other page is allowed",
+     "rev": "2026-02-11_bbbbbbbb",
+     "role": "the one item"
+    }
+   ],
+   "malformed": [],
+   "migrated_from": null,
+   "name": "Veto by name",
+   "question": "Can an open dossier forbid one page by its name?",
+   "recusal": null,
+   "schema": "collection/1",
+   "sections": [
+    "Items"
+   ],
+   "source_of": null,
+   "state": "ok",
+   "status": "open",
+   "suppressed_pages": [
+    "Suppressed by name"
+   ],
+   "tags": [],
+   "updated": null,
+   "wiki": "on"
+  },
+  {
+   "aliases": [],
+   "counts": {
+    "excluded": 0,
+    "items": 1,
+    "links_outside_items": 0,
+    "malformed": 0,
+    "unresolved": 0
+   },
+   "created": "2026-10-10",
+   "curated_by": "owner",
+   "domains": [
+    "learning"
+   ],
+   "errors": [],
+   "extra": {},
+   "file": "Collections/Vetoed.md",
+   "items": [
+    {
+     "display": null,
+     "excluded": false,
+     "exists": true,
+     "file": "extract",
+     "fragment": null,
+     "line": 15,
+     "note": "the dossier is open, the owner wants no page under it",
+     "rev": "2026-02-11_bbbbbbbb",
+     "role": "the one item"
+    }
+   ],
+   "malformed": [],
+   "migrated_from": null,
+   "name": "Vetoed",
+   "question": "Can an open dossier forbid every derived page?",
+   "recusal": null,
+   "schema": "collection/1",
+   "sections": [
+    "Items"
+   ],
+   "source_of": null,
+   "state": "ok",
+   "status": "open",
+   "suppressed_pages": [],
+   "tags": [],
+   "updated": null,
+   "wiki": "off"
   }
  ],
- "schema": "research-interface/1"
+ "schema": "research-interface/1",
+ "wiki": [
+  {
+   "based_on": [],
+   "body": {
+    "cut": null,
+    "end": 17,
+    "sha256": "ae2f33dfdbd9999c1d57d645523fb304ec15b5727870fd0fdaf69e7a01688afe",
+    "start": 13,
+    "words": 15
+   },
+   "body_sha256": null,
+   "cited": [],
+   "collections": [
+    "Trust without identity"
+   ],
+   "counts": {
+    "based_on": 0,
+    "collections": 1,
+    "links": 0,
+    "links_consumable": 0,
+    "locators": 0
+   },
+   "created": null,
+   "domains": [],
+   "errors": [
+    "missing required `based_on`",
+    "`kind` must be one of concept|comparison|contradiction|open-question (got 'essay')",
+    "`body_sha256` is not a sha256 hex digest",
+    "inputs: `kind` must be one of concept|comparison|contradiction|open-question (got 'essay')"
+   ],
+   "extra": {},
+   "file": "Wiki/Bad schema.md",
+   "inputs": {
+    "charter_sha256": null,
+    "collections": {},
+    "kind": "essay",
+    "page": "Bad schema",
+    "protocol": "research/1",
+    "template": "wiki/essay@1"
+   },
+   "kind": null,
+   "links": [],
+   "locators": [],
+   "maintained_by": null,
+   "name": "Bad schema",
+   "not_probed": [],
+   "reasons": {
+    "schema": [
+     "missing required `based_on`",
+     "`kind` must be one of concept|comparison|contradiction|open-question (got 'essay')",
+     "`body_sha256` is not a sha256 hex digest",
+     "inputs: `kind` must be one of concept|comparison|contradiction|open-question (got 'essay')"
+    ]
+   },
+   "schema": "wiki/1",
+   "sections": [],
+   "severity": "fail",
+   "state": "fail",
+   "states": [
+    "schema"
+   ],
+   "updated": null,
+   "usable": false,
+   "visibility": null
+  },
+  {
+   "based_on": [
+    {
+     "file": "extract",
+     "rev": "2026-01-10_aaaaaaaa",
+     "seal": "observed",
+     "text_sha256": "aa70d0f98335dfdb6a5e5a3df193854e27cc0604bfc858ed2e4717a9e3d71adc"
+    }
+   ],
+   "body": {
+    "cut": null,
+    "end": 27,
+    "sha256": "f4ef982b87d1f16c8ff42f96ade497d1704ef6de5e90288d24e93761b1fbac18",
+    "start": 21,
+    "words": 94
+   },
+   "body_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+   "cited": [
+    "2026-01-10_aaaaaaaa"
+   ],
+   "collections": [
+    "Trust without identity"
+   ],
+   "counts": {
+    "based_on": 1,
+    "collections": 1,
+    "links": 1,
+    "links_consumable": 0,
+    "locators": 1
+   },
+   "created": "2026-10-23",
+   "domains": [
+    "learning",
+    "mc/ai"
+   ],
+   "errors": [],
+   "extra": {},
+   "file": "Wiki/Edited outside.md",
+   "inputs": {
+    "charter_sha256": null,
+    "collections": {
+     "Trust without identity": "2c154224392aece5131190ac2f90f258aae2f88b65535255ce1340f7cec7a0a5"
+    },
+    "kind": "open-question",
+    "page": "Edited outside",
+    "protocol": "research/1",
+    "template": "wiki/open-question@1"
+   },
+   "kind": "open-question",
+   "links": [
+    {
+     "display": null,
+     "file": "source",
+     "fragment": "Alpha paper",
+     "kind": "sources",
+     "line": 25,
+     "locator": {
+      "form": "heading",
+      "heading": "Alpha paper",
+      "line": 25,
+      "reason": null,
+      "rev": "2026-01-10_aaaaaaaa",
+      "verified": true
+     },
+     "rev": "2026-01-10_aaaaaaaa",
+     "target": "Sources/2026-01-10_aaaaaaaa/source#Alpha paper"
+    }
+   ],
+   "locators": [
+    {
+     "form": "heading",
+     "heading": "Alpha paper",
+     "line": 25,
+     "reason": null,
+     "rev": "2026-01-10_aaaaaaaa",
+     "verified": true
+    }
+   ],
+   "maintained_by": "atlas",
+   "name": "Edited outside",
+   "not_probed": [],
+   "reasons": {
+    "edited-outside-update": [
+     "evidential body sha256 f4ef982b87d1… ≠ printed 111111111111…"
+    ]
+   },
+   "schema": "wiki/1",
+   "sections": [
+    "Open questions"
+   ],
+   "severity": "warn",
+   "state": "ok",
+   "states": [
+    "edited-outside-update"
+   ],
+   "updated": "2026-10-23",
+   "usable": true,
+   "visibility": null
+  },
+  {
+   "based_on": [
+    {
+     "file": "extract",
+     "rev": "2026-01-10_aaaaaaaa",
+     "seal": "observed",
+     "text_sha256": "aa70d0f98335dfdb6a5e5a3df193854e27cc0604bfc858ed2e4717a9e3d71adc"
+    }
+   ],
+   "body": {
+    "cut": null,
+    "end": 27,
+    "sha256": "865ff94d368495bceb9f05ff2078b9165e3a2e9ba840fba71156e7c8a18918f3",
+    "start": 21,
+    "words": 30
+   },
+   "body_sha256": "865ff94d368495bceb9f05ff2078b9165e3a2e9ba840fba71156e7c8a18918f3",
+   "cited": [
+    "2026-01-10_aaaaaaaa"
+   ],
+   "collections": [
+    "Annotated"
+   ],
+   "counts": {
+    "based_on": 1,
+    "collections": 1,
+    "links": 1,
+    "links_consumable": 0,
+    "locators": 1
+   },
+   "created": "2026-10-21",
+   "domains": [
+    "learning"
+   ],
+   "errors": [],
+   "extra": {},
+   "file": "Wiki/Inputs changed.md",
+   "inputs": {
+    "charter_sha256": null,
+    "collections": {
+     "Annotated": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "kind": "concept",
+    "page": "Inputs changed",
+    "protocol": "research/1",
+    "template": "wiki/concept@0"
+   },
+   "kind": "concept",
+   "links": [
+    {
+     "display": null,
+     "file": "source",
+     "fragment": "Alpha paper",
+     "kind": "sources",
+     "line": 25,
+     "locator": {
+      "form": "heading",
+      "heading": "Alpha paper",
+      "line": 25,
+      "reason": null,
+      "rev": "2026-01-10_aaaaaaaa",
+      "verified": true
+     },
+     "rev": "2026-01-10_aaaaaaaa",
+     "target": "Sources/2026-01-10_aaaaaaaa/source#Alpha paper"
+    }
+   ],
+   "locators": [
+    {
+     "form": "heading",
+     "heading": "Alpha paper",
+     "line": 25,
+     "reason": null,
+     "rev": "2026-01-10_aaaaaaaa",
+     "verified": true
+    }
+   ],
+   "maintained_by": "atlas",
+   "name": "Inputs changed",
+   "not_probed": [],
+   "reasons": {
+    "inputs-changed": [
+     "collection `Annotated` changed (4967238ddbfb… ≠ printed 000000000000…)",
+     "template `wiki/concept@0` ≠ engine `wiki/concept@1`"
+    ]
+   },
+   "schema": "wiki/1",
+   "sections": [
+    "State of evidence"
+   ],
+   "severity": "warn",
+   "state": "ok",
+   "states": [
+    "inputs-changed"
+   ],
+   "updated": "2026-10-21",
+   "usable": true,
+   "visibility": null
+  },
+  {
+   "based_on": [
+    {
+     "file": "extract",
+     "rev": "2026-02-11_bbbbbbbb",
+     "seal": "observed",
+     "text_sha256": "c3874ddd6c5e2dd9d5e9da1870f1b11875662809266beee142405c3eff4f8b6b"
+    }
+   ],
+   "body": {
+    "cut": null,
+    "end": 27,
+    "sha256": "967be529c350d2e477e09bb84212246626bd1bb3ccc1b89099b568726d3fb307",
+    "start": 21,
+    "words": 29
+   },
+   "body_sha256": "967be529c350d2e477e09bb84212246626bd1bb3ccc1b89099b568726d3fb307",
+   "cited": [
+    "2026-02-11_bbbbbbbb"
+   ],
+   "collections": [
+    "Closed dossier",
+    "Inbox minimal",
+    "Missing dossier"
+   ],
+   "counts": {
+    "based_on": 1,
+    "collections": 3,
+    "links": 1,
+    "links_consumable": 0,
+    "locators": 1
+   },
+   "created": "2026-10-24",
+   "domains": [
+    "learning"
+   ],
+   "errors": [],
+   "extra": {},
+   "file": "Wiki/Orphan page.md",
+   "inputs": {
+    "charter_sha256": null,
+    "collections": {
+     "Closed dossier": "cdcdc636a22a2bd5dbaa35c2239d4b8a35879914eaac1ef00c19c0238b8b7f58"
+    },
+    "kind": "concept",
+    "page": "Orphan page",
+    "protocol": "research/1",
+    "template": "wiki/concept@1"
+   },
+   "kind": "concept",
+   "links": [
+    {
+     "display": null,
+     "file": "source",
+     "fragment": "Beta bookmark",
+     "kind": "sources",
+     "line": 25,
+     "locator": {
+      "form": "heading",
+      "heading": "Beta bookmark",
+      "line": 25,
+      "reason": null,
+      "rev": "2026-02-11_bbbbbbbb",
+      "verified": true
+     },
+     "rev": "2026-02-11_bbbbbbbb",
+     "target": "Sources/2026-02-11_bbbbbbbb/source#Beta bookmark"
+    }
+   ],
+   "locators": [
+    {
+     "form": "heading",
+     "heading": "Beta bookmark",
+     "line": 25,
+     "reason": null,
+     "rev": "2026-02-11_bbbbbbbb",
+     "verified": true
+    }
+   ],
+   "maintained_by": "atlas",
+   "name": "Orphan page",
+   "not_probed": [],
+   "reasons": {
+    "orphan": [
+     "`Closed dossier` is closed",
+     "`Inbox minimal` is inbox",
+     "`Missing dossier` does not exist"
+    ]
+   },
+   "schema": "wiki/1",
+   "sections": [
+    "State of evidence"
+   ],
+   "severity": "warn",
+   "state": "ok",
+   "states": [
+    "orphan"
+   ],
+   "updated": "2026-10-24",
+   "usable": true,
+   "visibility": null
+  },
+  {
+   "based_on": [
+    {
+     "file": "extract",
+     "rev": "2026-03-12_cccccccc",
+     "seal": "observed",
+     "text_sha256": "b09d3e9f70216228486eba8b642ae2062481db8253823af8097bddb2e7bd1d12"
+    }
+   ],
+   "body": {
+    "cut": null,
+    "end": 28,
+    "sha256": "f0306aecd801868e359b629d2b362b8fb71c3f5046de4f4455f87dd6d180500f",
+    "start": 22,
+    "words": 24
+   },
+   "body_sha256": "f0306aecd801868e359b629d2b362b8fb71c3f5046de4f4455f87dd6d180500f",
+   "cited": [
+    "2026-03-12_cccccccc"
+   ],
+   "collections": [
+    "Trust without identity"
+   ],
+   "counts": {
+    "based_on": 1,
+    "collections": 1,
+    "links": 1,
+    "links_consumable": 0,
+    "locators": 1
+   },
+   "created": "2026-10-20",
+   "domains": [
+    "learning"
+   ],
+   "errors": [],
+   "extra": {},
+   "file": "Wiki/Stale page.md",
+   "inputs": {
+    "charter_sha256": null,
+    "collections": {
+     "Trust without identity": "2c154224392aece5131190ac2f90f258aae2f88b65535255ce1340f7cec7a0a5"
+    },
+    "kind": "concept",
+    "page": "Stale page",
+    "protocol": "research/1",
+    "template": "wiki/concept@1"
+   },
+   "kind": "concept",
+   "links": [
+    {
+     "display": null,
+     "file": "source",
+     "fragment": "Gamma report v1",
+     "kind": "sources",
+     "line": 26,
+     "locator": {
+      "form": "heading",
+      "heading": "Gamma report v1",
+      "line": 26,
+      "reason": null,
+      "rev": "2026-03-12_cccccccc",
+      "verified": true
+     },
+     "rev": "2026-03-12_cccccccc",
+     "target": "Sources/2026-03-12_cccccccc/source#Gamma report v1"
+    }
+   ],
+   "locators": [
+    {
+     "form": "heading",
+     "heading": "Gamma report v1",
+     "line": 26,
+     "reason": null,
+     "rev": "2026-03-12_cccccccc",
+     "verified": true
+    }
+   ],
+   "maintained_by": "atlas",
+   "name": "Stale page",
+   "not_probed": [],
+   "reasons": {
+    "stale": [
+     "2026-03-12_cccccccc is superseded"
+    ]
+   },
+   "schema": "wiki/1",
+   "sections": [
+    "State of evidence"
+   ],
+   "severity": "warn",
+   "state": "ok",
+   "states": [
+    "stale"
+   ],
+   "updated": "2026-10-20",
+   "usable": true,
+   "visibility": null
+  },
+  {
+   "based_on": [
+    {
+     "file": "extract",
+     "rev": "2026-02-11_bbbbbbbb",
+     "seal": "observed",
+     "text_sha256": "c3874ddd6c5e2dd9d5e9da1870f1b11875662809266beee142405c3eff4f8b6b"
+    }
+   ],
+   "body": {
+    "cut": null,
+    "end": 27,
+    "sha256": "254b1c02d188e1f497698b73bd519abcd13d387a8f265204423d4a6950f62ae2",
+    "start": 21,
+    "words": 30
+   },
+   "body_sha256": "254b1c02d188e1f497698b73bd519abcd13d387a8f265204423d4a6950f62ae2",
+   "cited": [],
+   "collections": [
+    "Veto by name",
+    "Trust without identity"
+   ],
+   "counts": {
+    "based_on": 1,
+    "collections": 2,
+    "links": 0,
+    "links_consumable": 0,
+    "locators": 0
+   },
+   "created": "2026-10-25",
+   "domains": [
+    "mc/ai",
+    "learning"
+   ],
+   "errors": [],
+   "extra": {},
+   "file": "Wiki/Suppressed by name.md",
+   "inputs": {
+    "charter_sha256": null,
+    "collections": {
+     "Veto by name": "7cdefdf85007d79bb1238c990119aaf664a35351be9230b99e5db28f9478dbc1"
+    },
+    "kind": "concept",
+    "page": "Suppressed by name",
+    "protocol": "research/1",
+    "template": "wiki/concept@1"
+   },
+   "kind": "concept",
+   "links": [],
+   "locators": [],
+   "maintained_by": "atlas",
+   "name": "Suppressed by name",
+   "not_probed": [],
+   "reasons": {
+    "suppressed": [
+     "vetoed by open collection `Veto by name` (named in suppressed_pages)"
+    ]
+   },
+   "schema": "wiki/1",
+   "sections": [
+    "State of evidence"
+   ],
+   "severity": "fail",
+   "state": "ok",
+   "states": [
+    "suppressed"
+   ],
+   "updated": "2026-10-25",
+   "usable": false,
+   "visibility": null
+  },
+  {
+   "based_on": [
+    {
+     "file": "extract",
+     "rev": "2026-01-10_aaaaaaaa",
+     "seal": "observed",
+     "text_sha256": "aa70d0f98335dfdb6a5e5a3df193854e27cc0604bfc858ed2e4717a9e3d71adc"
+    },
+    {
+     "file": "extract",
+     "rev": "2026-02-11_bbbbbbbb",
+     "seal": "observed",
+     "text_sha256": "c3874ddd6c5e2dd9d5e9da1870f1b11875662809266beee142405c3eff4f8b6b"
+    },
+    {
+     "file": null,
+     "rev": "2026-03-12_cccccccc-2",
+     "seal": "observed",
+     "text_sha256": "7cf34d3fb9d41b02365d6ec97929507ee1e8bba7d80b87a6575fb758ab7ff136"
+    }
+   ],
+   "body": {
+    "cut": "Atlas reading",
+    "end": 49,
+    "sha256": "4e40cdb625cf0c3c1825854bec7ef3e533daef096d3a5143f6bd4ae53d677da0",
+    "start": 29,
+    "words": 106
+   },
+   "body_sha256": "4e40cdb625cf0c3c1825854bec7ef3e533daef096d3a5143f6bd4ae53d677da0",
+   "cited": [
+    "2026-01-10_aaaaaaaa",
+    "2026-02-11_bbbbbbbb"
+   ],
+   "collections": [
+    "Trust without identity",
+    "Closed dossier"
+   ],
+   "counts": {
+    "based_on": 3,
+    "collections": 2,
+    "links": 3,
+    "links_consumable": 2,
+    "locators": 2
+   },
+   "created": "2026-10-20",
+   "domains": [
+    "learning",
+    "mc/ai"
+   ],
+   "errors": [],
+   "extra": {},
+   "file": "Wiki/Trust — four answers.md",
+   "inputs": {
+    "charter_sha256": null,
+    "collections": {
+     "Trust without identity": "2c154224392aece5131190ac2f90f258aae2f88b65535255ce1340f7cec7a0a5"
+    },
+    "kind": "contradiction",
+    "page": "Trust — four answers",
+    "protocol": "research/1",
+    "template": "wiki/contradiction@1"
+   },
+   "kind": "contradiction",
+   "links": [
+    {
+     "display": null,
+     "file": "source",
+     "fragment": "Alpha paper",
+     "kind": "sources",
+     "line": 33,
+     "locator": {
+      "form": "heading",
+      "heading": "Alpha paper",
+      "line": 33,
+      "reason": null,
+      "rev": "2026-01-10_aaaaaaaa",
+      "verified": true
+     },
+     "rev": "2026-01-10_aaaaaaaa",
+     "target": "Sources/2026-01-10_aaaaaaaa/source#Alpha paper"
+    },
+    {
+     "display": null,
+     "file": "source",
+     "fragment": null,
+     "kind": "sources",
+     "line": 35,
+     "locator": {
+      "form": "quote",
+      "line": 35,
+      "quote": "Beta is a bookmark-tier capture about trust and quotas.",
+      "reason": null,
+      "rev": "2026-02-11_bbbbbbbb",
+      "verified": true
+     },
+     "rev": "2026-02-11_bbbbbbbb",
+     "target": "Sources/2026-02-11_bbbbbbbb/source"
+    },
+    {
+     "display": "Gamma v2",
+     "file": "extract",
+     "fragment": null,
+     "kind": "sources",
+     "line": 36,
+     "rev": "2026-03-12_cccccccc-2",
+     "target": "Sources/2026-03-12_cccccccc-2/extract|Gamma v2"
+    }
+   ],
+   "locators": [
+    {
+     "form": "heading",
+     "heading": "Alpha paper",
+     "line": 33,
+     "reason": null,
+     "rev": "2026-01-10_aaaaaaaa",
+     "verified": true
+    },
+    {
+     "form": "quote",
+     "line": 35,
+     "quote": "Beta is a bookmark-tier capture about trust and quotas.",
+     "reason": null,
+     "rev": "2026-02-11_bbbbbbbb",
+     "verified": true
+    }
+   ],
+   "maintained_by": "atlas",
+   "name": "Trust — four answers",
+   "not_probed": [],
+   "reasons": {},
+   "schema": "wiki/1",
+   "sections": [
+    "State of evidence",
+    "Contradictions",
+    "Open questions",
+    "Atlas reading",
+    "Log"
+   ],
+   "severity": "ok",
+   "state": "ok",
+   "states": [],
+   "updated": "2026-10-22",
+   "usable": true,
+   "visibility": "personal"
+  },
+  {
+   "based_on": [
+    {
+     "file": "extract",
+     "rev": "2026-01-10_aaaaaaaa",
+     "seal": "observed",
+     "text_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+     "file": "extract",
+     "rev": "2026-02-11_bbbbbbbb",
+     "seal": "observed",
+     "text_sha256": "c3874ddd6c5e2dd9d5e9da1870f1b11875662809266beee142405c3eff4f8b6b"
+    }
+   ],
+   "body": {
+    "cut": null,
+    "end": 34,
+    "sha256": "1bf869243caba91e48310efb083a47a09325fcb8b5869fcc2b637b9a9132b237",
+    "start": 24,
+    "words": 66
+   },
+   "body_sha256": "1bf869243caba91e48310efb083a47a09325fcb8b5869fcc2b637b9a9132b237",
+   "cited": [],
+   "collections": [
+    "Trust without identity"
+   ],
+   "counts": {
+    "based_on": 2,
+    "collections": 1,
+    "links": 5,
+    "links_consumable": 0,
+    "locators": 2
+   },
+   "created": "2026-10-26",
+   "domains": [
+    "learning"
+   ],
+   "errors": [],
+   "extra": {},
+   "file": "Wiki/Unbound binding.md",
+   "inputs": {
+    "charter_sha256": null,
+    "collections": {
+     "Trust without identity": "2c154224392aece5131190ac2f90f258aae2f88b65535255ce1340f7cec7a0a5"
+    },
+    "kind": "concept",
+    "page": "Unbound binding",
+    "protocol": "research/1",
+    "template": "wiki/concept@1"
+   },
+   "kind": "concept",
+   "links": [
+    {
+     "display": null,
+     "file": "source",
+     "fragment": "Missing heading",
+     "kind": "sources",
+     "line": 28,
+     "locator": {
+      "form": "heading",
+      "heading": "Missing heading",
+      "line": 28,
+      "reason": "heading `Missing heading` not found in 2026-02-11_bbbbbbbb/source.md",
+      "rev": "2026-02-11_bbbbbbbb",
+      "verified": false
+     },
+     "rev": "2026-02-11_bbbbbbbb",
+     "target": "Sources/2026-02-11_bbbbbbbb/source#Missing heading"
+    },
+    {
+     "display": null,
+     "file": "source",
+     "fragment": null,
+     "kind": "sources",
+     "line": 30,
+     "locator": {
+      "form": "quote",
+      "line": 30,
+      "quote": "Beta is a full capture about identity.",
+      "reason": "quote not found in 2026-02-11_bbbbbbbb/source.md",
+      "rev": "2026-02-11_bbbbbbbb",
+      "verified": false
+     },
+     "rev": "2026-02-11_bbbbbbbb",
+     "target": "Sources/2026-02-11_bbbbbbbb/source"
+    },
+    {
+     "kind": "outside",
+     "line": 31,
+     "reason": "link outside the instance: ../Other vault/Sources/2026-01-10_aaaaaaaa/source",
+     "target": "../Other vault/Sources/2026-01-10_aaaaaaaa/source"
+    },
+    {
+     "kind": "unresolved",
+     "line": 32,
+     "reason": "not a link into Sources/, Collections/, Wiki/ or Synthesis/",
+     "target": "Some note"
+    },
+    {
+     "fragment": null,
+     "kind": "local",
+     "line": 32,
+     "path": "Synthesis/Stable note",
+     "target": "Synthesis/Stable note"
+    }
+   ],
+   "locators": [
+    {
+     "form": "heading",
+     "heading": "Missing heading",
+     "line": 28,
+     "reason": "heading `Missing heading` not found in 2026-02-11_bbbbbbbb/source.md",
+     "rev": "2026-02-11_bbbbbbbb",
+     "verified": false
+    },
+    {
+     "form": "quote",
+     "line": 30,
+     "quote": "Beta is a full capture about identity.",
+     "reason": "quote not found in 2026-02-11_bbbbbbbb/source.md",
+     "rev": "2026-02-11_bbbbbbbb",
+     "verified": false
+    }
+   ],
+   "maintained_by": "atlas",
+   "name": "Unbound binding",
+   "not_probed": [],
+   "reasons": {
+    "inputs-changed": [
+     "text of 2026-01-10_aaaaaaaa changed"
+    ],
+    "unbound": [
+     "seal observed on 2026-01-10_aaaaaaaa: printed 000000000000… ≠ body aa70d0f98335…",
+     "line 28: heading `Missing heading` not found in 2026-02-11_bbbbbbbb/source.md",
+     "line 30: quote not found in 2026-02-11_bbbbbbbb/source.md",
+     "line 31: link outside the instance: ../Other vault/Sources/2026-01-10_aaaaaaaa/source"
+    ],
+    "unresolved": [
+     "line 32: [[Some note]] (not a link into Sources/, Collections/, Wiki/ or Synthesis/)"
+    ]
+   },
+   "schema": "wiki/1",
+   "sections": [
+    "State of evidence"
+   ],
+   "severity": "fail",
+   "state": "ok",
+   "states": [
+    "unbound",
+    "inputs-changed"
+   ],
+   "updated": "2026-10-26",
+   "usable": false,
+   "visibility": null
+  },
+  {
+   "based_on": [
+    {
+     "file": "extract",
+     "rev": "2026-01-10_aaaaaaaa",
+     "seal": "observed",
+     "text_sha256": "aa70d0f98335dfdb6a5e5a3df193854e27cc0604bfc858ed2e4717a9e3d71adc"
+    }
+   ],
+   "body": {
+    "cut": null,
+    "end": 31,
+    "sha256": "3d7e0e08eef2496552932ef8ac75c8ca533fb0b7f0c9c5ab0eb82e5ceb9f93c1",
+    "start": 21,
+    "words": 37
+   },
+   "body_sha256": "3d7e0e08eef2496552932ef8ac75c8ca533fb0b7f0c9c5ab0eb82e5ceb9f93c1",
+   "cited": [
+    "2026-01-10_aaaaaaaa"
+   ],
+   "collections": [
+    "Trust without identity"
+   ],
+   "counts": {
+    "based_on": 1,
+    "collections": 1,
+    "links": 3,
+    "links_consumable": 0,
+    "locators": 2
+   },
+   "created": "2026-10-25",
+   "domains": [
+    "learning"
+   ],
+   "errors": [],
+   "extra": {},
+   "file": "Wiki/Unbound unlisted.md",
+   "inputs": {
+    "charter_sha256": null,
+    "collections": {
+     "Annotated": "4967238ddbfbb85a7912b3472cd0c319edb1f9f6d2b954736a8fd64c95e73c9d",
+     "Trust without identity": "2c154224392aece5131190ac2f90f258aae2f88b65535255ce1340f7cec7a0a5"
+    },
+    "kind": "concept",
+    "page": "Unbound unlisted",
+    "protocol": "research/1",
+    "template": "wiki/comparison@1"
+   },
+   "kind": "comparison",
+   "links": [
+    {
+     "display": null,
+     "file": "source",
+     "fragment": "Alpha paper",
+     "kind": "sources",
+     "line": 27,
+     "locator": {
+      "form": "heading",
+      "heading": "Alpha paper",
+      "line": 27,
+      "reason": null,
+      "rev": "2026-01-10_aaaaaaaa",
+      "verified": true
+     },
+     "rev": "2026-01-10_aaaaaaaa",
+     "target": "Sources/2026-01-10_aaaaaaaa/source#Alpha paper"
+    },
+    {
+     "display": null,
+     "file": "source",
+     "fragment": "Delta capture",
+     "kind": "sources",
+     "line": 28,
+     "locator": {
+      "form": "heading",
+      "heading": "Delta capture",
+      "line": 28,
+      "reason": null,
+      "rev": "2026-04-13_dddddddd",
+      "verified": null
+     },
+     "rev": "2026-04-13_dddddddd",
+     "target": "Sources/2026-04-13_dddddddd/source#Delta capture"
+    },
+    {
+     "display": null,
+     "file": "extract",
+     "fragment": null,
+     "kind": "sources",
+     "line": 29,
+     "rev": "2026-03-12_cccccccc-2",
+     "target": "Sources/2026-03-12_cccccccc-2/extract"
+    }
+   ],
+   "locators": [
+    {
+     "form": "heading",
+     "heading": "Alpha paper",
+     "line": 27,
+     "reason": null,
+     "rev": "2026-01-10_aaaaaaaa",
+     "verified": true
+    },
+    {
+     "form": "heading",
+     "heading": "Delta capture",
+     "line": 28,
+     "reason": null,
+     "rev": "2026-04-13_dddddddd",
+     "verified": null
+    }
+   ],
+   "maintained_by": "atlas",
+   "name": "Unbound unlisted",
+   "not_probed": [],
+   "reasons": {
+    "unbound": [
+     "kind `comparison` ≠ inputs.kind `concept`",
+     "inputs.collections names `Annotated`, which is not in `collections`",
+     "line 28: unlisted — [[Sources/2026-04-13_dddddddd/source#Delta capture]] names a revision outside based_on",
+     "line 29: unlisted — [[Sources/2026-03-12_cccccccc-2/extract]] names a revision outside based_on"
+    ]
+   },
+   "schema": "wiki/1",
+   "sections": [
+    "Positions"
+   ],
+   "severity": "fail",
+   "state": "ok",
+   "states": [
+    "unbound"
+   ],
+   "updated": "2026-10-26",
+   "usable": false,
+   "visibility": null
+  },
+  {
+   "based_on": [
+    {
+     "file": "extract",
+     "rev": "2026-02-11_bbbbbbbb",
+     "seal": "observed",
+     "text_sha256": "c3874ddd6c5e2dd9d5e9da1870f1b11875662809266beee142405c3eff4f8b6b"
+    }
+   ],
+   "body": {
+    "cut": null,
+    "end": 27,
+    "sha256": "8f501540b27857fe608c9f37b5bb0159dfafaf168821a155c0907f33108f4c13",
+    "start": 21,
+    "words": 28
+   },
+   "body_sha256": "8f501540b27857fe608c9f37b5bb0159dfafaf168821a155c0907f33108f4c13",
+   "cited": [],
+   "collections": [
+    "Vetoed"
+   ],
+   "counts": {
+    "based_on": 1,
+    "collections": 1,
+    "links": 0,
+    "links_consumable": 0,
+    "locators": 0
+   },
+   "created": "2026-10-24",
+   "domains": [
+    "learning"
+   ],
+   "errors": [],
+   "extra": {},
+   "file": "Wiki/Vetoed page.md",
+   "inputs": {
+    "charter_sha256": null,
+    "collections": {
+     "Vetoed": "ef8e54f0d0eb9625fac31b6b2e7a7ed4c9ccfaa7afd1a438286719686f9093ca"
+    },
+    "kind": "concept",
+    "page": "Vetoed page",
+    "protocol": "research/1",
+    "template": "wiki/concept@1"
+   },
+   "kind": "concept",
+   "links": [],
+   "locators": [],
+   "maintained_by": "atlas",
+   "name": "Vetoed page",
+   "not_probed": [],
+   "reasons": {
+    "suppressed": [
+     "vetoed by open collection `Vetoed` (wiki: off)"
+    ]
+   },
+   "schema": "wiki/1",
+   "sections": [
+    "State of evidence"
+   ],
+   "severity": "fail",
+   "state": "ok",
+   "states": [
+    "suppressed"
+   ],
+   "updated": "2026-10-24",
+   "usable": false,
+   "visibility": null
+  }
+ ]
 }

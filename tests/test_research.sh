@@ -58,7 +58,8 @@ run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" search --query trust --inclu
 assert_eq "$rc" "0" "mnemon search --include-collections exits 0"
 assert_eq "$(jq_ "$out" 'd["schema"]')" "mnemon-search/2" "the JSON is mnemon-search/2"
 assert_eq "$(jq_ "$out" 'sorted(set(r["result_type"] for r in d["results"]))')" "['collection', 'extract']" "collections and extracts, no synthesis without its flag"
-assert_eq "$(jq_ "$out" 'sorted(r["file"] for r in d["results"] if r["result_type"] == "collection")')" "['Annotated.md', 'Closed dossier.md', 'Inbox minimal.md', 'Trust without identity.md']" "four collections of one folder are four results (dedup by file)"
+assert_eq "$(jq_ "$out" 'sorted(r["file"] for r in d["results"] if r["result_type"] == "collection")')" "['Annotated.md', 'Closed dossier.md', 'Inbox minimal.md', 'Trust without identity.md']" "four collections of one folder are four results (dedup by file; the two veto dossiers do not mention trust)"
+assert_eq "$(jq_ "$out" 'd["wiki"]')" "None" "the wiki block is null without --include-wiki"
 assert_eq "$(jq_ "$out" 'sorted(set(str(r["tier"]) for r in d["results"] if r["result_type"] == "collection"))')" "['None']" "a collection result has tier null"
 assert_eq "$(jq_ "$out" '[r["tier"] for r in d["results"] if r["path"] == "Sources/2026-02-11_bbbbbbbb/"]')" "['bookmark']" "tier is the capture tier of the revision (bookmark from source.md)"
 run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" search --query trust
@@ -69,29 +70,69 @@ assert_contains "$out" "synthesis · status: stable" "...and a synthesis note's"
 assert_contains "$out" "extract · tier: bookmark" "...and the capture tier of a Sources result"
 assert_contains "$out" "source · tier: bookmark" "...a bookmark revision without an extract is a source result"
 run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" search --query trust --include-wiki
-assert_eq "$rc" "2" "--include-wiki is reserved for phase 3b (a usage error today)"
+assert_eq "$rc" "0" "--include-wiki exits 0 (phase 3b)"
+assert_eq "$(jq_ "$out" '[r["file"] for r in d["wiki"]["results"]]')" "['Edited outside.md', 'Trust — four answers.md', 'Inputs changed.md', 'Stale page.md']" "the wiki block: usable pages by updated desc — suppressed, unbound, schema-failed and orphan pages left out"
+assert_eq "$(jq_ "$out" 'd["wiki"]["count"], d["wiki"]["limit"], sorted(set(r["result_type"] for r in d["wiki"]["results"])), set(str(r["tier"]) for r in d["wiki"]["results"])')" "(4, 5, ['wiki'], {'None'})" "...its own count and limit; result_type wiki, tier null"
+assert_eq "$(jq_ "$out" '[r["states"] for r in d["wiki"]["results"] if r["file"] == "Stale page.md"]')" "[['stale']]" "...a page carries its derived states"
+assert_eq "$(jq_ "$out" 'any("Mentions trust here too" in r["snippet"] for r in d["wiki"]["results"])')" "False" "...## Atlas reading is cut from the snippets"
+assert_eq "$(jq_ "$out" 'sorted(set(r["result_type"] for r in d["results"]))')" "['extract']" "...the main block is unchanged by the flag"
+run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" search --query trust --include-wiki --include-orphans --wiki-limit 1
+assert_eq "$(jq_ "$out" '[r["file"] for r in d["wiki"]["results"]], d["wiki"]["count"]')" "(['Orphan page.md'], 1)" "--include-orphans adds orphan pages; --wiki-limit caps the block"
+run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" search --query trust --include-wiki --domain mc/ai --human
+assert_contains "$out" "wiki · contradiction · updated 2026-10-22 · domains: learning, mc/ai · ok" "the human form prints the wiki block with kind, updated, inherited domains and states"
+assert_not_contains "$out" "Inputs changed" "--domain filters wiki pages by their inherited domains"
 
 run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" reindex
 assert_eq "$rc" "0" "mnemon reindex on the fixture exits 0"
-assert_contains "$out" "Collections=8" "...and reports the collections"
-assert_contains "$(cat "$VAULT/index.md")" "| Collections | 8 |" "index.md: the Status row"
-assert_eq "$(grep -c '^- \[\[Collections/' "$VAULT/index.md")" "8" "index.md: one row per collection"
+assert_contains "$out" "Collections=10, Wiki=10" "...and reports the collections and the wiki pages"
+assert_contains "$(cat "$VAULT/index.md")" "| Collections | 10 |" "index.md: the Status row"
+assert_contains "$(cat "$VAULT/index.md")" "| Wiki | 10 |" "index.md: the Wiki Status row (phase 3b)"
+assert_eq "$(grep -c '^- \[\[Collections/' "$VAULT/index.md")" "10" "index.md: one row per collection"
+assert_eq "$(grep -c '^- \[\[Wiki/' "$VAULT/index.md")" "10" "index.md: one row per wiki page (the dot-file skipped)"
+assert_contains "$(cat "$VAULT/index.md")" "- [[Wiki/Trust — four answers|Trust — four answers]] (contradiction, 3 sources, 2 collections, updated 2026-10-22)" "index.md: a wiki row carries the stored facts, not the states"
+assert_contains "$(cat "$VAULT/index.md")" "- [[Wiki/Bad schema|Bad schema]] (?, 0 sources, 1 collections) (fail: missing required \`based_on\`)" "index.md: a page whose schema fails says so"
+assert_eq "$(python3 -c 'import sys; t=open(sys.argv[1]).read().split("\n"); print(t.index("## Wiki") > t.index("## Collections") and t.index("## Wiki") < t.index("## Synthesis Notes"))' "$VAULT/index.md")" "True" "index.md: ## Wiki sits between ## Collections and ## Synthesis Notes"
 assert_contains "$(cat "$VAULT/index.md")" "(open, 4 items, 1 excluded) — How can an agent be trusted when it cannot be identified?" "index.md: status, items, excluded, the question"
 run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" status
 assert_eq "$rc" "0" "mnemon status exits 0 on the fixture"
 run hermetic "$MNEMON" --config "$TEST_TMPDIR/research.yaml" doctor --data --json
 JSON="$TEST_TMPDIR/doc.json"; printf '%s' "$out" > "$JSON"
-assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["data"]["schema"], len(d["data"]["checks"]), sorted(c["name"] for c in d["data"]["checks"])[0])' "$JSON")" "mnemon-doctor-data/1 19 data/arxiv-abstract" "doctor --data stays mnemon-doctor-data/1 with its 19 checks (the research document is phase 3b)"
-assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["data"]["counters"]; print(d["collections"], d["collections_fail"], d["filed"], d["integrated"])' "$JSON")" "8 4 4 1" "...and its counters carry the collections additively, filed extended"
+assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["data"]["schema"], len(d["data"]["checks"]), sorted(c["name"] for c in d["data"]["checks"])[0])' "$JSON")" "mnemon-doctor-data/1 19 data/arxiv-abstract" "doctor --data stays mnemon-doctor-data/1 with its 19 checks"
+assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["data"]["counters"]; print(d["collections"], d["collections_fail"], d["filed"], d["integrated"], d["wiki_pages"], d["wiki_fail"])' "$JSON")" "10 4 4 1 10 1" "...and its counters carry the collections and the wiki additively, filed extended (based_on ⊆ the filed set here)"
+assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["research"]; print(d["schema"], len(d["checks"]), d["summary"]["coverage"], d["summary"]["fail"], d["summary"]["warn"], d["summary"]["probed"])' "$JSON")" "mnemon-doctor-research/1 10 {'pages': 10, 'collections': 10} 3 5 10" "the research document is embedded next to data: 10 checks, coverage, 3 fail · 5 warn (research/index is ok after the reindex above), probed 10/10"
+assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print([c["status"] for c in d["checks"] if c["name"] == "research/wiki-binding"], d["exit"])' "$JSON")" "['fail'] 1" "...the research lines are in checks[] and a research fail joins the aggregated exit 1"
+assert_eq "$rc" "1" "doctor --data --json exits 1 on the fixture (research fails; the data document has none)"
+assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["data"]; print(d["summary"]["fail"])' "$JSON")" "0" "...the data document itself has 0 fail: the exit came from research"
 assert_eq "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["data"]; print([c["status"] for c in d["checks"] if c["name"] == "store/index"][0])' "$JSON")" "ok" "store/index reads only the Sources rows: the Collections section is no drift"
 run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" search --query trust --include-collections --limit 20
 assert_eq "$rc" "0" "search is read-only: nothing changed by reindex/doctor breaks it"
+run hermetic "$MNEMON" --config "$TEST_TMPDIR/research.yaml" doctor --list research/wiki-binding
+assert_eq "$rc" "0" "doctor --list research/<check> is the namespaced door"
+assert_eq "$(printf '%s\n' "$out" | cut -f1 | sort | tr '\n' ' ')" "Wiki/Suppressed by name Wiki/Unbound binding Wiki/Unbound unlisted Wiki/Vetoed page " "...one item per unbound or suppressed page"
+run hermetic "$MNEMON" --config "$TEST_TMPDIR/research.yaml" doctor --list wiki-evidence
+assert_contains "$out" "Collections/Trust without identity · 2026-03-12_cccccccc-2	uncited: no verified locator on any of the 7 pages" "...the short name reaches a research check too; an uncited item names its dossier and revision"
+run hermetic "$MNEMON" --config "$TEST_TMPDIR/research.yaml" status --brief
+assert_eq "$rc" "0" "status --brief exits 0 on the fixture (its policy: exit 0 after a run)"
+assert_contains "$out" "· probed 17/19 · research: 10 pages · 3 fail · 5 warn" "...and carries the research part after the data one: pages, the checks' fails and warns (research/index ok after the reindex above)"
+# one budget, two documents: a deadline that hits only the research document leaves the data one probed
+run hermetic env MNEMON_TEST_DOCTOR_STALL_RESEARCH=5 "$MNEMON" --config "$TEST_TMPDIR/research.yaml" status --brief --budget 2
+assert_eq "$rc" "0" "status --brief under a budget the research document cannot meet exits 0"
+assert_contains "$out" "· probed 17/19 · research: not probed (research: budget 2 s exceeded)" "...the data document arrived before the deadline and is kept; the research one is not probed"
+assert_not_contains "$out" "data: not probed" "...the data document is probed"
+run hermetic env MNEMON_TEST_DOCTOR_STALL_RESEARCH=5 python3 "$MNEMON_ROOT/bin/vault-doctor.py" --vault "$VAULT" --budget 2 --research --json
+assert_eq "$(jq_ "$out" 'd["summary"]["not_probed"], d["summary"]["probed"], [x["code"] for x in d["diagnostics"]]')" "(10, 0, ['budget'])" "...its ten checks are not probed with a budget diagnostic"
+run hermetic env MNEMON_TEST_DOCTOR_RAISE=research/wiki-orphan "$MNEMON" --config "$TEST_TMPDIR/research.yaml" doctor --data
+assert_contains "$out" "warn research/wiki-orphan — not probed: error: RuntimeError: test hook" "a research check that raises is not probed, the others are kept"
+assert_contains "$out" "fail doctor/error — research/wiki-orphan: RuntimeError: test hook" "...and a fail-level error diagnostic names it"
 
 # --- 4. the reader as a door ---
 echo "--- lib_research.py as a door ---"
 run python3 "$MNEMON_ROOT/bin/lib_research.py" --vault "$VAULT"
 assert_eq "$rc" "1" "exit 1: four documents fail"
-assert_contains "$out" "collections: 8 · fail 4 · unreadable 0" "the summary line"
+assert_contains "$out" "collections: 10 · fail 4 · unreadable 0" "the summary line"
+assert_contains "$out" "wiki: 10 pages · fail 5 · warn 4 · not probed 0" "the wiki summary line: schema fail, suppressed and unbound are fails"
+assert_contains "$out" "! suppressed: vetoed by open collection \`Vetoed\` (wiki: off)" "a veto is named with its reason"
+assert_contains "$out" "! unbound: line 28: unlisted — [[Sources/2026-04-13_dddddddd/source#Delta capture]] names a revision outside based_on" "an unlisted evidential link is named with its line"
 assert_contains "$out" "line 12: two or more links on one line" "every malformed line is named with its reason"
 run python3 "$MNEMON_ROOT/bin/lib_research.py" --file "$VAULT/Collections/Trust without identity.md"
 assert_eq "$rc" "0" "--file on a valid document exits 0"
@@ -112,6 +153,11 @@ assert_contains "$out" "✓ Sources/ Collections/ Synthesis/ _meta/" "...and say
 run python3 "$MNEMON_ROOT/bin/lib_research.py" --file "$TEST_TMPDIR/v2/Templates/Collection.md"
 assert_eq "$rc" "1" "the template is a scaffold, not a valid document (placeholder revision)"
 assert_contains "$out" "revision name malformed" "...rejected for its placeholder, nothing else"
+assert_file_exists "$TEST_TMPDIR/v2/Templates/Wiki.md" "init copies Templates/Wiki.md (phase 3b)"
+run python3 "$MNEMON_ROOT/bin/lib_research.py" --file "$TEST_TMPDIR/v2/Templates/Wiki.md"
+assert_eq "$rc" "1" "the wiki template is a scaffold read as a wiki page (type: wiki), not a valid one"
+assert_contains "$out" "fail Wiki — concept" "...read by the wiki reader"
+assert_contains "$out" "based_on[0]: rev: revision name malformed" "...rejected for its placeholders"
 for f in CLAUDE.md _meta/Protocol.md; do
   assert_contains "$(cat "$MNEMON_ROOT/vault-template/$f")" 'Collections/' "vault-template/$f names Collections/"
   assert_contains "$(cat "$MNEMON_ROOT/vault-template/$f")" 'Wiki/' "vault-template/$f names Wiki/"

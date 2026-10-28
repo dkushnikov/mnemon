@@ -1,15 +1,15 @@
 {
  "captured": 2,
- "collection_items": 14,
+ "collection_items": 16,
  "collection_items_excluded": 1,
  "collection_items_malformed": 11,
  "collection_items_unresolved": 2,
- "collections": 8,
+ "collections": 10,
  "collections_fail": 4,
  "collections_status": {
   "closed": 1,
   "inbox": 1,
-  "open": 6,
+  "open": 8,
   "unknown": 0
  },
  "collections_unreadable": 0,
@@ -23,5 +23,9 @@
  "seeds": 1,
  "stable": 1,
  "superseded": 1,
- "synthesis": 2
+ "synthesis": 2,
+ "wiki_based_on": 12,
+ "wiki_fail": 1,
+ "wiki_pages": 10,
+ "wiki_unreadable": 0
 }

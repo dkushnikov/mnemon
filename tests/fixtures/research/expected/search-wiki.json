@@ -1,0 +1,190 @@
+{
+ "configured_provider": null,
+ "count": 4,
+ "fallback_applied": false,
+ "fallback_token": null,
+ "provider": "grep",
+ "query": "trust",
+ "results": [
+  {
+   "author": "",
+   "created": "2026-03-12",
+   "domains": [
+    "mc/engineering",
+    "learning"
+   ],
+   "file": "extract.md",
+   "path": "Sources/2026-03-12_cccccccc-2/",
+   "rating": 8,
+   "result_type": "extract",
+   "snippet": "Gamma v2: the signatures had no trust anchor; escalation went to peers.",
+   "status": "extracted",
+   "tags": [
+    "incident",
+    "trust"
+   ],
+   "tier": "full",
+   "title": "Gamma report v2",
+   "url": ""
+  },
+  {
+   "author": "",
+   "created": "2026-01-10",
+   "domains": [
+    "learning",
+    "mc/ai"
+   ],
+   "file": "extract.md",
+   "path": "Sources/2026-01-10_aaaaaaaa/",
+   "rating": 7,
+   "result_type": "extract",
+   "snippet": "Alpha: trust from the price of action, not from identity.",
+   "status": "extracted",
+   "tags": [
+    "trust",
+    "identity"
+   ],
+   "tier": "full",
+   "title": "Alpha paper",
+   "url": ""
+  },
+  {
+   "author": "",
+   "created": "2026-03-12",
+   "domains": [
+    "mc/engineering"
+   ],
+   "file": "extract.md",
+   "path": "Sources/2026-03-12_cccccccc/",
+   "rating": 6,
+   "result_type": "extract",
+   "snippet": "Gamma v1: agents invented signatures without a root of trust.",
+   "status": "extracted",
+   "tags": [
+    "incident"
+   ],
+   "tier": "full",
+   "title": "Gamma report v1",
+   "url": ""
+  },
+  {
+   "author": "",
+   "created": "2026-02-11",
+   "domains": [
+    "learning"
+   ],
+   "file": "extract.md",
+   "path": "Sources/2026-02-11_bbbbbbbb/",
+   "rating": 5,
+   "result_type": "extract",
+   "snippet": "Beta: quotas and karma as the price of trust.",
+   "status": "extracted",
+   "tags": [
+    "trust",
+    "quotas"
+   ],
+   "tier": "bookmark",
+   "title": "Beta bookmark",
+   "url": ""
+  }
+ ],
+ "schema": "mnemon-search/2",
+ "tokens": [
+  "trust"
+ ],
+ "wiki": {
+  "count": 4,
+  "limit": 5,
+  "results": [
+   {
+    "author": "",
+    "created": "2026-10-23",
+    "domains": [
+     "learning",
+     "mc/ai"
+    ],
+    "file": "Edited outside.md",
+    "kind": "open-question",
+    "path": "Wiki/",
+    "rating": null,
+    "result_type": "wiki",
+    "snippet": "- Is the price of an action a measure of trust at all, or only a measure of the attacker's budget? The question stays open because the one source that raises it — [[Sources/2026-01-10_aaaaaaaa/source#…",
+    "states": [
+     "edited-outside-update"
+    ],
+    "status": null,
+    "tags": [],
+    "tier": null,
+    "title": "Edited outside",
+    "updated": "2026-10-23",
+    "url": ""
+   },
+   {
+    "author": "",
+    "created": "2026-10-20",
+    "domains": [
+     "learning",
+     "mc/ai"
+    ],
+    "file": "Trust — four answers.md",
+    "kind": "contradiction",
+    "path": "Wiki/",
+    "rating": null,
+    "result_type": "wiki",
+    "snippet": "# Trust — four answers",
+    "states": [],
+    "status": null,
+    "tags": [],
+    "tier": null,
+    "title": "Trust — four answers",
+    "updated": "2026-10-22",
+    "url": ""
+   },
+   {
+    "author": "",
+    "created": "2026-10-21",
+    "domains": [
+     "learning"
+    ],
+    "file": "Inputs changed.md",
+    "kind": "concept",
+    "path": "Wiki/",
+    "rating": null,
+    "result_type": "wiki",
+    "snippet": "- Trust as the price of an action — [[Sources/2026-01-10_aaaaaaaa/source#Alpha paper]]. The dossier changed after the build and the template version moved on.",
+    "states": [
+     "inputs-changed"
+    ],
+    "status": null,
+    "tags": [],
+    "tier": null,
+    "title": "Inputs changed",
+    "updated": "2026-10-21",
+    "url": ""
+   },
+   {
+    "author": "",
+    "created": "2026-10-20",
+    "domains": [
+     "learning",
+     "mc/ai"
+    ],
+    "file": "Stale page.md",
+    "kind": "concept",
+    "path": "Wiki/",
+    "rating": null,
+    "result_type": "wiki",
+    "snippet": "- The first revision had no trust anchor — [[Sources/2026-03-12_cccccccc/source#Gamma report v1]]. A newer revision supersedes it.",
+    "states": [
+     "stale"
+    ],
+    "status": null,
+    "tags": [],
+    "tier": null,
+    "title": "Stale page",
+    "updated": "2026-10-20",
+    "url": ""
+   }
+  ]
+ }
+}

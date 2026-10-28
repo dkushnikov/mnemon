@@ -1,0 +1,677 @@
+{
+ "checks": [
+  {
+   "counts": {
+    "documents": 10,
+    "fail": 4,
+    "malformed_lines": 11,
+    "status": {
+     "closed": 1,
+     "inbox": 1,
+     "open": 8,
+     "unknown": 0
+    },
+    "unreadable": 0,
+    "unresolved_items": 2
+   },
+   "detail": "10 documents; 4 fail (Bad frontmatter, Duplicate heading, Malformed items, …); 11 malformed lines; 2 unresolved items",
+   "fix": "operator",
+   "items": [
+    {
+     "errors": 6,
+     "id": "Collections/Bad frontmatter",
+     "malformed": 0,
+     "rating": null,
+     "reason": "duplicate key `status`; nested mapping under `capture` (flat scalars and lists only); missing required `question`; `created` is not an ISO date (YYYY-MM-DD); …",
+     "status": "open",
+     "words": null
+    },
+    {
+     "id": "Collections/Closed dossier",
+     "rating": null,
+     "reason": "1 unresolved item: 2026-04-13_dddddddd",
+     "status": "closed",
+     "unresolved": 1,
+     "words": null
+    },
+    {
+     "errors": 1,
+     "id": "Collections/Duplicate heading",
+     "malformed": 0,
+     "rating": null,
+     "reason": "duplicate `## Items` heading (lines 9, 13)",
+     "status": "open",
+     "words": null
+    },
+    {
+     "id": "Collections/Inbox minimal",
+     "rating": null,
+     "reason": "1 unresolved item: 2026-05-01_eeeeeeee",
+     "status": "inbox",
+     "unresolved": 1,
+     "words": null
+    },
+    {
+     "errors": 0,
+     "id": "Collections/Malformed items",
+     "malformed": 11,
+     "rating": null,
+     "reason": "line 12: two or more links on one line; line 13: list line without a Sources/ link; line 14: link outside Sources/ (another folder or another instance); line 15: path traversal in link target; …",
+     "status": "open",
+     "words": null
+    },
+    {
+     "errors": 1,
+     "id": "Collections/No items section",
+     "malformed": 0,
+     "rating": null,
+     "reason": "no `## Items` section",
+     "status": "open",
+     "words": null
+    }
+   ],
+   "name": "research/collections",
+   "probed": true,
+   "reason": null,
+   "status": "fail",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "closed": 1,
+    "inbox": 1,
+    "oldest_days": 26,
+    "open": 8
+   },
+   "detail": "8 open dossiers, oldest 26 d (Collections/Duplicate heading); inbox 1 · closed 1",
+   "fix": "operator",
+   "items": [
+    {
+     "age_days": 26,
+     "id": "Collections/Duplicate heading",
+     "rating": null,
+     "reason": "open 26 d (since 2026-10-01)",
+     "status": "open",
+     "words": null
+    },
+    {
+     "age_days": 26,
+     "id": "Collections/Malformed items",
+     "rating": null,
+     "reason": "open 26 d (since 2026-10-01)",
+     "status": "open",
+     "words": null
+    },
+    {
+     "age_days": 26,
+     "id": "Collections/No items section",
+     "rating": null,
+     "reason": "open 26 d (since 2026-10-01)",
+     "status": "open",
+     "words": null
+    },
+    {
+     "age_days": 22,
+     "id": "Collections/Annotated",
+     "rating": null,
+     "reason": "open 22 d (since 2026-10-05)",
+     "status": "open",
+     "words": null
+    },
+    {
+     "age_days": 17,
+     "id": "Collections/Vetoed",
+     "rating": null,
+     "reason": "open 17 d (since 2026-10-10)",
+     "status": "open",
+     "words": null
+    },
+    {
+     "age_days": 16,
+     "id": "Collections/Veto by name",
+     "rating": null,
+     "reason": "open 16 d (since 2026-10-11)",
+     "status": "open",
+     "words": null
+    },
+    {
+     "age_days": 9,
+     "id": "Collections/Trust without identity",
+     "rating": null,
+     "reason": "open 9 d (since 2026-10-18)",
+     "status": "open",
+     "words": null
+    },
+    {
+     "age_days": null,
+     "id": "Collections/Bad frontmatter",
+     "rating": null,
+     "reason": "open, no valid date",
+     "status": "open",
+     "words": null
+    }
+   ],
+   "name": "research/collection-age",
+   "probed": true,
+   "reason": null,
+   "status": "ok",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "fail": 1,
+    "kinds": {
+     "comparison": 1,
+     "concept": 6,
+     "contradiction": 1,
+     "open-question": 1
+    },
+    "not_probed": 0,
+    "pages": 10
+   },
+   "detail": "10 pages, 1 fail the schema (Bad schema)",
+   "fix": "research-update",
+   "items": [
+    {
+     "errors": 4,
+     "id": "Wiki/Bad schema",
+     "kind": null,
+     "rating": null,
+     "reason": "missing required `based_on`; `kind` must be one of concept|comparison|contradiction|open-question (got 'essay'); `body_sha256` is not a sha256 hex digest; inputs: `kind` must be one of concept|comparison|contradiction|open-question (got 'essay')",
+     "states": [
+      "schema"
+     ],
+     "words": 15
+    }
+   ],
+   "name": "research/wiki-schema",
+   "probed": true,
+   "reason": null,
+   "status": "fail",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "locators": 10,
+    "locators_verified": 7,
+    "suppressed": 2,
+    "unbound": 2
+   },
+   "detail": "2 unbound (Unbound binding, Unbound unlisted); 2 suppressed (Suppressed by name, Vetoed page); 7 of 10 locators verified",
+   "fix": "research-update",
+   "items": [
+    {
+     "hit": [
+      "suppressed"
+     ],
+     "id": "Wiki/Suppressed by name",
+     "kind": "concept",
+     "rating": null,
+     "reason": "suppressed: vetoed by open collection `Veto by name` (named in suppressed_pages)",
+     "states": [
+      "suppressed"
+     ],
+     "words": 30
+    },
+    {
+     "hit": [
+      "unbound"
+     ],
+     "id": "Wiki/Unbound binding",
+     "kind": "concept",
+     "rating": null,
+     "reason": "unbound: seal observed on 2026-01-10_aaaaaaaa: printed 000000000000… ≠ body aa70d0f98335…; unbound: line 28: heading `Missing heading` not found in 2026-02-11_bbbbbbbb/source.md; unbound: line 30: quote not found in 2026-02-11_bbbbbbbb/source.md; unbound: line 31: link outside the instance: ../Other vault/Sources/2026-01-10_aaaaaaaa/source",
+     "states": [
+      "unbound",
+      "inputs-changed"
+     ],
+     "words": 66
+    },
+    {
+     "hit": [
+      "unbound"
+     ],
+     "id": "Wiki/Unbound unlisted",
+     "kind": "comparison",
+     "rating": null,
+     "reason": "unbound: kind `comparison` ≠ inputs.kind `concept`; unbound: inputs.collections names `Annotated`, which is not in `collections`; unbound: line 28: unlisted — [[Sources/2026-04-13_dddddddd/source#Delta capture]] names a revision outside based_on; unbound: line 29: unlisted — [[Sources/2026-03-12_cccccccc-2/extract]] names a revision outside based_on",
+     "states": [
+      "unbound"
+     ],
+     "words": 37
+    },
+    {
+     "hit": [
+      "suppressed"
+     ],
+     "id": "Wiki/Vetoed page",
+     "kind": "concept",
+     "rating": null,
+     "reason": "suppressed: vetoed by open collection `Vetoed` (wiki: off)",
+     "states": [
+      "suppressed"
+     ],
+     "words": 28
+    }
+   ],
+   "name": "research/wiki-binding",
+   "probed": true,
+   "reason": null,
+   "status": "fail",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "stale": 1
+   },
+   "detail": "1 pages rest on a superseded revision (Stale page)",
+   "fix": "research-update --propose",
+   "items": [
+    {
+     "hit": [
+      "stale"
+     ],
+     "id": "Wiki/Stale page",
+     "kind": "concept",
+     "rating": null,
+     "reason": "stale: 2026-03-12_cccccccc is superseded",
+     "states": [
+      "stale"
+     ],
+     "words": 24
+    }
+   ],
+   "name": "research/wiki-stale",
+   "probed": true,
+   "reason": null,
+   "status": "warn",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "edited_outside_update": 1,
+    "inputs_changed": 2
+   },
+   "detail": "1 edited outside research-update (Edited outside); 2 with changed inputs (Inputs changed, Unbound binding)",
+   "fix": "research-update",
+   "items": [
+    {
+     "hit": [
+      "edited-outside-update"
+     ],
+     "id": "Wiki/Edited outside",
+     "kind": "open-question",
+     "rating": null,
+     "reason": "edited-outside-update: evidential body sha256 f4ef982b87d1… ≠ printed 111111111111…",
+     "states": [
+      "edited-outside-update",
+      "budget"
+     ],
+     "words": 94
+    },
+    {
+     "hit": [
+      "inputs-changed"
+     ],
+     "id": "Wiki/Inputs changed",
+     "kind": "concept",
+     "rating": null,
+     "reason": "inputs-changed: collection `Annotated` changed (4967238ddbfb… ≠ printed 000000000000…); inputs-changed: template `wiki/concept@0` ≠ engine `wiki/concept@1`",
+     "states": [
+      "inputs-changed"
+     ],
+     "words": 30
+    },
+    {
+     "hit": [
+      "inputs-changed"
+     ],
+     "id": "Wiki/Unbound binding",
+     "kind": "concept",
+     "rating": null,
+     "reason": "inputs-changed: text of 2026-01-10_aaaaaaaa changed",
+     "states": [
+      "unbound",
+      "inputs-changed"
+     ],
+     "words": 66
+    }
+   ],
+   "name": "research/wiki-inputs",
+   "probed": true,
+   "reason": null,
+   "status": "warn",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "collections_with_pages": 6,
+    "uncited": 4,
+    "weak_evidence": 0
+   },
+   "detail": "6 dossiers have pages; 4 uncited items (Inbox minimal · 2026-04-13_dddddddd, Trust without identity · 2026-03-12_cccccccc-2, Veto by name · 2026-02-11_bbbbbbbb, …); 0 pages on weak evidence",
+   "fix": "research-update",
+   "items": [
+    {
+     "id": "Collections/Inbox minimal · 2026-04-13_dddddddd",
+     "rating": null,
+     "reason": "uncited: no verified locator on any of the 1 page",
+     "role": null,
+     "words": null
+    },
+    {
+     "id": "Collections/Trust without identity · 2026-03-12_cccccccc-2",
+     "rating": null,
+     "reason": "uncited: no verified locator on any of the 7 pages",
+     "role": null,
+     "words": null
+    },
+    {
+     "id": "Collections/Veto by name · 2026-02-11_bbbbbbbb",
+     "rating": null,
+     "reason": "uncited: no verified locator on any of the 1 page",
+     "role": "the one item",
+     "words": null
+    },
+    {
+     "id": "Collections/Vetoed · 2026-02-11_bbbbbbbb",
+     "rating": null,
+     "reason": "uncited: no verified locator on any of the 1 page",
+     "role": "the one item",
+     "words": null
+    }
+   ],
+   "name": "research/wiki-evidence",
+   "probed": true,
+   "reason": null,
+   "status": "warn",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "orphan": 1
+   },
+   "detail": "1 pages without an open supporting dossier (Orphan page)",
+   "fix": "operator",
+   "items": [
+    {
+     "hit": [
+      "orphan"
+     ],
+     "id": "Wiki/Orphan page",
+     "kind": "concept",
+     "rating": null,
+     "reason": "orphan: `Closed dossier` is closed; orphan: `Inbox minimal` is inbox; orphan: `Missing dossier` does not exist",
+     "states": [
+      "orphan"
+     ],
+     "words": 29
+    }
+   ],
+   "name": "research/wiki-orphan",
+   "probed": true,
+   "reason": null,
+   "status": "warn",
+   "threshold": {}
+  },
+  {
+   "counts": {
+    "collections_over": 1,
+    "pages_over": 2
+   },
+   "detail": "1 dossiers over 5 pages (Trust without identity); 2 pages over 80 words (Edited outside, Trust — four answers)",
+   "fix": "operator",
+   "items": [
+    {
+     "id": "Collections/Trust without identity",
+     "pages": 7,
+     "rating": null,
+     "reason": "7 pages under one dossier (budget 5)",
+     "words": null
+    },
+    {
+     "hit": [
+      "budget"
+     ],
+     "id": "Wiki/Edited outside",
+     "kind": "open-question",
+     "rating": null,
+     "reason": "budget: 94 words in the evidential body (budget 80)",
+     "states": [
+      "edited-outside-update",
+      "budget"
+     ],
+     "words": 94
+    },
+    {
+     "hit": [
+      "budget"
+     ],
+     "id": "Wiki/Trust — four answers",
+     "kind": "contradiction",
+     "rating": null,
+     "reason": "budget: 106 words in the evidential body (budget 80)",
+     "states": [
+      "budget"
+     ],
+     "words": 106
+    }
+   ],
+   "name": "research/wiki-budget",
+   "probed": true,
+   "reason": null,
+   "status": "warn",
+   "threshold": {
+    "pages_per_collection": 5,
+    "words": 80
+   }
+  },
+  {
+   "counts": {
+    "differ": 0,
+    "missing_sections": 2,
+    "rows": 20,
+    "sections": 2
+   },
+   "detail": "index.md missing; 20 research rows to generate",
+   "fix": "mnemon reindex",
+   "items": [],
+   "name": "research/index",
+   "probed": true,
+   "reason": null,
+   "status": "warn",
+   "threshold": {}
+  }
+ ],
+ "counters": {
+  "collection_items": 16,
+  "collection_items_excluded": 1,
+  "collection_items_malformed": 11,
+  "collection_items_unresolved": 2,
+  "collections": 10,
+  "collections_fail": 4,
+  "collections_status": {
+   "closed": 1,
+   "inbox": 1,
+   "open": 8,
+   "unknown": 0
+  },
+  "collections_unreadable": 0,
+  "wiki_based_on": 12,
+  "wiki_fail": 1,
+  "wiki_pages": 10,
+  "wiki_unreadable": 0
+ },
+ "diagnostics": [],
+ "instance": "vault",
+ "pages": [
+  {
+   "collections": [
+    "Trust without identity"
+   ],
+   "kind": null,
+   "name": "Bad schema",
+   "severity": "fail",
+   "states": [
+    "schema"
+   ],
+   "updated": null,
+   "usable": false
+  },
+  {
+   "collections": [
+    "Trust without identity"
+   ],
+   "kind": "open-question",
+   "name": "Edited outside",
+   "severity": "warn",
+   "states": [
+    "edited-outside-update",
+    "budget"
+   ],
+   "updated": "2026-10-23",
+   "usable": true
+  },
+  {
+   "collections": [
+    "Annotated"
+   ],
+   "kind": "concept",
+   "name": "Inputs changed",
+   "severity": "warn",
+   "states": [
+    "inputs-changed"
+   ],
+   "updated": "2026-10-21",
+   "usable": true
+  },
+  {
+   "collections": [
+    "Closed dossier",
+    "Inbox minimal",
+    "Missing dossier"
+   ],
+   "kind": "concept",
+   "name": "Orphan page",
+   "severity": "warn",
+   "states": [
+    "orphan"
+   ],
+   "updated": "2026-10-24",
+   "usable": true
+  },
+  {
+   "collections": [
+    "Trust without identity"
+   ],
+   "kind": "concept",
+   "name": "Stale page",
+   "severity": "warn",
+   "states": [
+    "stale"
+   ],
+   "updated": "2026-10-20",
+   "usable": true
+  },
+  {
+   "collections": [
+    "Veto by name",
+    "Trust without identity"
+   ],
+   "kind": "concept",
+   "name": "Suppressed by name",
+   "severity": "fail",
+   "states": [
+    "suppressed"
+   ],
+   "updated": "2026-10-25",
+   "usable": false
+  },
+  {
+   "collections": [
+    "Trust without identity",
+    "Closed dossier"
+   ],
+   "kind": "contradiction",
+   "name": "Trust — four answers",
+   "severity": "warn",
+   "states": [
+    "budget"
+   ],
+   "updated": "2026-10-22",
+   "usable": true
+  },
+  {
+   "collections": [
+    "Trust without identity"
+   ],
+   "kind": "concept",
+   "name": "Unbound binding",
+   "severity": "fail",
+   "states": [
+    "unbound",
+    "inputs-changed"
+   ],
+   "updated": "2026-10-26",
+   "usable": false
+  },
+  {
+   "collections": [
+    "Trust without identity"
+   ],
+   "kind": "comparison",
+   "name": "Unbound unlisted",
+   "severity": "fail",
+   "states": [
+    "unbound"
+   ],
+   "updated": "2026-10-26",
+   "usable": false
+  },
+  {
+   "collections": [
+    "Vetoed"
+   ],
+   "kind": "concept",
+   "name": "Vetoed page",
+   "severity": "fail",
+   "states": [
+    "suppressed"
+   ],
+   "updated": "2026-10-24",
+   "usable": false
+  }
+ ],
+ "schema": "mnemon-doctor-research/1",
+ "snapshot": {
+  "budget_s": null,
+  "collections_unlisted": null,
+  "complete": true,
+  "pages_not_probed": 0,
+  "pages_probed": 10,
+  "today": "2026-10-27",
+  "unreadable": 0,
+  "wiki_unlisted": null
+ },
+ "summary": {
+  "checks": 10,
+  "coverage": {
+   "collections": 10,
+   "pages": 10
+  },
+  "diagnostics_fail": 0,
+  "diagnostics_warn": 0,
+  "fail": 3,
+  "not_probed": 0,
+  "ok": 1,
+  "pages": {
+   "fail": 5,
+   "not_probed": 0,
+   "ok": 0,
+   "warn": 5
+  },
+  "probed": 10,
+  "warn": 6
+ },
+ "vault": "<vault>"
+}

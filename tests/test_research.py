@@ -340,7 +340,7 @@ class FixtureVaultTests(unittest.TestCase):
         states = {n: r["state"] for n, r in self.records.items()}
         self.assertEqual(states, {"Trust without identity": "ok", "Annotated": "ok", "Inbox minimal": "ok", "Closed dossier": "ok",
                                   "Malformed items": "fail", "Duplicate heading": "fail", "Bad frontmatter": "fail",
-                                  "No items section": "fail"})
+                                  "No items section": "fail", "Vetoed": "ok", "Veto by name": "ok"})
         ann = self.records["Annotated"]
         self.assertEqual((ann["status"], ann["curated_by"], ann["domains"], ann["tags"], ann["question"]),
                          ("open", "owner", ["learning"], ["annotated", "trust"], "Is trust annotated?"))
@@ -360,9 +360,10 @@ class FixtureVaultTests(unittest.TestCase):
     def test_counters(self):
         c = self.scan["counters"]
         self.assertEqual((c["collections"], c["collections_fail"], c["collections_status"]),
-                         (8, 4, {"open": 6, "inbox": 1, "closed": 1, "unknown": 0}))
+                         (10, 4, {"open": 8, "inbox": 1, "closed": 1, "unknown": 0}))
         self.assertEqual((c["collection_items"], c["collection_items_excluded"], c["collection_items_malformed"], c["collection_items_unresolved"]),
-                         (14, 1, 11, 2))
+                         (16, 1, 11, 2))
+        self.assertEqual((c["wiki_pages"], c["wiki_fail"], c["wiki_unreadable"], c["wiki_based_on"]), (10, 1, 0, 12))
         self.assertEqual((c["folders"], c["captured"], c["extracted"]), (6, 2, 4))
         # filed: B (the seed) · C, C2 (the open dossier; A is integrated by the stable note and not counted) · D (inbox)
         self.assertEqual((c["integrated"], c["filed"]), (1, 4))
@@ -370,10 +371,16 @@ class FixtureVaultTests(unittest.TestCase):
     def test_filed_ignores_malformed_lines_and_counts_excluded(self):
         c = lv.counters(self.scan)
         self.assertEqual(c["filed"], 4)
-        # drop the collections: filed falls back to the seed's link only
+        # drop the collections: filed keeps the seed's link and the wiki pages' based_on (B, C, C2 — A is integrated)
         scan2 = dict(self.scan)
         scan2["collections"] = {"present": False, "notes": []}
-        self.assertEqual(lv.counters(scan2)["filed"], 1)
+        self.assertEqual(lv.counters(scan2)["filed"], 3)
+        # drop the wiki too: the seed's link only
+        scan3 = dict(scan2)
+        scan3["wiki"] = {"present": False, "notes": []}
+        self.assertEqual(lv.counters(scan3)["filed"], 1)
+        # the fixture pages rest only on revisions the collections already file: doctor-data.json stays byte for byte
+        self.assertEqual(c["filed"], lv.counters(dict(self.scan, wiki={"present": False, "notes": []}))["filed"])
 
     def test_reindex_section(self):
         tmp = tempfile.mkdtemp()
@@ -383,9 +390,10 @@ class FixtureVaultTests(unittest.TestCase):
             p = subprocess.run([sys.executable, str(BIN_DIR / "knowledge-reindex.py"), str(copy), "--no-hand-edit-report"],
                                capture_output=True, text=True)
             self.assertEqual(p.returncode, 0, p.stderr)
-            self.assertIn("Collections=8", p.stdout)
+            self.assertIn("Collections=10, Wiki=10", p.stdout)
             text = (copy / "index.md").read_text(encoding="utf-8")
-            self.assertIn("| Collections | 8 |", text)
+            self.assertIn("| Collections | 10 |", text)
+            self.assertIn("| Wiki | 10 |", text)
             # an unreadable document is one row saying so; a `|` in a question is displayed, not a table break
             (copy / "Collections" / "Piped.md").write_text("---\ntype: collection\nstatus: open\nquestion: \"a | b?\"\ncurated_by: o\ncreated: 2026-10-01\n---\n## Items\n", encoding="utf-8")
             os.chmod(copy / "Collections" / "Closed dossier.md", 0)
@@ -394,18 +402,29 @@ class FixtureVaultTests(unittest.TestCase):
             os.chmod(copy / "Collections" / "Closed dossier.md", 0o644)
             self.assertIn("- [[Collections/Closed dossier|Closed dossier]] (unreadable)", text)
             self.assertIn("(open, 0 items) — a / b?", text)
-            self.assertIn("| Collections | 9 |", text)
+            self.assertIn("| Collections | 11 |", text)
             self.assertIn("- [[Collections/Trust without identity|Trust without identity]] (open, 4 items, 1 excluded) — How can an agent be trusted when it cannot be identified?", text)
             self.assertIn("(open, 2 items, 11 malformed)", text)
             self.assertIn("(fail: no `## Items` section)", text)
             self.assertLess(text.index("## Recent Sources"), text.index("## Collections"))
-            self.assertLess(text.index("## Collections"), text.index("## Synthesis Notes"))
-            # a vault without Collections/: no section, the Status row says 0
+            self.assertLess(text.index("## Collections"), text.index("## Wiki"))
+            self.assertLess(text.index("## Wiki"), text.index("## Synthesis Notes"))
+            self.assertIn("- [[Wiki/Stale page|Stale page]] (concept, 1 sources, 1 collections, updated 2026-10-20)", text)
+            # an unreadable page is one row saying so
+            os.chmod(copy / "Wiki" / "Stale page.md", 0)
+            subprocess.run([sys.executable, str(BIN_DIR / "knowledge-reindex.py"), str(copy), "--no-hand-edit-report"], check=True, capture_output=True)
+            text = (copy / "index.md").read_text(encoding="utf-8")
+            os.chmod(copy / "Wiki" / "Stale page.md", 0o644)
+            self.assertIn("- [[Wiki/Stale page|Stale page]] (unreadable)", text)
+            # a vault without Collections/ or Wiki/: no sections, the Status rows say 0
             shutil.rmtree(copy / "Collections")
+            shutil.rmtree(copy / "Wiki")
             subprocess.run([sys.executable, str(BIN_DIR / "knowledge-reindex.py"), str(copy), "--no-hand-edit-report"], check=True, capture_output=True)
             text = (copy / "index.md").read_text(encoding="utf-8")
             self.assertIn("| Collections | 0 |", text)
+            self.assertIn("| Wiki | 0 |", text)
             self.assertNotIn("## Collections", text)
+            self.assertNotIn("## Wiki", text)
         finally:
             shutil.rmtree(tmp)
 
@@ -486,15 +505,444 @@ class FixtureVaultTests(unittest.TestCase):
     def test_reader_cli(self):
         p = subprocess.run([sys.executable, str(BIN_DIR / "lib_research.py"), "--vault", str(FIXTURE)], capture_output=True, text=True)
         self.assertEqual(p.returncode, 1)
-        self.assertIn("collections: 8 · fail 4 · unreadable 0", p.stdout)
+        self.assertIn("collections: 10 · fail 4 · unreadable 0", p.stdout)
         p = subprocess.run([sys.executable, str(BIN_DIR / "lib_research.py"), "--file", str(FIXTURE / "Collections" / "Closed dossier.md")], capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stdout)
         p = subprocess.run([sys.executable, str(BIN_DIR / "lib_research.py"), "--vault", str(FIXTURE), "--json"], capture_output=True, text=True)
         d = json.loads(p.stdout)
-        self.assertEqual((d["schema"], len(d["collections"])), ("research-interface/1", 8))
+        self.assertEqual((d["schema"], len(d["collections"]), len(d["wiki"])), ("research-interface/1", 10, 10))
+        self.assertNotIn("_body_lines", d["wiki"][0], "the working copy of the body lines is not part of the record")
+        self.assertEqual({p["name"]: p["severity"] for p in d["wiki"] if p["severity"] == "fail"},
+                         {n: "fail" for n in ("Bad schema", "Suppressed by name", "Unbound binding", "Unbound unlisted", "Vetoed page")})
+        p = subprocess.run([sys.executable, str(BIN_DIR / "lib_research.py"), "--file", str(FIXTURE / "Wiki" / "Stale page.md")], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stdout)
+        self.assertIn("ok Stale page — concept · 1 based_on · 1 collections · 1 locators", p.stdout)
+        self.assertNotIn("stale", p.stdout.split("\n")[0].replace("Stale page", ""), "--file reads the page; no vault, no states")
+        p = subprocess.run([sys.executable, str(BIN_DIR / "lib_research.py"), "--file", str(FIXTURE / "Wiki" / "Bad schema.md")], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 1)
         p = subprocess.run([sys.executable, str(BIN_DIR / "lib_vault.py"), "--vault", str(FIXTURE), "--status-counts"], capture_output=True, text=True)
-        self.assertIn("collections=8\n", p.stdout)
+        self.assertIn("collections=10\n", p.stdout)
         self.assertIn("collections_fail=4\n", p.stdout)
+        self.assertIn("wiki=10\n", p.stdout)
+        self.assertIn("wiki_fail=1\n", p.stdout)
+
+    def test_fixture_wiki_states(self):
+        """Every derived state of the interface on the fixture pages (§9), through the one context."""
+        ctx = lv.research_context(self.scan)
+        pages = {p["name"]: lr.validate_wiki(p, ctx) for p in self.scan["wiki"]["notes"]}
+        self.assertEqual({n: (p["severity"], p["states"]) for n, p in pages.items()}, {
+            "Trust — four answers": ("ok", []),
+            "Stale page": ("warn", ["stale"]),
+            "Inputs changed": ("warn", ["inputs-changed"]),
+            "Edited outside": ("warn", ["edited-outside-update"]),
+            "Orphan page": ("warn", ["orphan"]),
+            "Vetoed page": ("fail", ["suppressed"]),
+            "Suppressed by name": ("fail", ["suppressed"]),
+            "Unbound unlisted": ("fail", ["unbound"]),
+            "Unbound binding": ("fail", ["unbound", "inputs-changed"]),
+            "Bad schema": ("fail", ["schema"]),
+        })
+        four = pages["Trust — four answers"]
+        self.assertEqual(four["cited"], [A, B], "a verified heading locator and a verified quote locator cite their revisions")
+        self.assertEqual([(l["form"], l["verified"]) for l in four["locators"]], [("heading", True), ("quote", True)])
+        self.assertEqual(four["counts"]["links_consumable"], 2, "links in ## Log are counted apart and give no state")
+        self.assertEqual(four["body"]["cut"], "Atlas reading")
+        self.assertTrue(all(p["usable"] is False for n, p in pages.items() if p["severity"] == "fail"))
+        self.assertEqual(pages["Unbound unlisted"]["reasons"]["unbound"][2][:18], "line 28: unlisted ")
+        self.assertEqual([l["reason"] for l in pages["Unbound binding"]["locators"]],
+                         ["heading `Missing heading` not found in %s/source.md" % B, "quote not found in %s/source.md" % B])
+        self.assertEqual(pages["Unbound binding"]["reasons"]["unresolved"], ["line 32: [[Some note]] (not a link into Sources/, Collections/, Wiki/ or Synthesis/)"])
+        self.assertEqual(pages["Orphan page"]["reasons"]["orphan"], ["`Closed dossier` is closed", "`Inbox minimal` is inbox", "`Missing dossier` does not exist"])
+
+    def test_search_wiki_block(self):
+        out = self._search("--query", "trust")
+        self.assertIsNone(out["wiki"], "no wiki block without the flag")
+        out = self._search("--query", "trust", "--include-wiki")
+        self.assertEqual([r["file"] for r in out["wiki"]["results"]],
+                         ["Edited outside.md", "Trust — four answers.md", "Inputs changed.md", "Stale page.md"])
+        self.assertEqual(out["wiki"]["limit"], 5)
+        r = out["wiki"]["results"][1]
+        self.assertEqual((r["result_type"], r["tier"], r["status"], r["path"], r["kind"], r["domains"], r["rating"]),
+                         ("wiki", None, None, "Wiki/", "contradiction", ["learning", "mc/ai"], None))
+        self.assertFalse(any("Mentions trust here too" in r["snippet"] for r in out["wiki"]["results"]), "## Atlas reading is cut")
+        out = self._search("--query", "trust", "--include-wiki", "--include-orphans", "--wiki-limit", "2")
+        self.assertEqual([r["file"] for r in out["wiki"]["results"]], ["Orphan page.md", "Edited outside.md"])
+        out = self._search("--query", "quotas", "--include-wiki", "--include-orphans", "--domain", "mc/ai")
+        self.assertEqual([r["file"] for r in out["wiki"]["results"]], ["Trust — four answers.md"], "pages inherit their collections' domains")
+        out = self._search("--query", "nothing-matches-this-token-anywhere", "--include-wiki")
+        self.assertEqual((out["count"], out["wiki"]["count"]), (0, 0))
+
+    def test_search_refuses_an_unlistable_wiki_folder(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            copy = Path(tmp) / "v"
+            shutil.copytree(FIXTURE, copy)
+            os.chmod(copy / "Wiki", 0)
+            try:
+                env = {k: v for k, v in os.environ.items() if k not in ("MNEMON_CONFIG", "MNEMON_INSTANCE", "MNEMON_CONFIG_DIR")}
+                p = subprocess.run([sys.executable, str(BIN_DIR / "mnemon-search.py"), "--vault", str(copy), "--query", "trust", "--include-wiki"],
+                                   capture_output=True, text=True, env=env)
+                self.assertEqual(p.returncode, 2)
+                self.assertIn("Wiki/ could not be listed", p.stderr)
+                p = subprocess.run([sys.executable, str(BIN_DIR / "mnemon-search.py"), "--vault", str(copy), "--query", "trust"],
+                                   capture_output=True, text=True, env=env)
+                self.assertEqual(p.returncode, 0, "without the flag the folder is never touched")
+            finally:
+                os.chmod(copy / "Wiki", 0o755)
+        finally:
+            shutil.rmtree(tmp)
+
+
+# ---------------------------------------------------------------------------
+# wiki/1 — the nested subset, the reader, the validator (interface §9)
+# ---------------------------------------------------------------------------
+
+import hashlib
+
+REV_M = "2026-06-01_11111111"       # a managed revision
+REV_L = "2026-06-02_22222222"       # a legacy revision
+REV_N = "2026-06-03_33333333"       # a newer revision superseding REV_L
+SHA0 = "0" * 64
+
+
+def sha(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
+def managed_source(body: str, completeness: str = "complete", source_type: str = "article", capture_sha: str | None = None) -> str:
+    return ("---\ntype: source\nsource_type: %s\norigin: url\nurl: \"https://example.org/m\"\ncapture_id: cap-1\nrevision: %s\n"
+            "resource_sha256: %s\ncapture:\n  text_sha256: %s\n  completeness: %s\n---\n%s"
+            % (source_type, REV_M, "1" * 64, capture_sha or sha(body), completeness, body))
+
+
+def legacy_source(body: str, supersedes: str | None = None) -> str:
+    extra = ("supersedes: \"%s\"\n" % supersedes) if supersedes else ""
+    return "---\ntype: source\nsource_type: article\norigin: url\nurl: \"https://example.org/l\"\n%s---\n%s" % (extra, body)
+
+
+def wiki_page(name: str, based_on: list, body: str, collections=("Dossier",), kind: str = "concept",
+              inputs_collections: dict | None = None, body_sha: str | None = None, charter: str | None = None,
+              template: str | None = None) -> str:
+    bo = "".join("  - rev: \"[[Sources/%s/extract]]\"\n    text_sha256: \"%s\"\n    seal: %s\n" % e for e in based_on)
+    cols = ", ".join("\"[[Collections/%s]]\"" % c for c in collections)
+    ic = ", ".join("\"Collections/%s\": \"%s\"" % (k, v) for k, v in (inputs_collections or {}).items())
+    if body_sha is None:
+        body_sha = lr.evidential_body(body, 1)["sha256"]
+    fm = ("---\ntype: wiki\nkind: %s\ncollections: [%s]\nbased_on:\n%sinputs:\n  page: \"%s\"\n  kind: %s\n  collections: {%s}\n"
+          "%s  protocol: \"research/1\"\n  template: \"%s\"\nupdated: 2026-10-01\nbody_sha256: \"%s\"\n---\n"
+          % (kind, cols, bo, name, kind, ic, ("  charter_sha256: \"%s\"\n" % charter) if charter else "", template or "wiki/%s@1" % kind, body_sha))
+    return fm + body
+
+
+class _Vault:
+    """A temp vault: Sources/, one open dossier, Wiki/; `page(name)` validates one page."""
+
+    def __init__(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.state = tempfile.mkdtemp()
+        for d in ("Sources", "Collections", "Wiki"):
+            (self.root / d).mkdir()
+        self.collection("Dossier", "- [[Sources/%s/extract]] — **item** — x\n" % REV_M)
+
+    def collection(self, name: str, items: str, status: str = "open", extra: str = "") -> None:
+        (self.root / "Collections" / (name + ".md")).write_text(
+            "---\ntype: collection\nstatus: %s\nquestion: \"q\"\ncurated_by: owner\ncreated: 2026-10-01\n%s---\n## Items\n%s" % (status, extra, items),
+            encoding="utf-8")
+
+    def source(self, rev: str, text: str, extract: bool = True) -> None:
+        (self.root / "Sources" / rev).mkdir(exist_ok=True)
+        (self.root / "Sources" / rev / "source.md").write_text(text, encoding="utf-8")
+        if extract:
+            (self.root / "Sources" / rev / "extract.md").write_text("---\ntype: extract\nstatus: extracted\ntitle: t\n---\n### Summary\n\nx\n", encoding="utf-8")
+
+    def wiki(self, name: str, text: str) -> None:
+        (self.root / "Wiki" / (name + ".md")).write_text(text, encoding="utf-8")
+
+    def page(self, name: str, budget_words=None) -> dict:
+        scan = lv.scan_vault(str(self.root), state_dir=self.state)
+        ctx = lv.research_context(scan, budget_words=budget_words)
+        return {p["name"]: lr.validate_wiki(p, ctx) for p in scan["wiki"]["notes"]}[name]
+
+    def close(self) -> None:
+        shutil.rmtree(self.root, ignore_errors=True)
+        shutil.rmtree(self.state, ignore_errors=True)
+
+
+BODY = "# Page\n\n## State of evidence\n\n- A claim — [[Sources/%s/source#Alpha]].\n"
+BODY_LINE = 18            # wiki_page() with one based_on entry and no charter: 18 header lines, the body starts at file line 19
+
+
+class WikiFrontmatterTests(unittest.TestCase):
+    def test_nested_subset(self):
+        data, errors = lr.parse_frontmatter_tree(
+            'type: wiki\nkind: concept\ncollections: ["[[Collections/A]]", "[[Collections/B]]"]\n'
+            'based_on:\n  - rev: "[[Sources/%s/extract]]"\n    text_sha256: "%s"\n    seal: observed\n  - rev: "[[Sources/%s]]"\n    seal: capture\n'
+            'inputs:\n  page: "P"\n  kind: concept\n  collections: {"Collections/A": "%s", "Collections/B": "%s"}\n  protocol: "research/1"\n'
+            'block:\n  "Collections/C": "%s"\n  plain: 1\nempty:\nlist:\n- a\n- b\n' % (A, SHA0, B, SHA0, SHA0, SHA0))
+        self.assertEqual(errors, [])
+        self.assertEqual(data["collections"], ["[[Collections/A]]", "[[Collections/B]]"])
+        self.assertEqual(data["based_on"], [{"rev": "[[Sources/%s/extract]]" % A, "text_sha256": SHA0, "seal": "observed"},
+                                            {"rev": "[[Sources/%s]]" % B, "seal": "capture"}])
+        self.assertEqual(data["inputs"]["collections"], {"Collections/A": SHA0, "Collections/B": SHA0})
+        self.assertEqual(data["block"], {"Collections/C": SHA0, "plain": "1"})
+        self.assertEqual((data["empty"], data["list"]), ("", ["a", "b"]))
+
+    def test_errors(self):
+        data, errors = lr.parse_frontmatter_tree("kind: a\nkind: b\n  stray: 1\nnot a key line\ninputs:\n  page: x\n  page: y\n")
+        self.assertEqual(data["kind"], "a")
+        self.assertEqual(errors, ["duplicate key `kind`", "line 4: unexpected indented line: stray: 1",
+                                  "line 5: not a `key: value` line: not a key line", "duplicate key `page`"])
+        _d, errors = lr.parse_frontmatter_tree('m: {"a": "b", c}\n')
+        self.assertEqual(errors, ["line 2: `m`: `c` is not a `key: value` pair"])
+
+    def test_the_collection_reader_is_untouched(self):
+        rec = lr.read_collection_text(HEAD + "## Items\n- [[Sources/%s/extract]]\n" % A, "x")
+        self.assertEqual(rec["state"], "ok")
+        rec = lr.read_collection_text("---\ntype: collection\nstatus: open\nquestion: q\ncurated_by: o\ncreated: 2026-10-01\ninputs:\n  page: x\n---\n## Items\n", "x")
+        self.assertIn("nested mapping under `inputs` (flat scalars and lists only)", rec["errors"])
+
+
+class WikiReaderTests(unittest.TestCase):
+    def test_schema(self):
+        rec = lr.read_wiki_text(wiki_page("P", [(REV_M, SHA0, "capture")], BODY % REV_M), "P")
+        self.assertEqual((rec["state"], rec["kind"], rec["collections"], rec["inputs"]["page"], rec["inputs"]["template"]),
+                         ("ok", "concept", ["Dossier"], "P", "wiki/concept@1"))
+        self.assertEqual(rec["based_on"], [{"rev": REV_M, "file": "extract", "text_sha256": SHA0, "seal": "capture"}])
+        self.assertEqual(rec["body"]["sha256"], rec["body_sha256"])
+        rec = lr.read_wiki_text("---\ntype: wiki\n---\n# T\n", "P")
+        self.assertEqual(rec["state"], "fail")
+        for key in ("kind", "collections", "based_on", "inputs", "body_sha256"):
+            self.assertIn("missing required `%s`" % key, rec["errors"])
+        rec = lr.read_wiki_text(wiki_page("Other", [(REV_M, "zz", "sealed")], BODY % REV_M, kind="essay"), "P")
+        self.assertIn("`kind` must be one of concept|comparison|contradiction|open-question (got 'essay')", rec["errors"])
+        self.assertIn("based_on[0]: `text_sha256` is not a sha256 hex digest", rec["errors"])
+        self.assertIn("based_on[0]: `seal` must be capture|observed (got 'sealed')", rec["errors"])
+        self.assertIn("inputs: `page` 'Other' is not this page's file name 'P'", rec["errors"])
+        rec = lr.read_wiki_text(wiki_page("P", [(REV_M, SHA0, "capture"), (REV_M, SHA0, "capture")], BODY % REV_M, collections=("Dossier", "Dossier")), "P")
+        self.assertIn("based_on[1]: duplicate revision %s (first at based_on[0])" % REV_M, rec["errors"])
+        self.assertIn("duplicate collection `Dossier` in `collections`", rec["errors"])
+        rec = lr.read_wiki_text(wiki_page("P", [(REV_M, SHA0, "capture")], BODY % REV_M, collections=("../x", "Synthesis/y")), "P")
+        self.assertIn("collections entry outside the instance: [[Collections/../x]]", rec["errors"])
+        self.assertIn("collections entry names no collection: [[Collections/Synthesis/y]]", rec["errors"])
+        rec = lr.read_wiki_text(wiki_page("P", [(REV_M, SHA0, "capture")], BODY % REV_M, collections=("Dossier",)).replace("[[Collections/Dossier]]", "[[Synthesis/Dossier]]"), "P")
+        self.assertIn("collections entry must be [[Collections/<name>]] (got [[Synthesis/Dossier]])", rec["errors"])
+        rec = lr.read_wiki_text("---\ntype: wiki\nkind: concept\ncollections: []\nbased_on: []\ninputs: {}\nbody_sha256: \"%s\"\n---\n# T\n" % SHA0, "P")
+        self.assertIn("inputs: missing `page`", rec["errors"])
+        rec = lr.read_wiki_text("---\ntype: wiki\nkind: concept\ncollections: []\nbased_on: x\ninputs: y\nbody_sha256: \"%s\"\n---\n# T\n" % SHA0, "P")
+        self.assertIn("`based_on` must be a list of {rev, text_sha256, seal} entries", rec["errors"])
+        self.assertIn("`inputs` must be a mapping", rec["errors"])
+
+    def test_evidential_body(self):
+        body = "\r\n# Title  \r\n\r\ntext \r\n\r\n```\r\n## Log\r\n```\r\n\r\n## Open questions\r\n- q\r\n\r\n\r\n## Atlas reading\r\nopinion\r\n## Log\r\nlog\r\n"
+        eb = lr.evidential_body(body, 1)
+        self.assertEqual(eb["text"], "# Title\n\ntext\n\n```\n## Log\n```\n\n## Open questions\n- q\n")
+        self.assertEqual((eb["cut"], eb["start"], eb["words"]), ("Atlas reading", 2, 12), "fenced lines are part of the body, words included")
+        self.assertEqual(eb["sha256"], hashlib.sha256(eb["text"].encode("utf-8")).hexdigest())
+        eb = lr.evidential_body("no heading at all\n", 1)
+        self.assertEqual((eb["sha256"], eb["start"]), (None, None))
+        rec = lr.read_wiki_text("---\ntype: wiki\nkind: concept\ncollections: []\nbased_on: []\ninputs:\n  page: P\n  kind: concept\n  collections: {}\n  protocol: a\n  template: b\nbody_sha256: \"%s\"\n---\nno heading\n" % SHA0, "P")
+        self.assertIn("no evidential body (no heading after the frontmatter)", rec["errors"])
+        # the body ends where ## Log begins even without ## Atlas reading; a ### Log is not a cut
+        eb = lr.evidential_body("# T\n### Log\nx\n## Log\ny\n", 1)
+        self.assertEqual(eb["text"], "# T\n### Log\nx\n")
+
+    def test_links_and_locators(self):
+        body = ("# T\n- [[Sources/%s/source#Alpha]] heading\n> \"a  quote\" — [[Sources/%s/source]]\n- bare [[Sources/%s/source]] and nav [[Sources/%s/extract#Summary|x]]\n"
+                "- [[Collections/D]] [[Wiki/W]] [[Synthesis/S]] [[Note]] [[../out]] [[Sources/x/y]]\n```\n[[Sources/%s/source#fenced]]\n```\n## Log\n[[Sources/%s/extract]]\n"
+                % (A, A, A, A, A, A))
+        rec = lr.read_wiki_text(wiki_page("P", [(A, SHA0, "observed")], body), "P")
+        kinds = [(l["kind"], l.get("rev") or l.get("path") or l.get("target")) for l in rec["links"]]
+        self.assertEqual(kinds, [("sources", A), ("sources", A), ("sources", A), ("sources", A), ("local", "Collections/D"), ("local", "Wiki/W"),
+                                 ("local", "Synthesis/S"), ("unresolved", "Note"), ("outside", "../out"), ("outside", "Sources/x/y")])
+        self.assertEqual([(l["form"], l.get("heading") or l.get("quote")) for l in rec["locators"]], [("heading", "Alpha"), ("quote", "a  quote")])
+        self.assertEqual(rec["counts"], {"based_on": 1, "collections": 1, "links": 10, "locators": 2, "links_consumable": 1})
+
+    def test_veto_predicate(self):
+        cols = {"open-off": {"status": "open", "wiki": "off", "suppressed_pages": []},
+                "open-name": {"status": "open", "wiki": "on", "suppressed_pages": ["P"]},
+                "open-ok": {"status": "open", "wiki": "on", "suppressed_pages": ["Q"]},
+                "inbox-off": {"status": "inbox", "wiki": "off", "suppressed_pages": ["P"]},
+                "closed-off": {"status": "closed", "wiki": "off", "suppressed_pages": ["P"]}}
+        self.assertEqual(lr.is_suppressed("P", ["open-off"], cols), ["open-off"])
+        self.assertEqual(lr.is_suppressed("P", ["open-name"], cols), ["open-name"])
+        self.assertEqual(lr.is_suppressed("P", ["open-ok", "closed-off", "inbox-off", "missing"], cols), [], "inbox and closed give no veto")
+        self.assertEqual(lr.is_suppressed("P", ["open-ok", "open-off"], cols), ["open-off"], "one veto suffices")
+        self.assertEqual(lr.is_suppressed("Q", ["open-ok"], cols), ["open-ok"])
+
+
+class WikiValidatorTests(unittest.TestCase):
+    def setUp(self):
+        self.v = _Vault()
+        self.body = "# Alpha\n\nThe managed text about trust.\n"
+        self.v.source(REV_M, managed_source(self.body))
+        self.v.source(REV_L, legacy_source("# Beta\n\nLegacy text.\n"))
+
+    def tearDown(self):
+        self.v.close()
+
+    def _page(self, based_on, body=None, budget_words=None, **kw) -> dict:
+        self.v.wiki("P", wiki_page("P", based_on, body or BODY % REV_M, **kw))
+        return self.v.page("P", budget_words=budget_words)
+
+    def test_capture_seal_on_a_managed_revision(self):
+        p = self._page([(REV_M, sha(self.body), "capture")])
+        self.assertEqual((p["severity"], p["states"], p["cited"], p["usable"]), ("ok", [], [REV_M], True))
+
+    def test_capture_seal_wrong_hash_or_legacy_is_unbound(self):
+        p = self._page([(REV_M, SHA0, "capture")])
+        self.assertEqual(p["states"], ["unbound"])
+        self.assertIn("seal capture on %s: printed 000000000000… ≠ capture.text_sha256" % REV_M, p["reasons"]["unbound"][0])
+        p = self._page([(REV_L, sha("# Beta\n\nLegacy text.\n"), "capture")], body=BODY.replace("#Alpha", "#Beta") % REV_L)
+        self.assertEqual(p["reasons"]["unbound"], ["seal capture on %s, which carries no capture.text_sha256 (legacy revision)" % REV_L])
+
+    def test_observed_seal(self):
+        legacy_body = "# Beta\n\nLegacy text.\n"
+        p = self._page([(REV_L, sha(legacy_body), "observed")], body=BODY.replace("#Alpha", "#Beta") % REV_L)
+        self.assertEqual((p["severity"], p["states"]), ("ok", []))
+        p = self._page([(REV_L, SHA0, "observed")], body=BODY.replace("#Alpha", "#Beta") % REV_L)
+        self.assertEqual(p["states"], ["unbound", "inputs-changed"])
+        self.assertIn("seal observed on %s: printed 000000000000… ≠ body" % REV_L, p["reasons"]["unbound"][0])
+        p = self._page([(REV_M, sha(self.body), "observed")])
+        self.assertEqual(p["reasons"]["unbound"], ["seal observed on the managed revision %s (seal capture required)" % REV_M], "I4: observed on managed is forbidden")
+
+    def test_integrity_error_is_unbound_and_weak(self):
+        self.v.source(REV_M, managed_source(self.body + "edited\n", capture_sha=sha(self.body)))
+        p = self._page([(REV_M, sha(self.body), "capture")])
+        self.assertEqual(p["states"], ["unbound", "weak-evidence"])
+        self.assertIn("integrity error", p["reasons"]["unbound"][0])
+
+    def test_weak_evidence(self):
+        self.v.source(REV_M, managed_source(self.body, completeness="partial"))
+        p = self._page([(REV_M, sha(self.body), "capture")])
+        self.assertEqual((p["severity"], p["states"], p["reasons"]["weak-evidence"]), ("warn", ["weak-evidence"], ["%s: completeness partial" % REV_M]))
+        self.v.source(REV_M, managed_source(self.body, completeness="blocked"))
+        self.assertEqual(self._page([(REV_M, sha(self.body), "capture")])["states"], ["weak-evidence"])
+        self.v.source(REV_M, managed_source(self.body, completeness="unknown", source_type="pdf"))
+        p = self._page([(REV_M, sha(self.body), "capture")])
+        self.assertEqual((p["states"], p["reasons"]["info"]), ([], ["%s: completeness unknown (pdf)" % REV_M]), "unknown on a PDF is info, not a state")
+
+    def test_missing_revision_and_targets(self):
+        p = self._page([("2026-01-01_99999999", SHA0, "observed")], body="# T\n- [[Sources/2026-01-01_99999999/source#X]]\n")
+        self.assertEqual(p["reasons"]["unbound"], ["based_on names 2026-01-01_99999999, which has no source.md",
+                                                   "line %d: [[Sources/2026-01-01_99999999/source#X]] does not exist" % (BODY_LINE + 1)])
+        self.v.source(REV_N, legacy_source("# N\n"), extract=False)
+        p = self._page([(REV_M, sha(self.body), "capture")], body="# T\n- [[Sources/%s/extract]] has no extract\n" % REV_N)
+        self.assertEqual(p["reasons"]["unbound"], ["line %d: [[Sources/%s/extract]] does not exist" % (BODY_LINE + 1, REV_N)])
+
+    def test_stale_and_the_incomplete_graph(self):
+        self.v.source(REV_N, legacy_source("# N\n", supersedes=REV_L))
+        legacy_body = "# Beta\n\nLegacy text.\n"
+        p = self._page([(REV_L, sha(legacy_body), "observed")], body="# T\n- [[Sources/%s/source#Beta]]\n" % REV_L)
+        self.assertEqual((p["severity"], p["states"], p["reasons"]["stale"]), ("warn", ["stale"], ["%s is superseded" % REV_L]))
+        # a dangling supersedes target elsewhere makes the graph incomplete: a superseded candidate is
+        # not probed, never "current" (interface §9); the check research/wiki-stale is not probed as a whole
+        self.v.source("2026-06-04_44444444", legacy_source("# D\n", supersedes="2026-01-01_00000000"), extract=False)
+        p = self._page([(REV_L, sha(legacy_body), "observed")], body="# T\n- [[Sources/%s/source#Beta]]\n" % REV_L)
+        self.assertEqual((p["severity"], p["states"], p["usable"]), (None, [], False))
+        self.assertEqual(p["not_probed"], ["stale: the supersedes graph is incomplete (%s)" % REV_L])
+
+    def test_stale_not_probed_only_for_superseded_candidates(self):
+        """A revision that nothing supersedes is current whatever the graph's holes elsewhere."""
+        self.v.source(REV_N, legacy_source("# N\n", supersedes="2026-01-01_00000000"))
+        p = self._page([(REV_M, sha(self.body), "capture")])
+        self.assertEqual(p["states"], [])
+        self.assertEqual(p["not_probed"], [])
+
+    def test_unreadable_source_is_not_probed(self):
+        if os.geteuid() == 0:
+            self.skipTest("root reads everything")
+        os.chmod(self.v.root / "Sources" / REV_M / "source.md", 0)
+        try:
+            p = self._page([(REV_M, SHA0, "capture")])
+        finally:
+            os.chmod(self.v.root / "Sources" / REV_M / "source.md", 0o644)
+        self.assertEqual((p["severity"], p["usable"], p["states"]), (None, False, []))
+        self.assertEqual(p["not_probed"], ["source.md of %s could not be read" % REV_M,
+                                           "line %d: source.md of %s could not be read" % (BODY_LINE + 4, REV_M)], "the seal and the locator both say so")
+
+    def test_edited_outside_update(self):
+        p = self._page([(REV_M, sha(self.body), "capture")], body_sha=SHA0)
+        self.assertEqual(p["states"], ["edited-outside-update"])
+        # a change in ## Atlas reading or ## Log is not a state
+        body = BODY % REV_M + "\n## Atlas reading\nchanged opinion\n## Log\n- changed\n"
+        self.v.wiki("P", wiki_page("P", [(REV_M, sha(self.body), "capture")], body, body_sha=lr.evidential_body(BODY % REV_M, 1)["sha256"]))
+        self.assertEqual(self.v.page("P")["states"], [])
+
+    def test_inputs_changed(self):
+        col_sha = hashlib.sha256((self.v.root / "Collections" / "Dossier.md").read_bytes()).hexdigest()
+        p = self._page([(REV_M, sha(self.body), "capture")], inputs_collections={"Dossier": col_sha})
+        self.assertEqual(p["states"], [])
+        p = self._page([(REV_M, sha(self.body), "capture")], inputs_collections={"Dossier": SHA0}, template="wiki/concept@0")
+        self.assertEqual(p["reasons"]["inputs-changed"], ["collection `Dossier` changed (%s… ≠ printed 000000000000…)" % col_sha[:12],
+                                                          "template `wiki/concept@0` ≠ engine `wiki/concept@1`"])
+        (self.v.root / "_meta").mkdir()
+        (self.v.root / "_meta" / "charter.md").write_text("# Charter\n", encoding="utf-8")
+        p = self._page([(REV_M, sha(self.body), "capture")], charter=sha("# Charter\n"))
+        self.assertEqual(p["states"], [])
+        p = self._page([(REV_M, sha(self.body), "capture")])
+        self.assertEqual(p["reasons"]["inputs-changed"], ["charter changed (%s… ≠ printed none)" % sha("# Charter\n")[:12]])
+        p = self._page([(REV_M, sha(self.body), "capture")], kind="comparison")
+        self.assertEqual(p["reasons"].get("unbound"), None)
+        self.v.wiki("P", wiki_page("P", [(REV_M, sha(self.body), "capture")], BODY % REV_M, charter=sha("# Charter\n")).replace("  kind: concept", "  kind: comparison"))
+        self.assertEqual(self.v.page("P")["reasons"]["unbound"], ["kind `concept` ≠ inputs.kind `comparison`"])
+
+    def test_orphan_and_veto(self):
+        self.v.collection("Closed", "", status="closed", extra="wiki: off\n")
+        p = self._page([(REV_M, sha(self.body), "capture")], collections=("Closed", "Nowhere"), charter=None)
+        self.assertEqual((p["states"], p["reasons"]["orphan"]), (["orphan"], ["`Closed` is closed", "`Nowhere` does not exist"]))
+        p = self._page([(REV_M, sha(self.body), "capture")], collections=())
+        self.assertEqual(p["reasons"]["orphan"], ["no collections listed"])
+        self.v.collection("Off", "", extra="wiki: off\n")
+        p = self._page([(REV_M, sha(self.body), "capture")], collections=("Dossier", "Off"))
+        self.assertEqual((p["severity"], p["states"]), ("fail", ["suppressed"]))
+        p = self._page([(REV_M, sha(self.body), "capture")], collections=("Dossier", "Closed"))
+        self.assertEqual(p["states"], [], "an open dossier without a veto and a closed one with wiki: off: allowed")
+
+    def test_locators_against_the_source(self):
+        self.v.source(REV_M, managed_source("# Alpha\n\n## Twice\n\nx\n\n## Twice\n\ny  z\n"))
+        s = sha("# Alpha\n\n## Twice\n\nx\n\n## Twice\n\ny  z\n")
+        body = ("# T\n- [[Sources/%s/source#Alpha]]\n- [[Sources/%s/source#Twice]]\n- [[Sources/%s/source#Nope]]\n> \"y z\" — [[Sources/%s/source]]\n"
+                "> «x» — [[Sources/%s/source]].\n> \"\" — [[Sources/%s/source]]\n> \"missing\" — [[Sources/%s/source]]\n" % ((REV_M,) * 7))
+        p = self._page([(REV_M, s, "capture")], body=body)
+        self.assertEqual([(l["form"], l["verified"]) for l in p["locators"]],
+                         [("heading", True), ("heading", False), ("heading", False), ("quote", True), ("quote", True), ("quote", False), ("quote", False)])
+        self.assertEqual(p["reasons"]["unbound"], ["line %d: heading `Twice` found 2 times in %s/source.md" % (BODY_LINE + 2, REV_M),
+                                                   "line %d: heading `Nope` not found in %s/source.md" % (BODY_LINE + 3, REV_M),
+                                                   "line %d: empty quote for %s" % (BODY_LINE + 6, REV_M),
+                                                   "line %d: quote not found in %s/source.md" % (BODY_LINE + 7, REV_M)])
+        self.assertEqual(p["cited"], [REV_M])
+
+    def test_unlisted_and_inputs_subset(self):
+        legacy_body = "# Beta\n\nLegacy text.\n"
+        p = self._page([(REV_M, sha(self.body), "capture")], body="# T\n- [[Sources/%s/source#Beta]]\n" % REV_L)
+        self.assertEqual(p["reasons"]["unbound"], ["line %d: unlisted — [[Sources/%s/source#Beta]] names a revision outside based_on" % (BODY_LINE + 1, REV_L)])
+        self.assertEqual(p["cited"], [], "an unlisted locator is never verified")
+        p = self._page([(REV_M, sha(self.body), "capture"), (REV_L, sha(legacy_body), "observed")], body="# T\n- [[Sources/%s/source#Beta]]\n" % REV_L)
+        self.assertEqual((p["states"], p["cited"]), ([], [REV_L]))
+        p = self._page([(REV_M, sha(self.body), "capture")], inputs_collections={"Elsewhere": SHA0})
+        self.assertIn("inputs.collections names `Elsewhere`, which is not in `collections`", p["reasons"]["unbound"])
+
+    def test_budget_and_links(self):
+        p = self._page([(REV_M, sha(self.body), "capture")], budget_words=3)
+        self.assertEqual(p["reasons"]["budget"], ["%d words in the evidential body (budget 3)" % p["body"]["words"]])
+        body = BODY % REV_M + "- [[Collections/Dossier]] [[Collections/Gone]] [[Wiki/P]] [[Synthesis/None]] [[Loose]] [[/abs]]\n"
+        p = self._page([(REV_M, sha(self.body), "capture")], body=body)
+        n = BODY_LINE + 5         # the appended line (line numbers are the file's)
+        self.assertEqual(p["reasons"]["unresolved"], ["line %d: [[Collections/Gone]] does not exist" % n, "line %d: [[Synthesis/None]] does not exist" % n,
+                                                      "line %d: [[Loose]] (not a link into Sources/, Collections/, Wiki/ or Synthesis/)" % n])
+        self.assertEqual(p["reasons"]["unbound"], ["line %d: link outside the instance: /abs" % n])
+
+    def test_schema_fail_and_unreadable_pages(self):
+        self.v.wiki("P", "---\ntype: wiki\n---\n# T\n")
+        p = self.v.page("P")
+        self.assertEqual((p["severity"], p["states"], p["usable"]), ("fail", ["schema"], False))
+        if os.geteuid() != 0:
+            os.chmod(self.v.root / "Wiki" / "P.md", 0)
+            try:
+                p = self.v.page("P")
+            finally:
+                os.chmod(self.v.root / "Wiki" / "P.md", 0o644)
+            self.assertEqual((p["state"], p["severity"], p["not_probed"], p["usable"]), ("unreadable", None, ["unreadable"], False))
 
 
 if __name__ == "__main__":

@@ -5,16 +5,20 @@
     python3 tests/fixtures/research/generate.py --write    regenerate expected/ (a deliberate contract change — the spec changes in the same PR)
 
 What is pinned (docs/specs/2026-10-27-research-interface.md §11):
-- expected/research.json        — `lib_research.py --vault <fixture> --json`: every collection/1 record
+- expected/research.json        — `lib_research.py --vault <fixture> --json`: every collection/1 record and every wiki/1 record with its states
 - expected/counters.json        — the `lib_vault.counters()` keys the interface freezes (relations, collections)
-- expected/index.md             — the Status table and the `## Collections` section `knowledge-reindex.py` writes
+- expected/index.md             — the Status table, the `## Collections` and `## Wiki` sections `knowledge-reindex.py` writes
 - expected/search-default.json  — `mnemon-search.py --query trust` (Sources only: collections are opt-in)
 - expected/search-all.json      — `--query trust --include-source --include-synthesis --include-collections --limit 20`
 - expected/search-domain.json   — `--query trust --include-collections --domain mc/ai`
+- expected/search-wiki.json     — `--query trust --include-wiki` (the wiki block: usable pages only, orphans left out)
+- expected/search-wiki-orphans.json — `--query trust --include-wiki --include-orphans --wiki-limit 10 --domain learning`
 - expected/doctor-data.json     — `vault-doctor.py --json` on the fixture (guide pinned at the engine's, a temp state dir,
                                   `--today 2026-10-27`), with `generated_at` dropped, the vault and state paths replaced by
-                                  `<vault>` / `<state>` and the phase 3a counter keys (`collection*`) removed: the
+                                  `<vault>` / `<state>` and the research counter keys (`collection*`, `wiki*`) removed: the
                                   mnemon-doctor-data/1 document the branches must leave byte-for-byte as it is
+- expected/doctor-research.json — `vault-doctor.py --research --json` on the same run (`--wiki-words 80`): the
+                                  mnemon-doctor-research/1 document — every derived state of the fixture pages (phase 3b)
 
 Stdlib only, python 3.9; runs the tools as subprocesses with the interpreter that runs this script.
 """
@@ -38,7 +42,9 @@ COUNTER_KEYS = ("folders", "extracted", "captured", "current", "superseded", "sy
                 "drafts_unratified", "integrated", "filed", "links_unresolved",
                 "collections", "collections_fail", "collections_unreadable", "collections_status",
                 "collection_items", "collection_items_excluded", "collection_items_malformed",
-                "collection_items_unresolved")
+                "collection_items_unresolved",
+                "wiki_pages", "wiki_fail", "wiki_unreadable", "wiki_based_on")
+WIKI_WORDS = "80"      # the research budget pinned for the goldens: one fixture page is over it
 
 
 ISOLATION = tempfile.mkdtemp(prefix="mnemon-research-xdg-")
@@ -79,6 +85,9 @@ def readings() -> dict[str, object]:
                                             "--include-synthesis", "--include-collections", "--limit", "20"))
     out["search-domain.json"] = json.loads(run(search, "--vault", str(VAULT), "--query", "trust",
                                                "--include-collections", "--domain", "mc/ai"))
+    out["search-wiki.json"] = json.loads(run(search, "--vault", str(VAULT), "--query", "trust", "--include-wiki"))
+    out["search-wiki-orphans.json"] = json.loads(run(search, "--vault", str(VAULT), "--query", "trust", "--include-wiki",
+                                                     "--include-orphans", "--wiki-limit", "10", "--domain", "learning"))
     state = os.path.join(ISOLATION, "doctor-state")
     os.makedirs(state, exist_ok=True)
     guide = run(str(BIN / "lib_vault.py"), "--vault", str(VAULT), "--json")   # warms nothing; the guide comes from the engine
@@ -87,8 +96,13 @@ def readings() -> dict[str, object]:
     doc_text = doc_text.replace(str(VAULT), "<vault>").replace(state, "<state>")
     doc = json.loads(doc_text)
     doc.pop("generated_at", None)
-    doc["counters"] = {k: v for k, v in doc["counters"].items() if not k.startswith("collection")}
+    doc["counters"] = {k: v for k, v in doc["counters"].items() if not (k.startswith("collection") or k.startswith("wiki"))}
     out["doctor-data.json"] = doc
+    res_text = run(str(BIN / "vault-doctor.py"), "--vault", str(VAULT), "--state-dir", state, "--today", "2026-10-27",
+                   "--guide-version", str(_engine_guide()), "--wiki-words", WIKI_WORDS, "--research", "--json")
+    res = json.loads(res_text.replace(str(VAULT), "<vault>").replace(state, "<state>"))
+    res.pop("generated_at", None)
+    out["doctor-research.json"] = res
     return out
 
 

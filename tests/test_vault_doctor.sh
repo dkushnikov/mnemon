@@ -290,7 +290,8 @@ echo "--- the dirty vault: text lines, one per check, severity by cause ---"
 doc --archive "$ARCHIVE" --state-dir "$LEDGER"
 assert_eq "$rc" "0" "vault-doctor.py exits 0 (the dispatcher derives the exit from fail lines)"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^fail \|^warn \|^ok ' || true)" "$(printf '%s\n' "$out" | grep -c . || true)" "every line is ok|warn|fail <name> — <detail>"
-assert_eq "$(printf '%s\n' "$out" | grep -c ' — ' || true)" "21" "19 checks, the radius/parse diagnostic and the unreadable diagnostic (one chmod-000 file by design)"
+assert_eq "$(printf '%s\n' "$out" | grep -c ' — ' || true)" "31" "19 checks, the radius/parse diagnostic and the unreadable diagnostic (one chmod-000 file by design), then the 10 research checks (phase 3b)"
+assert_eq "$(printf '%s\n' "$out" | grep -c '^[a-z]* research/' || true)" "10" "the 10 research checks follow the data lines (mnemon-doctor-research/1)"
 assert_eq "$(status_of store/source-integrity)" "fail" "I1 fail: an edited managed body, a foreign `_width`, a partial key set"
 assert_contains "$(line_of store/source-integrity)" "2 do not ($M2, $M3)" "I1 names the managed bodies that do not match (edited; `_width`)"
 assert_contains "$(line_of store/source-integrity)" "1 damaged ($D1)" "I1: a partial managed key set is damaged (fail), not legacy"
@@ -429,10 +430,10 @@ echo "--- the one-line brief: numbers equal --json; a budget that cannot be met 
 doc --archive "$ARCHIVE" --state-dir "$LEDGER" --brief
 assert_eq "$rc" "0" "--brief exits 0"
 assert_eq "$(printf '%s\n' "$out" | grep -c .)" "1" "--brief is one physical line"
-assert_eq "$out" "Dirty · 94 sources (18 managed · 87 current · 6 superseded) · 90 extracted · 10 synthesis (2 seeds / 124 d · 4 drafts / 137 d) · data: $TEXT_FAIL fail · $TEXT_WARN warn · probed 19/19 · diagnostics: 2 warn (unreadable 1)" "the brief's numbers are the JSON's counters and summary; diagnostics named apart; the unreadable file said"
+assert_eq "$out" "Dirty · 94 sources (18 managed · 87 current · 6 superseded) · 90 extracted · 10 synthesis (2 seeds / 124 d · 4 drafts / 137 d) · data: $TEXT_FAIL fail · $TEXT_WARN warn · probed 19/19 · research: 0 pages · 0 fail · 0 warn · diagnostics: 2 warn (unreadable 1)" "the brief's numbers are the JSON's counters and summary; the research part (phase 3b); diagnostics named apart; the unreadable file said"
 doc --archive "$ARCHIVE" --state-dir "$LEDGER" --brief --budget 0.001
 assert_eq "$rc" "0" "--budget 0.001 exits 0"
-assert_eq "$out" "Dirty · data: not probed (budget 0.001 s exceeded)" "a budget the run cannot meet: not probed — never 0 fail"
+assert_eq "$out" "Dirty · data: not probed (budget 0.001 s exceeded) · research: not probed (research: budget 0.001 s exceeded)" "a budget the run cannot meet: not probed — never 0 fail (both documents)"
 doc --archive "$ARCHIVE" --state-dir "$LEDGER" --json --budget 0.001
 assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["snapshot"]["complete"], d["summary"]["probed"], d["summary"]["not_probed"], len(d["checks"]), d["checks"][0]["probed"], d["checks"][0]["status"], d["diagnostics"][0]["code"], d["diagnostics"][0]["level"])')" "False 0 19 19 False ok budget warn" "--json under the budget: snapshot incomplete, all 19 checks not probed (status ok), a budget diagnostic"
 echo "--- a stalled worker is killed at the deadline: the parent never waits past the budget ---"
@@ -441,7 +442,7 @@ t0=$(date +%s)
 rc=0; out="$(MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_STALL=30 MNEMON_TEST_DOCTOR_PIDFILE="$PIDFILE" python3 "$DOCTOR" --vault "$DIRTY" --today "$TODAY" --guide-version "$ENGINE_GUIDE" --brief --budget 1 2>"$TEST_TMPDIR/err")" || rc=$?
 t1=$(date +%s)
 assert_eq "$rc" "0" "exit 0 when the worker is killed at the deadline"
-assert_eq "$out" "Dirty · data: not probed (budget 1 s exceeded)" "the line says the budget was exceeded"
+assert_eq "$out" "Dirty · data: not probed (budget 1 s exceeded) · research: not probed (research: budget 1 s exceeded)" "the line says the budget was exceeded"
 [[ $((t1 - t0)) -le 5 ]] && pass "the parent returned within the budget plus slack ($((t1 - t0)) s, worker stalled for 30 s)" || fail "the parent returned within the budget plus slack" "took $((t1 - t0)) s"
 assert_file_exists "$PIDFILE" "the stalled worker wrote its pid (test hook)"
 wpid="$(cat "$PIDFILE" 2>/dev/null || echo 0)"
@@ -541,13 +542,13 @@ assert_eq "$(line_of store/extract-consistency)" "ok store/extract-consistency �
 assert_eq "$(line_of data/rating-scale)" "ok data/rating-scale — 0 % of rated current revisions ≥ 7 (0/3, coverage 3/3); threshold 20 %" "Q4 ok line"
 assert_eq "$(line_of human/queues)" "ok human/queues — 1 declared queues, oldest 6 d; untyped 0; pending-writes legacy 0 (radius 30 d)" "H3 ok line"
 doc --archive "$CARCH" --state-dir "$CLEDGER" --brief --instance clean
-assert_eq "$out" "Clean · 3 sources (3 managed · 3 current · 0 superseded) · 3 extracted · 2 synthesis (1 seeds / 6 d · 0 drafts) · data: 0 fail · 0 warn · probed 19/19" "the brief of a clean vault"
+assert_eq "$out" "Clean · 3 sources (3 managed · 3 current · 0 superseded) · 3 extracted · 2 synthesis (1 seeds / 6 d · 0 drafts) · data: 0 fail · 0 warn · probed 19/19 · research: 0 pages · 0 fail · 0 warn" "the brief of a clean vault"
 
 echo "--- an empty vault, no Synthesis/, no _inputs/: ok lines, exit 0, no exception ---"
 VAULT="$TEST_TMPDIR/empty"; mkdir -p "$VAULT/Sources"
 doc
 assert_eq "$rc" "0" "exit 0"
-assert_eq "$(printf '%s\n' "$out" | grep -c ' — ' || true)" "19" "19 lines"
+assert_eq "$(printf '%s\n' "$out" | grep -c ' — ' || true)" "29" "19 data lines and 10 research lines"
 assert_eq "$(printf '%s\n' "$out" | grep -c 'error:' || true)" "0" "no exception surfaced"
 assert_eq "$(line_of store/source-integrity)" "ok store/source-integrity — 0 managed bodies match text_sha256; 0 damaged; 0 legacy headers closed, bodies present, no \`_\` keys" "I1 on nothing"
 assert_eq "$(line_of store/index)" "ok store/index — index.md missing; 0 rows to generate; no hand-edits report" "I3: no index and nothing to index is fine"
@@ -557,7 +558,7 @@ assert_eq "$(line_of human/queues)" "ok human/queues — 0 declared queues; unty
 assert_contains "$(line_of data/reader-context)" "warn data/reader-context — no freshness data (missing " "Q5: no file = no freshness data (absence is not freshness)"
 assert_contains "$(line_of store/context)" "ok store/context — 0 managed contexts ∈ charter (personal); no charter (default personal)" "I9 without a charter: personal"
 doc --brief
-assert_eq "$out" "Empty · 0 sources (0 managed · 0 current · 0 superseded) · 0 extracted · 0 synthesis (0 seeds · 0 drafts) · data: 0 fail · 2 warn · probed 17/19" "the brief of an empty vault (archive and ledger not probed)"
+assert_eq "$out" "Empty · 0 sources (0 managed · 0 current · 0 superseded) · 0 extracted · 0 synthesis (0 seeds · 0 drafts) · data: 0 fail · 2 warn · probed 17/19 · research: 0 pages · 0 fail · 0 warn" "the brief of an empty vault (archive and ledger not probed)"
 
 echo "--- I4: a cross-resource edge alone warns; current is complete ---"
 fresh_vault i4
@@ -700,7 +701,7 @@ assert_eq "$(printf '%s\n' "$out" | grep -c .)" "1" "status --brief is one physi
 assert_contains "$out" "Clean · 3 sources (3 managed · 3 current · 0 superseded) · 3 extracted · 2 synthesis (1 seeds / " "...with the instance's counters"
 assert_contains "$out" " · data: 0 fail · 0 warn · probed 18/19" "...and the data summary (the ledger not probed here)"
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" status --brief --budget 0.001
-assert_eq "$out" "Dirty · data: not probed (budget 0.001 s exceeded)" "status --brief --budget: honest"
+assert_eq "$out" "Dirty · data: not probed (budget 0.001 s exceeded) · research: not probed (research: budget 0.001 s exceeded)" "status --brief --budget: honest"
 run env MNEMON_TEST_HOOKS=1 MNEMON_TEST_DOCTOR_TODAY="$TODAY" "$MNEMON" --config "$TEST_TMPDIR/clean.yaml" status --brief --json
 assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["instance"], d["counters"]["folders"], d["summary"]["fail"], "checks" in d)')" "clean 3 0 False" "status --brief --json: counters + summary"
 run "$MNEMON" --config "$TEST_TMPDIR/dirty.yaml" status
@@ -815,7 +816,7 @@ assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.s
 assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print([x["message"] for x in d["diagnostics"] if x["code"]=="radius-parse"])')" "['duplicate seeds: line \"seeds: 20 open · 60 days\" (first kept)']" "radius: a second line for one key is a parse diagnostic, the first is kept"
 assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=[x for x in d["checks"] if x["name"]=="human/queues"][0]; print(c["counts"]["parked"], c["counts"]["over_radius"], [i["reason"] for i in c["items"] if "invalid" in i["reason"]][0][:34])')" "0 1 invalid \`parked: yes\` (not a date)" "H3: an invalid parked never parks; the queue is measured and the parking reported"
 doc --brief
-assert_contains "$out" "probed 17/19 · diagnostics: 1 warn" "the brief on this vault: 17 probed (no archive dir, no ledger — both not probed) and the radius diagnostic counted"
+assert_contains "$out" "probed 17/19 · research: 0 pages · 0 fail · 0 warn · diagnostics: 1 warn" "the brief on this vault: 17 probed (no archive dir, no ledger — both not probed) and the radius diagnostic counted"
 CRS="$TEST_TMPDIR/cr-state"; mkdir -p "$CRS/captures"
 printf '{"schema":"mnemon-capture-receipt/1","capture_id":"cap-x","state":"integrity-error","revision":"%s"}\n' "$CR1" > "$CRS/captures/cap-x.json"
 doc --state-dir "$CRS"

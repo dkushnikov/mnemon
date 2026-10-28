@@ -186,6 +186,8 @@ doctor_thin_words: 301
 doctor_stub_words: 41
 doctor_arxiv_words: 601
 doctor_rating_hi_share: 21
+doctor_wiki_pages_per_collection: 6
+doctor_wiki_words: 3001
 EOF2
 dump="$("$MNEMON_ROOT/bin/mnemon" --instance keys5set config dump)"
 shown=0; unshown=""
