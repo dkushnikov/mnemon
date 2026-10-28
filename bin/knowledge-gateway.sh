@@ -331,6 +331,10 @@ cap_contract_checks() {
     [[ -n "$SUPERSEDES" ]] || cap_die2 "--supersedes names no revision"
     while IFS= read -r _sup_rev; do
       [[ -d "$VAULT_PATH/Sources/$_sup_rev" ]] || cap_die2 "--supersedes names a revision that does not exist: Sources/$_sup_rev/"
+      # a bookmark never supersedes a full capture (B2) — through an explicit --supersedes either
+      if [[ "$TIER" == "bookmark" && "$(cap_effective_tier "$_sup_rev")" != "bookmark" ]]; then
+        cap_die2 "--tier bookmark --supersedes $_sup_rev: Sources/$_sup_rev/ is a full capture — a bookmark never supersedes it"
+      fi
     done <<< "$(cap_supersedes_lines "$SUPERSEDES")"
   fi
   if [[ -n "$RESUME" && $CAPTURE_ID_GIVEN == true ]]; then
@@ -380,6 +384,7 @@ cap_dry_run() {
     audio)   raw_ext="<audio ext>" ;;
     file|book) raw_ext="$(cap_ext_of "$FILE_PATH" bin)" ;;
   esac
+  [[ "$TIER" == "bookmark" ]] && raw_ext="" raw_note="none (a card has no raw)"
   if [[ -n "$raw_ext" ]]; then
     if [[ -n "${ARCHIVE_DIR:-}" ]]; then raw_note="archive — $ARCHIVE_DIR/$(cap_today)_<resource_id>.$raw_ext"
     else raw_note="state — $MNEMON_VAULT_STATE_DIR/raw/$(cap_today)_<resource_id>.$raw_ext"; fi
@@ -488,12 +493,16 @@ cap_restore_from_receipt() {   # globals from the receipt's request + metadata (
     "REQUESTED_VERSION=" + s(.request.requested_version), "SITE_PLAN_SHA256=" + s(.site_plan_sha256), "REPORT_STATE=" + s(.report_state),
     "TIER=" + s(.request.tier // "full")' "$r")"
   eval "$assignments"
+  # the input is located by the receipt, before any kind is derived from the globals: a file-kind
+  # origin (pdf · audio · file · book) with a recorded input hash was a --file (cap_resource_kind
+  # answers url for those origins while FILE_PATH is empty — reviewers A/B, 2026-10-28); a
+  # --canonical-url capture is a url-kind resource whose input is the file or the text (B3)
   FILE_PATH=""
-  # the input is located by the origin's own kind (a file or a text), whatever the resource kind:
-  # a --canonical-url capture is a url-kind resource whose input is the file (B3)
+  case "$ORIGIN" in
+    pdf|audio|file|book) [[ -n "$INPUT_SHA256" && -n "$INPUT_PATH" ]] && FILE_PATH="$INPUT_PATH" ;;
+  esac
   CANONICAL_URL_GIVEN=""
   if [[ "$RESOURCE_KIND" == "url" && "$(cap_input_kind)" != "url" ]]; then CANONICAL_URL_GIVEN="$URL"; fi
-  if [[ "$(cap_input_kind)" == "file" ]]; then FILE_PATH="$INPUT_PATH"; fi
   if [[ "$(cap_input_kind)" == "text" && -n "$INPUT_PATH" && "$INPUT_PATH" != "$RUNS_DIR/$CAPTURE_ID/attempt-1/capture.md" ]]; then FILE_TEXT="$INPUT_PATH"; fi
   # identity and the request schema come from the receipt, never recomputed (D5); the bound
   # flags of a /2 request are restored as flags so a re-acquisition runs the same chain
@@ -552,7 +561,14 @@ cap_binding_check() {
   if ! $RECAPTURE && [[ "$TIER" != "bookmark" && "$(cap_receipt_get "$CAPTURE_ID" '.request.recapture // false')" == "true" ]]; then
     local _rsup
     _rsup="$(cap_receipt_get "$CAPTURE_ID" '.request.supersedes | if type == "array" then join(",") else (. // "") end')"
-    if [[ -n "$_rsup" && "$_rsup" != *,* && "$(cap_effective_tier "$_rsup")" == "bookmark" ]]; then RECAPTURE=true; SUPERSEDES="$_rsup"; fi
+    # only a bookmark of THIS resource (a candidate of the lookup — managed by identity, legacy by
+    # alias URL): an explicit --supersedes of another resource's card is not a promotion
+    if [[ -n "$_rsup" && "$_rsup" != *,* && "$(cap_effective_tier "$_rsup")" == "bookmark" ]]; then
+      cap_lookup_head
+      if printf '%s' "$CAP_CANDIDATES" | jq -e --arg f "$_rsup" '.candidates[] | select(.folder == $f)' >/dev/null 2>&1; then
+        RECAPTURE=true; SUPERSEDES="$_rsup"
+      fi
+    fi
   fi
   cap_canonical_request
   [[ -n "${tmp:-}" ]] && rm -f "$tmp"
@@ -601,6 +617,18 @@ cap_replay() {
 
   # --- alias receipts: the fixed target revision; publication recovery is delegated (§12 A4) ---
   if [[ -n "$RESOLVED_REV" ]]; then cap_alias_replay; fi
+
+  # --- a bookmark whose card is published is final whatever its receipt says (B1): a crash
+  # between the publication and the `bookmarked` receipt leaves started/source-published, and
+  # the card must never reach the extractor (reviewers A/B, 2026-10-28)
+  if [[ "$TIER" == "bookmark" && -n "$REVISION" && -f "$VAULT_PATH/Sources/$REVISION/source.md" ]]; then
+    case "$RECEIPT_STATE" in
+      bookmarked|integrity-error|source-published|extract-failed|started|failed)
+        cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+        if [[ "$RECEIPT_STATE" == "bookmarked" ]]; then cap_result bookmarked none "" "" true; exit 0; fi
+        cap_finish_bookmarked true "$KEEP_LOCATOR" ;;
+    esac
+  fi
 
   case "$RECEIPT_STATE" in
     extracted|integrity-error)
@@ -679,7 +707,7 @@ cap_alias_replay() {
     # the owner's receipt lagged behind its published folder (crash after the rename)
     cap_receipt_update "$CAPTURE_ID" '.state="source-published" | .source_published=true | .error_class=null | .error=null | .retryable=null'
   fi
-  if [[ "$alias_state" == "extracted" && "$alias_attempts" -eq 0 ]]; then
+  if [[ ( "$alias_state" == "extracted" || "$alias_state" == "bookmarked" ) && "$alias_attempts" -eq 0 ]]; then
     # a duplicate alias: the RESULT from the files of its target, nothing written
     cap_result skipped-duplicate "$(cap_extract_state_of "$REVISION")" "" "" true
     exit 0
@@ -689,6 +717,11 @@ cap_alias_replay() {
     if cap_extract_belongs || [[ "$LEGACY_MATCH" == true ]]; then cap_reconcile_extracted "$keep"; fi
     cap_result extracted ok "" "" true     # an extract that belongs to another operation: the files decide
     exit 0
+  fi
+  # the target is a card (B1): final as published, never extracted
+  if [[ "$(cap_effective_tier "$REVISION")" == "bookmark" ]]; then
+    if [[ "$alias_state" == "bookmarked" ]]; then cap_result bookmarked none "" "" true; exit 0; fi
+    cap_finish_bookmarked true "$keep"
   fi
   cap_run_extract_step true "$keep"
 }
@@ -834,7 +867,9 @@ cap_fresh() {
     folder="${latest%% *}"; legacy="${latest##* }"
     folder_cid="$(_mnemon_yaml_literal capture_id "$VAULT_PATH/Sources/$folder/source.md")"
     REVISION="$folder"
-    if [[ "$legacy" == "true" || -f "$VAULT_PATH/Sources/$folder/extract.md" || "$TIER" == "bookmark" ]]; then
+    # an unfinished card (its owner receipt never reached `bookmarked`) is finished below like an
+    # incomplete full revision — under the owner's receipt or an alias — never answered as a duplicate
+    if [[ "$legacy" == "true" || -f "$VAULT_PATH/Sources/$folder/extract.md" ]] || { [[ "$TIER" == "bookmark" ]] && ! cap_card_unfinished "$folder" "$folder_cid"; }; then
       [[ -n "$incoming" ]] && rm -f "$incoming"
       # every success path verifies the published source first (§3.4 step 5, §9.5): a duplicate
       # has no receipt of its own, so the folder's own capture.text_sha256 is the reference —
@@ -854,7 +889,12 @@ cap_fresh() {
       if $CAPTURE_ID_GIVEN; then
         TEXT_SHA256="$(cap_source_text_sha "$folder" 2>/dev/null || true)"
         ATTEMPT_DIR=""; RAW_STORE=none; RAW_PATH=""; RAW_STAGED=""; INPUT_PATH=""
-        CAP_INIT_ATTEMPTS=0 cap_receipt_create extracted "$folder" "$folder_cid" "$legacy"
+        # the alias's final state names what the target is: a card is `bookmarked`, never `extracted`
+        if [[ "$(cap_effective_tier "$folder")" == "bookmark" && ! -f "$VAULT_PATH/Sources/$folder/extract.md" ]]; then
+          CAP_INIT_ATTEMPTS=0 cap_receipt_create bookmarked "$folder" "$folder_cid" "$legacy"
+        else
+          CAP_INIT_ATTEMPTS=0 cap_receipt_create extracted "$folder" "$folder_cid" "$legacy"
+        fi
         cap_receipt_update "$CAPTURE_ID" '.finalized_at=$now'
       fi
       cap_result skipped-duplicate "$(cap_extract_state_of "$folder")" "" "" false
@@ -864,12 +904,17 @@ cap_fresh() {
     # is in the ledger and no id was given; otherwise under an alias receipt that delegates the
     # recovery to the owner receipt (§12 A4) or, without one, runs it itself
     [[ -n "$incoming" ]] && rm -f "$incoming"
-    echo "NOTE: Sources/$folder/ has source.md but no extract.md — resuming the extraction" >&2
+    if [[ "$(cap_effective_tier "$folder")" == "bookmark" ]]; then
+      echo "NOTE: Sources/$folder/ is a card whose receipt is not final — finishing it as bookmarked" >&2
+    else
+      echo "NOTE: Sources/$folder/ has source.md but no extract.md — resuming the extraction" >&2
+    fi
     if [[ -n "$folder_cid" ]] && cap_receipt_exists "$folder_cid" && ! $CAPTURE_ID_GIVEN; then
       CAPTURE_ID="$folder_cid"
       cap_restore_from_receipt
       REPLAYED=true
       cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+      if [[ "$(cap_effective_tier "$folder")" == "bookmark" ]]; then cap_finish_bookmarked true "$KEEP_LOCATOR"; fi
       if cap_extract_belongs; then cap_reconcile_extracted "$KEEP_LOCATOR"; fi
       cap_run_extract_step true "$KEEP_LOCATOR"
     fi
@@ -899,18 +944,20 @@ cap_fresh() {
   esac
   [[ "$SITE_MODE" == "auto" ]] && KEEP_LOCATOR=true   # attempt-1/plan.json, kept with the receipt
   RAW_STORE=none; RAW_PATH=""; RAW_STAGED=""; RAW_KIND=none
-  case "$ORIGIN" in
-    url)     if [[ -n "$SITE_MODE" ]]; then cap_raw_prepare site; RAW_KIND=site; else cap_raw_prepare html; fi ;;
-    pdf)     cap_raw_prepare pdf ;;
-    youtube) cap_raw_prepare txt ;;
-    audio)   if [[ -n "$FILE_PATH" ]]; then cap_raw_prepare "$(cap_ext_of "$FILE_PATH" audio)"; else cap_raw_prepare "$(cap_url_ext "$URL" bin)"; fi ;;
-    file|book) cap_raw_prepare "$(cap_ext_of "$FILE_PATH" bin)" ;;
-  esac
+  # a card has no raw: no store is prepared and the receipt records none (B1)
+  if [[ "$TIER" != "bookmark" ]]; then
+    case "$ORIGIN" in
+      url)     if [[ -n "$SITE_MODE" ]]; then cap_raw_prepare site; RAW_KIND=site; else cap_raw_prepare html; fi ;;
+      pdf)     cap_raw_prepare pdf ;;
+      youtube) cap_raw_prepare txt ;;
+      audio)   if [[ -n "$FILE_PATH" ]]; then cap_raw_prepare "$(cap_ext_of "$FILE_PATH" audio)"; else cap_raw_prepare "$(cap_url_ext "$URL" bin)"; fi ;;
+      file|book) cap_raw_prepare "$(cap_ext_of "$FILE_PATH" bin)" ;;
+    esac
+  fi
   TEXT_SHA256=""
   CAP_INIT_ATTEMPTS=1 cap_receipt_create started
   if [[ "$TIER" == "bookmark" ]]; then
-    # no extractor runs for a card, so none is preflighted (B1); the raw store stays none
-    RAW_STORE=none; RAW_PATH=""; RAW_STAGED=""; RAW_KIND=none
+    # no extractor runs for a card, so none is preflighted (B1)
     cap_acquire_fresh
     cap_publish_source || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
     cap_finish_bookmarked false "$KEEP_LOCATOR"
@@ -930,8 +977,8 @@ cap_resolve_resume() {
     if [[ "$(cap_receipt_get "$target" '.state')" == "extracted" && -f "$VAULT_PATH/Sources/$(cap_receipt_get "$target" '.resolved_to_revision // .revision')/extract.md" ]]; then
       cap_die2 "--resume: capture $target is complete (nothing to finish)"
     fi
-    if [[ "$(cap_receipt_get "$target" '.state')" == "bookmarked" ]]; then
-      cap_die2 "--resume: capture $target is a bookmark (nothing to finish) — promote it with mnemon add --url <url> (a full capture supersedes the card), or mnemon triage promote $(cap_receipt_get "$target" '.revision // ""')"
+    if [[ "$(cap_receipt_get "$target" '.state')" == "bookmarked" || "$(cap_receipt_get "$target" '.request.tier // "full"')" == "bookmark" ]]; then
+      cap_die2 "--resume: capture $target is a bookmark (nothing to finish) — promote it with mnemon add --url <url> (a full capture supersedes the card), or mnemon triage promote $(cap_receipt_get "$target" '.revision // ""'); an unfinished card is finished by replaying its id (mnemon add --capture-id $target)"
     fi
     return 0
   fi

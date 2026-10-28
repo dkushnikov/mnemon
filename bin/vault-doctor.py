@@ -794,7 +794,7 @@ def check_thin(scan: dict, cfg: dict) -> Check:
     for r in scan["folders"]:
         if not r["current"] or r["source_state"] == "unreadable" or r["body_words"] is None:
             continue
-        if r["tier"] == "bookmark":
+        if r["effective_tier"] == "bookmark":
             continue
         features = thin_features(r, stub_words)
         incomplete = [f for f in features if f in ("completeness:partial", "completeness:blocked")]
@@ -831,7 +831,7 @@ def check_arxiv(scan: dict, cfg: dict) -> Check:
             continue
         if r["host"] not in lv.ARXIV_HOSTS or r["body_words"] >= limit:
             continue
-        if r["tier"] == "bookmark" or r["src_status"] == "bookmark":
+        if r["effective_tier"] == "bookmark":
             continue
         if not r["current"]:
             superseded += 1

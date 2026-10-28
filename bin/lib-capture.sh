@@ -909,13 +909,25 @@ cap_resource_identity() {
 # says; the resource kind may differ (--canonical-url makes a file or a text a url-kind resource).
 cap_input_kind() { cap_resource_kind "$ORIGIN"; }
 
+# An unfinished card: a bookmark revision without extract.md whose owner receipt (by capture_id)
+# exists in this ledger and has not reached `bookmarked` (a crash between the publication and the
+# final receipt). Finished like an incomplete full revision, never answered as a duplicate.
+cap_card_unfinished() {   # <revision> <capture_id>
+  [[ "$(cap_effective_tier "$1")" == "bookmark" && ! -f "$VAULT_PATH/Sources/$1/extract.md" ]] || return 1
+  [[ -n "$2" ]] && cap_receipt_exists "$2" || return 1
+  [[ "$(cap_receipt_get "$2" '.state')" != "bookmarked" ]]
+}
+
 # The effective capture tier of a published revision (vault store §4): `tier:` of its source.md,
 # else the legacy placeholder `status: bookmark` → bookmark, else full. Prints the word.
 cap_effective_tier() {   # <revision>
-  local f="$VAULT_PATH/Sources/$1/source.md" t
+  # one rule with lib_vault.effective_tier and mnemon-search.capture_tier: `tier:` of source.md,
+  # else of extract.md (a legacy placeholder), else source.md's legacy `status: bookmark`, else full
+  local f="$VAULT_PATH/Sources/$1/source.md" e="$VAULT_PATH/Sources/$1/extract.md" t
   [[ -f "$f" ]] || { printf 'full'; return 0; }
   t="$(_mnemon_yaml_literal tier "$f" | tr '[:upper:]' '[:lower:]')"
-  if [[ -z "$t" && "$(_mnemon_yaml_literal status "$f")" == "bookmark" ]]; then t=bookmark; fi
+  [[ -z "$t" && -f "$e" ]] && t="$(_mnemon_yaml_literal tier "$e" | tr '[:upper:]' '[:lower:]')"
+  if [[ -z "$t" && "$(_mnemon_yaml_literal status "$f" | tr '[:upper:]' '[:lower:]')" == "bookmark" ]]; then t=bookmark; fi
   printf '%s' "${t:-full}"
 }
 
@@ -925,7 +937,10 @@ cap_effective_tier() {   # <revision>
 # site = the plan file's sha256, "auto", or empty (null). Non-url resources take the defaults.
 cap_request_fields() {   # sets REQ_RENDER REQ_EXTERNAL REQ_SITE REQ_RV
   REQ_RENDER=auto; REQ_EXTERNAL=off; REQ_SITE=""; REQ_RV=""
-  [[ "$RESOURCE_KIND" == "url" ]] || return 0
+  # keyed on the INPUT kind (B3): a file or a text with --canonical-url is a url-kind resource
+  # that is never fetched, so its request binds the defaults — not the instance's external_fetch
+  # nor --render — and its hash does not move with the config
+  [[ "$(cap_input_kind)" == "url" ]] || return 0
   ${RENDER:-false} && REQ_RENDER=force
   ${NO_RENDER:-false} && REQ_RENDER=off
   if [[ "${EXTERNAL_FETCH:-off}" == "auto" ]] && ! ${NO_EXTERNAL:-false} && ! ${NO_RENDER:-false}; then REQ_EXTERNAL=auto; fi
@@ -1182,7 +1197,7 @@ cap_cleanup_staging() {
   for d in "$VAULT_PATH/Sources"/.*.staging-*; do
     [[ -d "$d" ]] && rm -rf "$d"
   done
-  owned="$(for rev in "$CAPTURES_DIR"/*.json; do jq -r 'select(.state != "extracted") | (.raw_staged_path // "") | rtrimstr("/")' "$rev" 2>/dev/null; done)"
+  owned="$(for rev in "$CAPTURES_DIR"/*.json; do jq -r 'select(.state != "extracted" and .state != "bookmarked") | (.raw_staged_path // "") | rtrimstr("/")' "$rev" 2>/dev/null; done)"
   for f in "${ARCHIVE_DIR:-/nonexistent}"/.*.staging-* "$STATE_RAW_DIR"/.*.staging-*; do
     [[ -e "$f" ]] || continue
     keep=false
@@ -2880,10 +2895,10 @@ cap_alias_account() {   # <state> [extract_sha256]  (an attempt is counted only 
   ALIAS_ATTEMPT_SPENT=false
   cap_receipt_update "$ALIAS_ID" '.attempts=(.attempts // 0) + $n | .attempt_dir=$d | .state=$s | .replayed=true
       | .extract_sha256=(if $e == "" then .extract_sha256 else $e end)
-      | .finalized_at=(if $s == "extracted" then $now else .finalized_at end)
-      | .error_class=(if $s == "extracted" then null else .error_class end)
-      | .error=(if $s == "extracted" then null else .error end)
-      | .retryable=(if $s == "extracted" then null else .retryable end)' \
+      | .finalized_at=(if ($s == "extracted" or $s == "bookmarked") then $now else .finalized_at end)
+      | .error_class=(if ($s == "extracted" or $s == "bookmarked") then null else .error_class end)
+      | .error=(if ($s == "extracted" or $s == "bookmarked") then null else .error end)
+      | .retryable=(if ($s == "extracted" or $s == "bookmarked") then null else .retryable end)' \
     --arg d "${ATTEMPT_DIR:-}" --arg s "$1" --arg e "${2:-}" --argjson n "$spent"
 }
 
@@ -2902,7 +2917,7 @@ cap_finish_extracted() {   # <replayed true|false> <keep_locator true|false>
 # no converter, no model. A url: `# <title or url>`, the url, the intent when given; a text: the
 # text itself (exact). Sets the same acquisition globals cap_acquire does.
 cap_acquire_card() {
-  local title="${TITLE:-}"
+  local title="${TITLE:-}" intent=""
   ACQ_TITLE=""; ACQ_PAGES=""; ACQ_META_LINES=""; ACQ_AUTHOR=""; ACQ_PUBLISHED=""
   RAW_KIND=none; RAW_STORE=none; RAW_SHA256=""; RAW_BYTES=""
   cap_capx_reset
@@ -2912,9 +2927,11 @@ cap_acquire_card() {
       CONTENT_FORMAT=text ;;
     url)
       [[ -n "$title" ]] && title="$(cap_norm "$title" 300)"
+      # the intent is normalized like the title (control characters become spaces, 2000 chars)
+      [[ -n "${INTENT:-}" ]] && intent="$(cap_norm "$(printf '%s' "$INTENT" | tr '\000-\037\177' ' ')" 2000)"
       {
         printf '# %s\n\n%s\n' "$(cap_oneline "${title:-$URL}")" "$(cap_oneline "$URL")"
-        if [[ -n "${INTENT:-}" ]]; then printf '\n%s\n' "$(cap_oneline "$INTENT")"; fi
+        if [[ -n "$intent" ]]; then printf '\n%s\n' "$intent"; fi
       } > "$ATTEMPT_DIR/capture.md" || { FAIL_CLASS=convert; FAIL_MSG="could not write the card into $ATTEMPT_DIR"; return 1; }
       FIDELITY=exact; CONTENT_FORMAT=markdown ;;
     *) FAIL_CLASS=unsupported; FAIL_MSG="a bookmark takes a URL or a text (origin $ORIGIN)"; return 1 ;;

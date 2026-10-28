@@ -81,8 +81,16 @@ stub_reset
 run_gw --url "https://example.com/read-later" --capture-id promo-1
 assert_eq "$rc $(result status) $(result replayed)" "0 extracted true" "replaying the promotion with its id is a replay, not a binding mismatch"
 assert_eq "$(stub_calls)" "0" "...nothing re-run"
+# an explicit --supersedes of ANOTHER resource's card is not a promotion: its replay without the flag
+# is a different request (reviewer A P2-10)
+run_gw --url "https://example.com/card-n" --tier bookmark --capture-id bm-n
+cardn="$(result revision)"
+run_gw --url "https://example.com/n-other" --supersedes "$cardn" --capture-id sup-n
+assert_eq "$rc $(result status)" "0 extracted" "an explicit --supersedes of another resource's card captures"
+run_gw --url "https://example.com/n-other" --capture-id sup-n
+assert_eq "$rc" "2" "...replayed without --supersedes it is a different request (exit 2), not an adopted promotion"
 # the counters see the promotion
-assert_eq "$(python3 "$MNEMON_ROOT/bin/lib_vault.py" --vault "$VAULT" --status-counts | grep '^promoted=' | cut -d= -f2)" "1" "lib_vault counts promoted=1"
+assert_eq "$(python3 "$MNEMON_ROOT/bin/lib_vault.py" --vault "$VAULT" --status-counts | grep '^promoted=' | cut -d= -f2)" "2" "lib_vault counts promoted=2 (the promotion, and the card an explicit --supersedes gave a full descendant)"
 # a bookmark of a promoted resource is a duplicate of the full head
 run_gw --url "https://example.com/read-later" --tier bookmark --capture-id bm-5
 assert_eq "$rc $(result status) $(result revision)" "0 skipped-duplicate $rev2" "a bookmark after the promotion is a duplicate of the full head"
@@ -135,11 +143,68 @@ assert_eq "$rc" "2" "--tier bookmark with --site is exit 2"
 stub_reset
 MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-source-staged run_gw --url "https://example.com/crash-card" --tier bookmark --capture-id bm-10 || true
 assert_eq "$(rget bm-10 '.state')" "started" "crash before publication leaves the receipt started"
+assert_eq "$(rget bm-10 '.raw_store') $(rget bm-10 '.raw_path') $(rget bm-10 '.raw_staged_path')" "none null null" "a card's receipt records no raw and no staged path (reviewer A P2-6)"
 run_gw --url "https://example.com/crash-card" --tier bookmark --capture-id bm-10
 assert_eq "$rc $(result status) $(result replayed)" "0 bookmarked true" "the replay finishes the card"
 assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" tier)" "bookmark" "...as a bookmark"
 assert_eq "$(fetch_calls) $(stub_calls)" "0 0" "...without fetch or extractor"
 assert_eq "$(staging_left)" "0" "no staging left"
+# a crash AFTER the publication (receipt started or source-published, the card on disk) is finished as
+# bookmarked on replay — never extracted (reviewers A/B P1-2)
+for hook in after-source-published after-bookmark-published; do
+  stub_reset
+  MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=$hook run_gw --url "https://example.com/crash-$hook" --tier bookmark --capture-id "bm-$hook" || true
+  crev="$(rget "bm-$hook" '.revision')"
+  assert_file_exists "$VAULT/Sources/$crev/source.md" "$hook: the card is published"
+  [[ "$(rget "bm-$hook" '.state')" != "bookmarked" ]] && pass "$hook: the receipt is not final ($(rget "bm-$hook" '.state'))" || fail "$hook: the receipt is not final" "already bookmarked"
+  run_gw --url "https://example.com/crash-$hook" --tier bookmark --capture-id "bm-$hook"
+  assert_eq "$rc $(result status) $(result replayed) $(result revision)" "0 bookmarked true $crev" "$hook: the replay finishes the card as bookmarked"
+  assert_eq "$(rget "bm-$hook" '.state') $(stub_calls)" "bookmarked 0" "$hook: the receipt is final, no extractor call"
+  [[ -f "$VAULT/Sources/$crev/extract.md" ]] && fail "$hook: no extract.md beside the card" "extract.md written" || pass "$hook: no extract.md beside the card"
+  run_gw --resume "bm-$hook"
+  assert_eq "$rc" "2" "$hook: --resume of the card's receipt is exit 2"
+done
+# a crash after the publication, then a replay through an alias (another id for the same card)
+stub_reset
+MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-source-published run_gw --url "https://example.com/crash-alias" --tier bookmark --capture-id bm-alias-owner || true
+run_gw --url "https://example.com/crash-alias" --tier bookmark --capture-id bm-alias-2
+assert_eq "$rc $(result status) $(stub_calls)" "0 bookmarked 0" "a second id for an unfinished card finishes it as bookmarked through the alias"
+assert_contains "$err" "finishing it as bookmarked" "...with the NOTE"
+assert_eq "$(rget bm-alias-owner '.state') $(rget bm-alias-2 '.resolved_to_revision')" "bookmarked $(rget bm-alias-owner '.revision')" "the owner's receipt is final; the alias resolves to the card"
+[[ -f "$VAULT/Sources/$(rget bm-alias-owner '.revision')/extract.md" ]] && fail "no extract through the alias" "written" || pass "no extract through the alias"
+run_gw --url "https://example.com/crash-alias" --tier bookmark --capture-id bm-alias-2
+assert_eq "$rc $(result status) $(result replayed) $(result tier)" "0 skipped-duplicate true bookmark" "the alias (no attempt of its own) replays as a duplicate of the finished card"
+run_gw --url "https://example.com/crash-alias" --tier bookmark --capture-id bm-alias-3
+assert_eq "$rc $(result status) $(result tier) $(rget bm-alias-3 '.state')" "0 skipped-duplicate bookmark bookmarked" "a third id is a duplicate of the finished card, its alias receipt bookmarked"
+# an unfinished card found without any id is finished under its owner's receipt
+stub_reset
+MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-source-published run_gw --url "https://example.com/crash-noid" --tier bookmark --capture-id bm-noid || true
+run_gw --url "https://example.com/crash-noid" --tier bookmark
+assert_eq "$rc $(result status) $(result capture_id) $(rget bm-noid '.state')" "0 bookmarked bm-noid bookmarked" "without an id the owner's receipt finishes the card"
+# an explicit --supersedes of a full capture with --tier bookmark is refused (reviewer A P1-3)
+run_gw --url "https://example.com/other-y" --tier bookmark --supersedes "$rev2" --capture-id bm-sup
+assert_eq "$rc" "2" "--tier bookmark --supersedes <full revision> is exit 2"
+assert_contains "$err" "a bookmark never supersedes it" "...with the rule"
+[[ -f "$(receipt bm-sup)" ]] && fail "nothing written on the refusal" "receipt exists" || pass "nothing written on the refusal"
+# a replay of a --file capture after a pre-acquisition failure keeps its input (reviewers A/B P1-1)
+printf '# A file\n\nfile text for the replay\n' > "$TEST_TMPDIR/replay.md"
+stub_reset
+rm -f "$XDG_STATE_HOME/mnemon/fence-probes.json"
+run_gw --file "$TEST_TMPDIR/replay.md" --capture-id file-replay
+assert_eq "$rc $(result error_class)" "3 fence-unprobed" "a --file capture fails at the preflight without a probe record"
+write_probe_record
+run_gw --file "$TEST_TMPDIR/replay.md" --capture-id file-replay
+assert_eq "$rc $(result status) $(result replayed)" "0 extracted true" "...and its replay captures the file (the locator is restored from the receipt)"
+assert_eq "$(fm "$VAULT/Sources/$(result revision)/source.md" origin_path)" "\"$TEST_TMPDIR/replay.md\"" "...from the recorded file"
+assert_eq "$(fetch_calls)" "0" "...without any fetch"
+printf 'pdf bytes\n' > "$TEST_TMPDIR/replay.pdf"
+rm -f "$XDG_STATE_HOME/mnemon/fence-probes.json"
+run_gw --file "$TEST_TMPDIR/replay.pdf" --canonical-url "https://docs.example.com/p.pdf" --capture-id pdf-replay
+assert_eq "$rc $(result error_class)" "3 fence-unprobed" "a --file pdf with --canonical-url fails at the preflight"
+write_probe_record
+stub_reset
+run_gw --file "$TEST_TMPDIR/replay.pdf" --canonical-url "https://docs.example.com/p.pdf" --capture-id pdf-replay
+assert_eq "$(result replayed) $(fetch_calls)" "true 0" "...its replay reads the file, never fetches the canonical URL"
 
 # ---------------------------------------------------------------------------------------------
 echo "--- 6. a text bookmark ---"
@@ -167,8 +232,12 @@ assert_eq "$rc" "0" "dry-run of a bookmark exits 0"
 assert_contains "$out" "Tier: bookmark" "...names the tier"
 assert_contains "$out" "=== BOOKMARK CARD ===" "...and the card plan"
 assert_not_contains "$out" "=== EXTRACTOR ARGV ===" "...no extractor section"
+assert_contains "$out" "Raw store: none (a card has no raw)" "...and no raw store"
 run_gw --url "https://example.com/dry" --dry-run
 assert_contains "$out" "Tier: full" "a full dry-run says tier full"
+# the card's intent is normalized: control characters become spaces
+run_gw --url "https://example.com/intent-nl" --tier bookmark --intent "$(printf 'line one\nline two')" --capture-id bm-nl
+assert_eq "$(tail -1 "$VAULT/Sources/$(result revision)/source.md")" "line one line two" "a newline in the intent becomes a space in the card"
 
 # ---------------------------------------------------------------------------------------------
 echo "--- 8. --canonical-url: a file or a text identified by its document ---"
@@ -187,6 +256,9 @@ assert_eq "$(capfm "$csrc" canonical_version)" "1" "capture.canonical_version 1"
 assert_eq "$(result canonical_url)" "https://docs.example.com/document/d/ABC/edit?usp=sharing" "RESULT:canonical_url printed"
 assert_eq "$(rget cu-1 '.request.resource_kind') $(rget cu-1 '.request.resource_key') $(rget cu-1 '.request.origin') $(rget cu-1 '.request.url')" "url https://docs.example.com/document/d/ABC/edit?usp=sharing file https://docs.example.com/document/d/ABC/edit?usp=sharing&utm_source=slack" "the request: resource url/canonical key, origin file, the literal url"
 assert_eq "$(rget cu-1 '.request.input_sha256')" "$(shasum -a 256 "$TEST_TMPDIR/doc-v1.md" | cut -c1-64)" "...input_sha256 binds the file's bytes"
+assert_eq "$(rget cu-1 '.request.render') $(rget cu-1 '.request.external') $(rget cu-1 '.request.site') $(rget cu-1 '.request.requested_version')" "auto off null null" "...the url-only fields bind their defaults for a file input (reviewer A P2-11)"
+EXTERNAL_FETCH=auto run_gw --file "$TEST_TMPDIR/doc-v1.md" --canonical-url "https://docs.example.com/document/d/ABC/edit?usp=sharing&utm_source=slack" --title "Exported doc" --capture-id cu-1 --render
+assert_eq "$rc $(result replayed)" "0 true" "...so an instance with external_fetch auto and a --render flag replay the same request"
 assert_eq "$(fetch_calls)" "0" "no fetch: the file is the input"
 # another export of the same document: dedup by document, not by file (the v1 rules keep `usp=`;
 # only the tracking keys go — the same canonical form needs the same query)

@@ -718,7 +718,7 @@ for path in (sorted(glob.glob(os.path.join(glob.escape(cdir), "*.json"))) if hav
             first_failed = rec.get("capture_id") or os.path.basename(path)[:-5]
     elif state == "integrity-error":
         integrity += 1
-    elif state in ("source-published", "extracted"):
+    elif state in ("source-published", "extracted", "bookmarked"):
         rev = rec.get("revision")
         if not isinstance(rev, str) or not rev or not os.path.isfile(os.path.join(vault, "Sources", rev, "source.md")):
             missing += 1
@@ -1678,6 +1678,12 @@ case "$cmd" in
             case "${1:-}" in
               list)            shift; exec python3 "$BIN_DIR/mnemon-triage.py" --vault "$VAULT_PATH" list "$@" ;;
               dismiss|restore) _tv="$1"; shift
+                               # the single-writer rule (vault store I7): a declared writer_host that is
+                               # not this host refuses the write before the lock — as the gateway does
+                               if [[ -n "${WRITER_HOST:-}" && "$WRITER_HOST" != "$(_host)" ]]; then
+                                 printf 'mnemon triage %s: this host (%s) must not write vault %s (writer_host %s)\n' "$_tv" "$(_host)" "$VAULT_PATH" "$WRITER_HOST" >&2
+                                 exit 2
+                               fi
                                exec python3 "$BIN_DIR/vault-lock.py" --vault "$VAULT_PATH" -- python3 "$BIN_DIR/mnemon-triage.py" --vault "$VAULT_PATH" "$_tv" "$@" ;;
               promote)         shift; exec python3 "$BIN_DIR/mnemon-triage.py" --vault "$VAULT_PATH" --mnemon "$0" promote "$@" ;;
             esac

@@ -650,7 +650,9 @@ def reindex(vault: Path, hand_edit_report: bool = True) -> dict:
     if legacy:
         shown = ', '.join(legacy[:5]) + (', …' if len(legacy) > 5 else '')
         notes.append(f"_{len(legacy)} legacy placeholder(s) without extract.md "
-                     f"(`status: bookmark` or `fetch_status: failed` in source.md — not resumable; capture again): {shown}._")
+                     f"(`status: bookmark` or `fetch_status: failed` in source.md — not resumable; a `status: bookmark` "
+                     f"placeholder is in `mnemon triage list` and a full `mnemon add` of its URL promotes it; "
+                     f"a failed fetch is captured again): {shown}._")
     pending_note = '\n'.join(notes)
 
     out = f"""---

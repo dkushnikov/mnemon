@@ -104,17 +104,43 @@ assert_eq "$rc $out" "0 Sources/$bma/ is not dismissed" "restoring twice is idem
 echo "--- 4. dismiss with an extract → extract.md status ---"
 ex="$VAULT/Sources/2026-09-02_cafebabe/extract.md"
 before="$(grep -v '^status:' "$ex")"
+ex_sha="$(shasum -a 256 "$ex" | cut -c1-64)"
 run_m triage dismiss 2026-09-02_cafebabe --why "duplicate of a stable note"
 assert_eq "$rc" "0" "dismiss of a bookmark with an extract exits 0"
 assert_contains "$out" "extract.md (status: dismissed)" "...the carrier is extract.md"
 assert_eq "$(fm "$ex" status) $(fm "$ex" dismissed) $(fm "$ex" dismissed_why)" "dismissed $(date +%Y-%m-%d) \"duplicate of a stable note\"" "status: dismissed · dismissed: date · dismissed_why"
-assert_eq "$(grep -v '^status:\|^dismissed:\|^dismissed_why:' "$ex")" "$before" "every other byte of extract.md is kept"
+assert_eq "$(grep -v '^status:\|^dismissed:\|^dismissed_why:\|^dismissed_from:' "$ex")" "$before" "every other line of extract.md is kept"
 [[ -f "$VAULT/Sources/2026-09-02_cafebabe/triage.md" ]] && fail "no triage.md beside an extract" "exists" || pass "no triage.md beside an extract"
 run_m search --query "card" --include-source --tier bookmark
 assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); r=[x for x in d["results"] if x["path"]=="Sources/2026-09-02_cafebabe/"][0]; print(r["result_type"], r["status"])')" "extract dismissed" "search: the extract result says dismissed"
+assert_eq "$(fm "$ex" dismissed_from)" "\"extracted\"" "dismissed_from records the prior word"
 run_m triage restore 2026-09-02_cafebabe
 assert_eq "$(fm "$ex" status) [$(fm "$ex" dismissed)]" "extracted []" "restore: status extracted, the dismissed lines gone"
-assert_eq "$(grep -v '^status:' "$ex")" "$before" "...and the rest byte-equal"
+assert_eq "$(shasum -a 256 "$ex" | cut -c1-64)" "$ex_sha" "...the file is byte-equal to the original (reviewer A P2-8)"
+# a legacy status word comes back as itself; a file without a status line gets none back
+mkdir -p "$VAULT/Sources/2026-09-03_0ddba11e" "$VAULT/Sources/2026-09-04_0ddba11f"
+printf -- '---\ntype: source\norigin: url\nurl: "https://example.com/legacy-processed"\ntitle: "Processed"\ncaptured: 2026-09-03\ntier: bookmark\n---\n# Processed\n' > "$VAULT/Sources/2026-09-03_0ddba11e/source.md"
+printf -- '---\ntype: extract\ntitle: "Processed"\nstatus: processed\nrating: 3\n---\n## Summary\n\nold words.\n' > "$VAULT/Sources/2026-09-03_0ddba11e/extract.md"
+printf -- '---\ntype: source\norigin: url\nurl: "https://example.com/legacy-nostatus"\ntitle: "No status"\ncaptured: 2026-09-04\ntier: bookmark\n---\n# No status\n' > "$VAULT/Sources/2026-09-04_0ddba11f/source.md"
+printf -- '---\ntype: extract\ntitle: "No status"\nrating: 2\n---\n## Summary\n\nno status line.\n' > "$VAULT/Sources/2026-09-04_0ddba11f/extract.md"
+sha_p="$(shasum -a 256 "$VAULT/Sources/2026-09-03_0ddba11e/extract.md" | cut -c1-64)"
+sha_n="$(shasum -a 256 "$VAULT/Sources/2026-09-04_0ddba11f/extract.md" | cut -c1-64)"
+run_m triage dismiss 2026-09-03_0ddba11e
+assert_eq "$(fm "$VAULT/Sources/2026-09-03_0ddba11e/extract.md" status) $(fm "$VAULT/Sources/2026-09-03_0ddba11e/extract.md" dismissed_from)" "dismissed \"processed\"" "a legacy word is recorded in dismissed_from"
+run_m triage dismiss 2026-09-04_0ddba11f
+assert_eq "$(fm "$VAULT/Sources/2026-09-04_0ddba11f/extract.md" status) $(fm "$VAULT/Sources/2026-09-04_0ddba11f/extract.md" dismissed_from)" "dismissed \"\"" "a file without a status line gets one appended and dismissed_from empty"
+run_m triage restore 2026-09-03_0ddba11e
+assert_eq "$rc $(shasum -a 256 "$VAULT/Sources/2026-09-03_0ddba11e/extract.md" | cut -c1-64)" "0 $sha_p" "restore brings `processed` back, byte for byte"
+run_m triage restore 2026-09-04_0ddba11f
+assert_eq "$rc $(shasum -a 256 "$VAULT/Sources/2026-09-04_0ddba11f/extract.md" | cut -c1-64)" "0 $sha_n" "restore drops the appended status line, byte for byte"
+# a CRLF extract.md is refused, nothing written
+mkdir -p "$VAULT/Sources/2026-09-05_c1f0c1f0"
+printf -- '---\ntype: source\norigin: url\nurl: "https://example.com/crlf"\ntitle: "CRLF"\ncaptured: 2026-09-05\ntier: bookmark\n---\n# CRLF\n' > "$VAULT/Sources/2026-09-05_c1f0c1f0/source.md"
+printf -- '---\r\ntype: extract\r\nstatus: extracted\r\n---\r\nbody\r\n' > "$VAULT/Sources/2026-09-05_c1f0c1f0/extract.md"
+sha_c="$(shasum -a 256 "$VAULT/Sources/2026-09-05_c1f0c1f0/extract.md" | cut -c1-64)"
+run_m triage dismiss 2026-09-05_c1f0c1f0
+assert_eq "$rc $(shasum -a 256 "$VAULT/Sources/2026-09-05_c1f0c1f0/extract.md" | cut -c1-64)" "1 $sha_c" "a CRLF extract.md is refused (exit 1) and untouched"
+assert_contains "$err" "CRLF" "...saying why"
 
 # ---------------------------------------------------------------------------------------------
 echo "--- 5. refusals and the scope of the judgement ---"
@@ -127,6 +153,13 @@ run_m triage restore "$full"
 assert_eq "$rc" "2" "restore of a full capture is exit 2"
 run_m triage dismiss
 assert_eq "$rc" "2" "dismiss without a revision is a usage error"
+# the single-writer rule: a declared writer_host that is not this host refuses the write (Codex P2-2)
+sed "s/^instance: captest$/instance: captest-reader/" "$CONFIG" > "$TEST_TMPDIR/reader.yaml"
+printf 'writer_host: some-other-host\n' >> "$TEST_TMPDIR/reader.yaml"
+rc=0; out="$(bash -c '"$@"' _ "$MNEMON" --config "$TEST_TMPDIR/reader.yaml" triage dismiss "$bmb" 2>&1)" || rc=$?
+assert_eq "$rc" "2" "dismiss on a host that is not the writer_host is exit 2"
+assert_contains "$out" "writer_host some-other-host" "...naming the writer"
+[[ -f "$VAULT/Sources/$bmb/triage.md" ]] && fail "nothing written by a non-writer host" "triage.md exists" || pass "nothing written by a non-writer host"
 # the lock: a writer holding the vault lock makes dismiss exit 75
 python3 "$MNEMON_ROOT/bin/vault-lock.py" --vault "$VAULT" -- bash -c 'sleep 3' &
 holder=$!
@@ -155,13 +188,52 @@ run_m triage list --status promoted
 assert_eq "$(col "$bmb" 2)" "promoted" "...and is listed under promoted"
 run_m triage dismiss "$bmb"
 assert_eq "$rc" "2" "dismissing a superseded card is refused"
-assert_contains "$err" "superseded by $newb" "...naming the head"
-# a text card promotes through its own body
+assert_contains "$err" "latest revision: $newb" "...naming the head"
+# after two refreshes the head named is the current one, not the direct successor (reviewer A P2-12)
+run_gw --url "https://example.com/refresh" --tier bookmark --title "R1" --capture-id bm-r1
+r1="$(result revision)"
+run_gw --url "https://example.com/refresh" --tier bookmark --recapture --title "R2" --capture-id bm-r2
+run_gw --url "https://example.com/refresh" --tier bookmark --recapture --title "R3" --capture-id bm-r3
+r3="$(result revision)"
+run_m triage dismiss "$r1"
+assert_eq "$rc" "2" "dismissing a twice-refreshed card is refused"
+assert_contains "$err" "latest revision: $r3" "...naming the current revision after two refreshes"
+# a legacy card whose tier is only in extract.md is a bookmark for every reader and promotes (reviewer A P2-5)
+mkdir -p "$VAULT/Sources/2026-09-06_e1e1e1e1"
+printf -- '---\ntype: source\nsource_type: article\norigin: url\nurl: "https://example.com/extract-tier"\ntitle: "Extract-tier card"\ncaptured: 2026-09-06\n---\n# Extract-tier card\n\nhttps://example.com/extract-tier\n' > "$VAULT/Sources/2026-09-06_e1e1e1e1/source.md"
+printf -- '---\ntype: extract\ntitle: "Extract-tier card"\nstatus: bookmark\ntier: bookmark\n---\n## Summary\n\na light card.\n' > "$VAULT/Sources/2026-09-06_e1e1e1e1/extract.md"
+run_m triage list
+assert_contains "$out" "2026-09-06_e1e1e1e1" "an extract-tier legacy card is in the queue"
 stub_reset
+run_m triage promote 2026-09-06_e1e1e1e1
+assert_eq "$rc" "0" "...and promotes"
+assert_contains "$out" "RESULT:status=extracted" "...in full"
+assert_eq "$(fm "$VAULT/Sources/$(printf '%s\n' "$out" | grep '^RESULT:revision=' | cut -d= -f2)/source.md" supersedes)" "\"2026-09-06_e1e1e1e1\"" "...superseding the legacy card"
+# a text card promotes through its own body — on stdin, nothing left in $TMPDIR (reviewer A P2-4)
+stub_reset
+tmp_before="$(/bin/ls "${TMPDIR:-/tmp}" 2>/dev/null | grep -c '^mnemon-promote-' || true)"
+run_m triage promote "$bmt" --dry-run
+assert_contains "$out" "add --origin text --title Text card --context personal" "the dry-run shows the text card's command"
+assert_contains "$out" "< <the card's text on stdin>" "...with the text on stdin, no --file-text"
 run_m triage promote "$bmt"
 assert_eq "$rc" "0" "promote of a text card exits 0"
 newt="$(printf '%s\n' "$out" | grep '^RESULT:revision=' | cut -d= -f2)"
 assert_eq "$(fm "$VAULT/Sources/$newt/source.md" supersedes) $(fm "$VAULT/Sources/$newt/source.md" origin)" "\"$bmt\" text" "the text card is superseded by a full text capture"
+assert_eq "$(/bin/ls "${TMPDIR:-/tmp}" 2>/dev/null | grep -c '^mnemon-promote-' || true)" "$tmp_before" "no temp file left in TMPDIR"
+assert_contains "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["input_path"])' "$VSTATE/captures/$(fm "$VAULT/Sources/$newt/source.md" capture_id | tr -d '"').json")" "/attempt-1/capture.md" "the input locator is the gateway's own (runs/<id>/attempt-1/capture.md)"
+# an edited text card is integrity-error, never promoted as an unrelated resource (Codex P2-1)
+printf 'another text to bookmark\n' > "$TEST_TMPDIR/t2.txt"
+run_gw_stdin "$TEST_TMPDIR/t2.txt" --origin text --tier bookmark --title "Edited card" --capture-id bm-t2
+bmt2="$(result revision)"
+printf 'edited by hand\n' >> "$VAULT/Sources/$bmt2/source.md"
+n_before="$(nfolders)"
+run_m triage promote "$bmt2"
+assert_eq "$rc" "1" "promote of an edited text card exits 1"
+assert_contains "$err" "integrity-error" "...integrity-error"
+assert_eq "$(nfolders)" "$n_before" "...nothing captured"
+# a duplicated flag in either form is not repeated
+run_m triage promote "$bmb" --dry-run --title=Mine
+assert_not_contains "$out" "--title Card B" "a --title=… given by the caller outranks the card's title"
 # a dismissed card promoted: the judgement lapses with the superseded carrier
 run_m triage dismiss "$bma" --why "not now"
 stub_reset
@@ -171,7 +243,7 @@ newa="$(printf '%s\n' "$out" | grep '^RESULT:revision=' | cut -d= -f2)"
 assert_eq "$(fm "$VAULT/Sources/$newa/source.md" supersedes)" "\"$bma\"" "...superseding the dismissed card"
 run_m triage list --status dismissed
 assert_eq "$out" "no dismissed bookmarks" "the judgement lapsed with the card"
-assert_eq "$(python3 "$MNEMON_ROOT/bin/lib_vault.py" --vault "$VAULT" --status-counts | grep -E '^(bookmarks|promoted)=' | tr '\n' ' ')" "bookmarks=2 promoted=3 " "lib_vault: 2 in the queue, 3 promoted"
+assert_eq "$(python3 "$MNEMON_ROOT/bin/lib_vault.py" --vault "$VAULT" --status-counts | grep -E '^(bookmarks|promoted)=' | tr '\n' ' ')" "bookmarks=7 promoted=4 " "lib_vault: 7 in the queue (the placeholder, four legacy cards, the refreshed card, the edited card), 4 promoted"
 # the legacy placeholder promotes too
 stub_reset
 run_m triage promote 2026-09-01_feedf00d

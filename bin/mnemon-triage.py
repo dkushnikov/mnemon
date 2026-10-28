@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import importlib.util
 import json
 import os
@@ -81,28 +82,13 @@ def queue(scan: dict) -> List[dict]:
     """Every bookmark-tier revision with its derived status (bookmarked · dismissed · promoted)."""
     folders = scan["folders"]
     successors = scan["graph"]["successors"]
-    tier_of = {r["name"]: r["effective_tier"] for r in folders}
-
-    def promoted(name: str) -> bool:
-        seen: set = set()
-        todo = list(successors.get(name, []))
-        while todo:
-            n = todo.pop()
-            if n in seen:
-                continue
-            seen.add(n)
-            if tier_of.get(n, "full") == "full":
-                return True
-            todo.extend(successors.get(n, []))
-        return False
-
     rows: List[dict] = []
     for r in folders:
         if not r["has_source"] or r["effective_tier"] != "bookmark":
             continue
         if r["current"]:
             status = "dismissed" if r["judgement"] == "dismissed" else "bookmarked"
-        elif promoted(r["name"]):
+        elif lv.has_full_descendant(scan, r["name"]):
             status = "promoted"
         else:
             continue   # a superseded card without a full descendant (refreshed, then re-bookmarked): not a queue entry
@@ -115,7 +101,7 @@ def queue(scan: dict) -> List[dict]:
             "title": src.get("title") or r["ex"].get("title") or "",
             "url": src.get("url") or "", "canonical_url": src.get("canonical_url") or "",
             "origin": src.get("origin") or "", "context": src.get("context") or "",
-            "has_extract": r["has_extract"], "legacy": r["tier"] is None,
+            "has_extract": r["has_extract"], "legacy": not (src.get("tier") or "").strip(),
             "dismissed": when if status == "dismissed" else None,
             "why": why if status == "dismissed" else None,
             "superseded_by": sorted(successors.get(r["name"], [])),
@@ -125,12 +111,11 @@ def queue(scan: dict) -> List[dict]:
 
 
 def cmd_list(args, scan: dict) -> int:
-    rows = queue(scan)
+    everything = queue(scan)
     want = args.status
-    if want != "all":
-        rows = [x for x in rows if x["status"] == want]
+    rows = everything if want == "all" else [x for x in everything if x["status"] == want]
     if args.json:
-        counts = {s: sum(1 for x in queue(scan) if x["status"] == s) for s in STATUSES}
+        counts = {s: sum(1 for x in everything if x["status"] == s) for s in STATUSES}
         print(json.dumps({"schema": "mnemon-triage/1", "vault": scan["vault"], "status": want,
                           "counts": counts, "count": len(rows), "items": rows}, ensure_ascii=False, indent=1))
         return 0
@@ -158,9 +143,9 @@ def resolve(scan: dict, revision: str) -> dict:
         die("Sources/%s/ is not a bookmark (tier %s) — the judgement about a full extract is its `status:` "
             "(dismissed), a vault operation; triage handles bookmarks" % (revision, rec["effective_tier"]))
     if not rec["current"]:
-        heads = sorted(scan["graph"]["successors"].get(revision, []))
-        die("Sources/%s/ is superseded by %s — a judgement is about the resource and goes on its latest revision"
-            % (revision, ", ".join(heads) or "a later revision"))
+        heads = lv.current_heads(scan, revision)
+        die("Sources/%s/ is superseded — a judgement is about the resource and goes on its latest revision%s"
+            % (revision, (": " + ", ".join(heads)) if heads else " (none of its successors is current: a cycle?)"))
     return rec
 
 
@@ -189,39 +174,78 @@ def atomic_write(path: str, data: bytes) -> None:
         pass
 
 
-def edit_extract_status(path: str, status: str, today: str, why: Optional[str]) -> None:
-    """Rewrite the `status:` line of extract.md (the curation subset, vault store §3.2) and keep or
-    drop the `dismissed:` / `dismissed_why:` lines after it; every other byte stays."""
+def extract_header(path: str):
+    """(text, end) of an extract.md whose frontmatter the triage can edit; exit 1 otherwise."""
+    rev = os.path.basename(os.path.dirname(path))
     data = open(path, "rb").read()
     text = data.decode("utf-8", "surrogateescape")
+    if text.startswith("---\r\n"):
+        die("Sources/%s: extract.md uses CRLF line endings — the triage edits LF frontmatter only; not touched" % rev, 1)
     if not text.startswith("---\n"):
-        die("Sources/%s: extract.md has no frontmatter — not touched" % os.path.basename(os.path.dirname(path)), 1)
+        die("Sources/%s: extract.md has no frontmatter — not touched" % rev, 1)
     end = text.find("\n---\n", 4)
     if end < 0:
-        die("Sources/%s: extract.md has no closing --- — not touched" % os.path.basename(os.path.dirname(path)), 1)
+        die("Sources/%s: extract.md has no closing --- — not touched" % rev, 1)
+    return text, end
+
+
+def dismiss_extract(path: str, today: str, why: Optional[str]) -> None:
+    """Set `status: dismissed` in extract.md (the curation subset, vault store §3.2) with
+    `dismissed:`, `dismissed_why:` and `dismissed_from:` — the word the status had (empty when the
+    file had no status line), so `restore` can put it back; every other byte stays."""
+    text, end = extract_header(path)
     header = text[4:end].split("\n")
     out: List[str] = []
+    prior = None
     placed = False
     for line in header:
-        if re.match(r"^dismissed(_why)?:", line):
+        if re.match(r"^dismissed(_why|_from)?:", line):
             continue
-        if re.match(r"^status:", line):
-            out.append("status: %s" % status)
-            if status == "dismissed":
-                out.append("dismissed: %s" % today)
-                if why:
-                    out.append("dismissed_why: %s" % quoted(one_line(why)))
+        m = re.match(r"^status:(.*)$", line)
+        if m and not placed:
+            prior = m.group(1).strip()
+            out.append("status: dismissed")
+            out.append("dismissed: %s" % today)
+            if why:
+                out.append("dismissed_why: %s" % quoted(one_line(why)))
+            out.append("dismissed_from: %s" % quoted(prior))
             placed = True
             continue
         out.append(line)
     if not placed:
-        out.append("status: %s" % status)
-        if status == "dismissed":
-            out.append("dismissed: %s" % today)
-            if why:
-                out.append("dismissed_why: %s" % quoted(one_line(why)))
+        out += ["status: dismissed", "dismissed: %s" % today]
+        if why:
+            out.append("dismissed_why: %s" % quoted(one_line(why)))
+        out.append('dismissed_from: ""')
     new = "---\n" + "\n".join(out) + text[end:]
     atomic_write(path, new.encode("utf-8", "surrogateescape"))
+
+
+def restore_extract(path: str) -> str:
+    """The reverse of dismiss_extract: the status word recorded in `dismissed_from:` comes back (a
+    file that had no status line loses the appended one); the three dismissed lines go. Returns
+    the restored word (or '' when the line was dropped)."""
+    text, end = extract_header(path)
+    header = text[4:end].split("\n")
+    prior = "extracted"
+    for line in header:
+        m = re.match(r"^dismissed_from:(.*)$", line)
+        if m:
+            v = m.group(1).strip()
+            prior = v[1:-1].replace('\\"', '"').replace("\\\\", "\\") if len(v) >= 2 and v[0] == '"' and v[-1] == '"' else v
+            break
+    out: List[str] = []
+    for line in header:
+        if re.match(r"^dismissed(_why|_from)?:", line):
+            continue
+        if re.match(r"^status:", line):
+            if prior:
+                out.append("status: %s" % prior)
+            continue
+        out.append(line)
+    new = "---\n" + "\n".join(out) + text[end:]
+    atomic_write(path, new.encode("utf-8", "surrogateescape"))
+    return prior
 
 
 def cmd_dismiss(args, scan: dict) -> int:
@@ -232,7 +256,7 @@ def cmd_dismiss(args, scan: dict) -> int:
         return 0
     today = args.today or datetime.date.today().isoformat()
     if rec["has_extract"]:
-        edit_extract_status(os.path.join(folder, "extract.md"), "dismissed", today, args.why)
+        dismiss_extract(os.path.join(folder, "extract.md"), today, args.why)
         where = "extract.md (status: dismissed)"
     else:
         lines = ["---", "type: triage", "revision: %s" % quoted(rec["name"]), "status: dismissed", "dismissed: %s" % today]
@@ -254,8 +278,8 @@ def cmd_restore(args, scan: dict) -> int:
         print("Sources/%s/ is not dismissed" % rec["name"])
         return 0
     if rec["has_extract"]:
-        edit_extract_status(os.path.join(folder, "extract.md"), "extracted", args.today or datetime.date.today().isoformat(), None)
-        where = "extract.md (status: extracted)"
+        prior = restore_extract(os.path.join(folder, "extract.md"))
+        where = "extract.md (status: %s)" % prior if prior else "extract.md (the appended status line dropped)"
     else:
         os.unlink(os.path.join(folder, "triage.md"))
         where = "triage.md removed"
@@ -292,12 +316,17 @@ def cmd_promote(args, scan: dict) -> int:
     argv = [mnemon, "add"]
     origin = (src.get("origin") or "").strip()
     url = src.get("url") or ""
+    stdin_bytes: Optional[bytes] = None
     if origin in ("text", "idea"):
-        # the card's body is the text itself: the same bytes make the same resource (B1)
-        tmp = tempfile.NamedTemporaryFile(prefix="mnemon-promote-", suffix=".md", delete=False)
-        tmp.write(body_of(os.path.join(folder, "source.md")))
-        tmp.close()
-        argv += ["--origin", origin, "--file-text", tmp.name]
+        # the card's body is the text itself: the same bytes make the same resource (B1) — verified
+        # against the card's own capture.text_sha256 first (an edited card is integrity-error, never
+        # promoted as an unrelated resource), then handed to `mnemon add` on stdin (no file on disk)
+        body = body_of(os.path.join(folder, "source.md"))
+        want = rec["text_sha256"]
+        if want and hashlib.sha256(body).hexdigest() != want:
+            die("integrity-error: Sources/%s/source.md body differs from its capture.text_sha256 (edited?) — not promoted" % rec["name"], 1)
+        stdin_bytes = body
+        argv += ["--origin", origin]
         if url:
             argv += ["--canonical-url", url]
     elif url:
@@ -308,14 +337,22 @@ def cmd_promote(args, scan: dict) -> int:
         die("Sources/%s/ has neither a url nor a text to re-capture" % rec["name"])
     for key, flag in (("title", "--title"), ("author", "--author"), ("context", "--context"), ("source_type", "--source-type")):
         value = (src.get(key) or "").strip()
-        if value and flag not in extra:
+        if value and not any(a == flag or a.startswith(flag + "=") for a in extra):
             argv += [flag, value]
     argv += extra
     if dry_run:
-        print(" ".join(argv))
+        print(" ".join(argv) + (" < <the card's text on stdin>" if stdin_bytes is not None else ""))
         return 0
     print("promoting Sources/%s/: %s" % (rec["name"], " ".join(argv[1:])), file=sys.stderr)
     sys.stdout.flush()
+    if stdin_bytes is not None:
+        # an unlinked temporary file on fd 0: the bytes reach the gateway, nothing stays in $TMPDIR
+        fd, tmp = tempfile.mkstemp(prefix="mnemon-promote-")
+        os.unlink(tmp)
+        os.write(fd, stdin_bytes)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.dup2(fd, 0)
+        os.close(fd)
     os.execv(mnemon, argv)
     return 1   # unreachable
 

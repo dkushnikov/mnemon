@@ -351,8 +351,10 @@ def read_folder(sources: str, name: str, snapshot: dict) -> dict:
     rec["rating"] = parse_int(rec["rating_raw"])
     rec["tier"] = (src.get("tier") or ex.get("tier") or "").strip().lower() or None
     rec["context"] = (src.get("context") or "").strip()
-    # the effective tier (vault store §4): the stored tier, else the legacy placeholder word, else full
-    rec["effective_tier"] = rec["tier"] or ("bookmark" if (src.get("status") or "").strip() == "bookmark" else "full")
+    # the effective tier (vault store §4; one rule with cap_effective_tier and search's capture_tier):
+    # `tier:` of source.md, else of extract.md (a legacy placeholder), else the legacy `status: bookmark`
+    # of source.md, else full
+    rec["effective_tier"] = rec["tier"] or ("bookmark" if (src.get("status") or "").strip().lower() == "bookmark" else "full")
     # the judgement (B4, O6): `status: dismissed` of extract.md, or of triage.md for a revision without one
     tp = os.path.join(folder, "triage.md")
     if os.path.isfile(tp):
@@ -922,6 +924,49 @@ def unknown_authorship(note: dict) -> bool:
     return not note["drafted_by"] and not note["status"]
 
 
+def has_full_descendant(scan: dict, name: str) -> bool:
+    """`promoted(rev)` (vault store §4, phase 3-capture): a revision of effective tier full among the
+    transitive successors of `name` in the supersedes graph. The one predicate for the counters and
+    the triage (bin/mnemon-triage.py)."""
+    successors = scan["graph"]["successors"]
+    by_name = scan["by_name"]
+    seen: set = set()
+    todo = list(successors.get(name, []))
+    while todo:
+        n = todo.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        rec = by_name.get(n)
+        if rec is not None and rec["effective_tier"] == "full":
+            return True
+        todo.extend(successors.get(n, []))
+    return False
+
+
+def current_heads(scan: dict, name: str) -> List[str]:
+    """The current revision(s) reached from `name` through the supersedes graph (the resource's
+    latest revision, after any number of refreshes); `name` itself when it is current."""
+    rec = scan["by_name"].get(name)
+    if rec is not None and rec["current"]:
+        return [name]
+    successors = scan["graph"]["successors"]
+    seen: set = set()
+    heads: List[str] = []
+    todo = list(successors.get(name, []))
+    while todo:
+        n = todo.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        r = scan["by_name"].get(n)
+        if r is not None and r["current"]:
+            heads.append(n)
+        else:
+            todo.extend(successors.get(n, []))
+    return sorted(heads)
+
+
 def counters(scan: dict) -> dict:
     folders = scan["folders"]
     g = scan["graph"]
@@ -947,24 +992,8 @@ def counters(scan: dict) -> dict:
     queues = scan["inputs"]["queues"]
     # phase 3-capture: `promoted(rev)` (vault store §4) — a bookmark with a full descendant in the
     # supersedes graph (transitively: a card refreshed and then captured in full is promoted too)
-    successors = g["successors"]
-    tier_of = {r["name"]: r["effective_tier"] for r in folders}
-
-    def has_full_descendant(name: str) -> bool:
-        seen: set = set()
-        todo = list(successors.get(name, []))
-        while todo:
-            n = todo.pop()
-            if n in seen:
-                continue
-            seen.add(n)
-            if tier_of.get(n, "full") == "full":
-                return True
-            todo.extend(successors.get(n, []))
-        return False
-
     bookmarks = [r for r in folders if r["has_source"] and r["effective_tier"] == "bookmark"]
-    promoted = sum(1 for r in bookmarks if has_full_descendant(r["name"]))
+    promoted = sum(1 for r in bookmarks if has_full_descendant(scan, r["name"]))
     c = {
         "folders": len(folders),
         "managed": sum(1 for r in folders if r["klass"] == "managed"),
@@ -1009,7 +1038,8 @@ def counters(scan: dict) -> dict:
         "synthesis_status": synthesis_breakdown(notes),
         # phase 3-capture (additive): the capture tiers, the promotions and the bookmark queue
         "tier": {"full": sum(1 for r in folders if r["has_source"] and r["effective_tier"] == "full"),
-                 "bookmark": len(bookmarks)},
+                 "bookmark": len(bookmarks),
+                 "other": sum(1 for r in folders if r["has_source"] and r["effective_tier"] not in ("full", "bookmark"))},
         "promoted": promoted,
         "triage": {"bookmarked": sum(1 for r in bookmarks if r["current"] and r["judgement"] != "dismissed"),
                    "dismissed": sum(1 for r in bookmarks if r["current"] and r["judgement"] == "dismissed")},

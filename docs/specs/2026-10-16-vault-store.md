@@ -40,7 +40,8 @@ A revision that lost all four keys is indistinguishable from legacy without exte
 | **Resource** (identity) | `resource_sha256`, `canonical_url` in `source.md`; legacy: `url:` | engine | nobody | — |
 | **Revision** `Sources/<YYYY-MM-DD>_<hash8>[-n]/` | folder | engine (`add`, `ingest`) | — | nobody; a superseded revision stays |
 | `source.md` | in the revision | engine, before any model runs | **nobody** — body = capture-text (`capture.text_sha256`), frontmatter engine-owned | — |
-| `extract.md` | in the revision | engine (validated model output) | engine (re-extraction) **and a human or agent in the curation subset only:** `status`, `index_note`, `title`, `tags`, `domains`, `people`, `visibility`, `rating` | — |
+| `extract.md` | in the revision | engine (validated model output) | engine (re-extraction) **and a human or agent in the curation subset only:** `status`, `index_note`, `title`, `tags`, `domains`, `people`, `visibility`, `rating`, and the triage's `dismissed`, `dismissed_why`, `dismissed_from` (v1.5) | — |
+| `triage.md` (v1.5) | in a revision **without** `extract.md` (a bookmark card) | `mnemon triage dismiss` (the engine, under the vault lock) | the same door | `mnemon triage restore`; a promotion supersedes the whole revision and the judgement lapses with it |
 | **Raw** (originals) | `archive_dir/<rev>.<ext>`, `<rev>.report.json`, `<rev>.site/` | engine | nobody | `mnemon audit` on explicit request only |
 | **Receipt** | `<state>/mnemon/vaults/<key>/captures/` | engine | engine | engine (machine-local; rebuilt by the replay rules of the capture contracts §3.5) |
 | `index.md` | vault root | engine (`reindex`) | **never by hand** — a durable note goes to `index_note:` | — |
