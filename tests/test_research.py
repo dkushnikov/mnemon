@@ -1480,6 +1480,19 @@ class ResearchOperationTests(unittest.TestCase):
         charter.write_text("# Charter\n\n## Radius\n\nseeds: ten open · 30 days\n", encoding="utf-8")
         rc, d, _ = self.cli_json("synthesize", "--name", "Third", "--status", "seed", stdin="x\n", today="2026-06-10")
         self.assertEqual((rc, d["class"]), (2, "radius"), "an unparsable radius line is unknown, not satisfied")
+        shutil.rmtree(self.vault / "Synthesis")
+        charter.write_text("# Charter\n\n## Radius\n\nseeds: 0 open · 30 days\n", encoding="utf-8")
+        rc, d, _ = self.cli_json("synthesize", "--name", "Zero", "--status", "seed", stdin="x\n", today="2026-06-10")
+        self.assertEqual((rc, d["class"]), (2, "radius"), "a limit of 0 on an empty vault admits nothing")
+        self.assertFalse((self.vault / "Synthesis" / "Zero.md").exists())
+        if os.geteuid() != 0:
+            os.chmod(charter, 0)
+            try:
+                rc, d, _ = self.cli_json("synthesize", "--name", "Blind", "--status", "draft", stdin="x\n", today="2026-06-10")
+            finally:
+                os.chmod(charter, 0o644)
+            self.assertEqual((rc, d["class"]), (2, "radius"), "an unreadable charter: the radius is unknown, not satisfied")
+            self.assertFalse((self.vault / "Synthesis" / "Blind.md").exists())
 
     def test_triage_map_is_read_only_and_its_item_line_parses(self):
         before = sorted(os.listdir(self.vault / "Synthesis"))
