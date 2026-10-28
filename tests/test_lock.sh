@@ -39,6 +39,9 @@ run_gw --url "https://example.com/l1" --capture-id l-1
 assert_eq "$rc" "75" "a held vault lock → exit 75"
 assert_contains "$err" "another writer holds the vault lock" "...with the lock message"
 [[ -f "$(receipt l-1)" ]] && fail "no receipt on 75" "exists" || pass "...no receipt written"
+# GH #30: the refusal prints a RESULT block (status locked, error_class locked, retryable true, nothing else)
+assert_eq "$(result status) $(result error_class) $(result retryable) $(result extract)" "locked locked true none" "...RESULT:status=locked · error_class=locked · retryable=true · extract=none"
+assert_eq "[$(result revision)] [$(result path)] [$(result source_sha256)] $(result capture_id)" "[] [] [] l-1" "...revision, path and hash empty; the requested capture_id reported"
 # two configs on one vault share the lock…
 rc=0; "$GW" source-add --config "$TEST_TMPDIR/noarchive.yaml" --url "https://example.com/l2" --capture-id l-2 >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
 assert_eq "$rc" "75" "a second config pointing at the same vault sees the same lock (75)"
@@ -125,6 +128,8 @@ sys.exit(subprocess.run([sys.argv[2], "source-add", "--config", sys.argv[3], "--
 PY
 assert_eq "$rc" "75" "a descriptor on this lock file that holds nothing, lock held elsewhere: the re-asserted flock is refused → 75"
 assert_contains "$(cat "$TEST_TMPDIR/run.err")" "another writer holds the vault lock" "...with the lock message"
+out="$(cat "$TEST_TMPDIR/run.out")"
+assert_eq "$(result status) $(result error_class) $(result retryable)" "locked locked true" "...and the RESULT block says locked (the inherited-descriptor path too)"
 [[ -f "$(receipt a1-unlocked)" ]] && fail "...no receipt on 75" "exists" || pass "...no receipt on 75"
 wait "$holder" 2>/dev/null || true
 # an abnormal child exit releases nothing: the parent's descriptor still holds the lock

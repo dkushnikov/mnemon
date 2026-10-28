@@ -102,7 +102,9 @@
 #   retryable= [replayed=true] — values single-line, control characters removed, computed from the
 #   files. Exit 0 extracted / skipped-duplicate / replay of a complete capture · 1 failed or
 #   integrity-error · 2 usage/contract · 3 extractor environment missing before publication ·
-#   4 source published, extract not · 75 lock held.
+#   4 source published, extract not · 75 lock held — with `RESULT:status=locked`,
+#   `error_class=locked`, `retryable=true` and nothing else set (GH #30): the gateway waits for
+#   vault-lock.py instead of exec'ing it, so the refusal still reaches a RESULT parser.
 
 _LIB_CAPTURE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -757,9 +759,18 @@ cap_under_lock() {
   cap_py under-lock "$MNEMON_VAULT_LOCK_FD" "$MNEMON_VAULT_STATE_DIR/lock" || st=$?
   case "$st" in
     0)  return 0 ;;
-    75) echo "ERROR: another writer holds the vault lock ($MNEMON_VAULT_STATE_DIR/lock); retry when it finishes" >&2; exit 75 ;;
+    75) echo "ERROR: another writer holds the vault lock ($MNEMON_VAULT_STATE_DIR/lock); retry when it finishes" >&2
+        cap_result_locked; exit 75 ;;
     *)  return 1 ;;
   esac
+}
+
+# The RESULT block of a refusal on the lock (§3.6, GH #30): status locked, error_class locked,
+# retryable true; revision, path, title and hash empty — nothing was written, no receipt exists.
+# A caller that parses RESULT:status sees the refusal instead of nothing.
+cap_result_locked() {
+  REVISION=""
+  cap_result locked none locked true false
 }
 
 cap_reexec_under_lock() {  # <script> <args…>
@@ -770,7 +781,14 @@ cap_reexec_under_lock() {  # <script> <args…>
   fi
   unset MNEMON_VAULT_LOCK_FD MNEMON_VAULT_LOCK_INODE
   export MNEMON_VAULT_LOCK_REEXEC=1
-  exec python3 "$_LIB_CAPTURE_DIR/vault-lock.py" --vault "$VAULT_PATH" -- "$@"
+  # Not an exec: this shell waits so that a refusal (exit 75) can still print its RESULT block.
+  # It holds no descriptor — vault-lock.py opens the lock file in its own process and *becomes* the
+  # capture (execvp), so nothing here can release the lock early (§12 A1); any other status is the
+  # capture's own and is passed through untouched.
+  local rc=0
+  python3 "$_LIB_CAPTURE_DIR/vault-lock.py" --vault "$VAULT_PATH" -- "$@" || rc=$?
+  if [[ $rc -eq 75 ]]; then cap_result_locked; fi
+  exit $rc
 }
 
 # For a background subshell that must not keep the lock alive (the qmd refresh): close the

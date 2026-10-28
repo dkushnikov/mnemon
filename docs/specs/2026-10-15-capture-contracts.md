@@ -205,7 +205,7 @@ After the run the gateway checks the files and prints, in this order, every valu
 RESULT:capture_id=<requested or generated id>
 RESULT:revision=<revision>                 # empty when nothing was published
 RESULT:path=Sources/<revision>/            # empty when nothing was published
-RESULT:status=extracted | captured | skipped-duplicate | failed | integrity-error
+RESULT:status=extracted | captured | skipped-duplicate | failed | integrity-error | locked
 RESULT:title=<title from extract.md, else source.md, else empty>
 RESULT:source_sha256=<capture.text_sha256, recomputed from the body; empty when nothing was published>
 RESULT:extract=ok | missing | invalid | none
@@ -223,7 +223,7 @@ Stdout carries only gateway-generated lines; the model's output never reaches st
 | 2 | usage / contract: unknown context, conflicting flags, `ref:mcp`, `writer_host` mismatch, capture-id reuse with a different request, invalid capture-id, `--resume` of a complete capture, `--supersedes` of a missing revision |
 | 3 | extractor environment unavailable **before** publication: `claude` missing, too old for `--restricted`, no probe record for its version (receipt `failed`, retryable). The same conditions discovered after `source.md` is published are exit 4 |
 | 4 | source published, extract not: extractor failed, output invalid, verification failed, or refused (`unsupported-size`, `fence-unprobed`); receipt `extract-failed` with `error_class`/`retryable`; `--resume` finishes it |
-| 75 | engine or vault lock held |
+| 75 | engine or vault lock held — the vault case prints a RESULT block too (GH #30): `status=locked`, `error_class=locked`, `retryable=true`, `extract=none`, revision/path/title/hash empty; nothing was written and no receipt exists (the gateway waits for `vault-lock.py` rather than exec'ing it, so the refusal reaches a RESULT parser; the ingest keeps deciding by the exit code) |
 
 Batch mode (`--manifest`) keeps its per-item loop and summary and reports per-item exit codes and error classes in its failure list.
 

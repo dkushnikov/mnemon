@@ -15,14 +15,18 @@ doctor and `status --brief` use. Statuses are derived, never stored (vault store
 
 - `bookmarked` — current, no judgement;
 - `dismissed` — current, the judgement is stored: in `extract.md` `status:` when the revision has
-  one, else in `Sources/<revision>/triage.md` (the carrier of a judgement for a revision without
+  one, else in `Sources/<revision>/triage.md` (the carrier of a judgement for a card without
   extract.md — O6); `source.md` is never touched;
 - `promoted` — a bookmark with a full descendant in the supersedes graph (`promoted(rev)`); such a
   bookmark is superseded, so it is listed only on request.
 
-`dismissed` is a judgement about the **resource**, carried by its latest revision: dismissing a
+`dismissed` is a judgement about the **resource**, carried by its latest revision **whatever its
+tier** (O6, GH #30): `dismiss`/`restore` take a full revision too — the judgement goes into its
+extract.md (`status: dismissed` + `dismissed_from`), and `list --status dismissed|all` shows it
+beside the cards (a `tier` column in --json). A full revision without extract.md is an unfinished
+capture, not a carrier: dismissing it is refused (`mnemon add --resume` first). Dismissing a
 superseded revision is refused naming the head. A later full capture (promotion) supersedes the
-carrier and the judgement lapses with it. `dismiss` and `restore` write under the vault lock (the
+carrier and the judgement lapses with it. `promote` is for bookmark cards only. `dismiss` and `restore` write under the vault lock (the
 dispatcher runs them through bin/vault-lock.py); `promote` execs `mnemon add`, which takes the lock
 itself — a full capture of a bookmarked resource supersedes the card (B2).
 
@@ -84,9 +88,15 @@ def queue(scan: dict) -> List[dict]:
     successors = scan["graph"]["successors"]
     rows: List[dict] = []
     for r in folders:
-        if not r["has_source"] or r["effective_tier"] != "bookmark":
+        if not r["has_source"]:
             continue
-        if r["current"]:
+        if r["effective_tier"] != "bookmark":
+            # a full revision is in the listing only as a carrier of the judgement (GH #30)
+            if r["current"] and r["judgement"] == "dismissed":
+                status = "dismissed"
+            else:
+                continue
+        elif r["current"]:
             status = "dismissed" if r["judgement"] == "dismissed" else "bookmarked"
         elif lv.has_full_descendant(scan, r["name"]):
             status = "promoted"
@@ -96,7 +106,7 @@ def queue(scan: dict) -> List[dict]:
         when = (r["triage"].get("dismissed") if r["has_triage"] else None) or r["ex"].get("dismissed") or None
         why = (r["triage"].get("why") if r["has_triage"] else None) or r["ex"].get("dismissed_why") or None
         rows.append({
-            "revision": r["name"], "status": status,
+            "revision": r["name"], "status": status, "tier": r["effective_tier"],
             "captured": src.get("captured") or r["name"][:10],
             "title": src.get("title") or r["ex"].get("title") or "",
             "url": src.get("url") or "", "canonical_url": src.get("canonical_url") or "",
@@ -135,13 +145,20 @@ def cmd_list(args, scan: dict) -> int:
 # The judgement
 # ---------------------------------------------------------------------------------------------
 
-def resolve(scan: dict, revision: str) -> dict:
+def resolve(scan: dict, revision: str, verb: str = "dismiss") -> dict:
+    """The current revision named, as the verb needs it: `promote` wants a bookmark card; `dismiss` and
+    `restore` take any latest revision — a full one carries the judgement in its extract.md (GH #30),
+    so a full revision without extract.md (an unfinished capture) is refused."""
     rec = scan["by_name"].get(revision)
     if rec is None or not rec["has_source"]:
         die("no revision named %r in %s/Sources/" % (revision, scan["vault"]))
-    if rec["effective_tier"] != "bookmark":
-        die("Sources/%s/ is not a bookmark (tier %s) — the judgement about a full extract is its `status:` "
-            "(dismissed), a vault operation; triage handles bookmarks" % (revision, rec["effective_tier"]))
+    if verb == "promote" and rec["effective_tier"] != "bookmark":
+        die("Sources/%s/ is not a bookmark (tier %s) — promote captures a card in full; a full revision is "
+            "re-captured with `mnemon add --recapture`" % (revision, rec["effective_tier"]))
+    if verb != "promote" and rec["effective_tier"] != "bookmark" and not rec["has_extract"]:
+        die("Sources/%s/ is a full capture without extract.md (unfinished) — the judgement about a full "
+            "capture goes into its extract.md: finish it first (mnemon add --resume %s), or leave it"
+            % (revision, revision))
     if not rec["current"]:
         heads = lv.current_heads(scan, revision)
         die("Sources/%s/ is superseded — a judgement is about the resource and goes on its latest revision%s"
@@ -249,7 +266,7 @@ def restore_extract(path: str) -> str:
 
 
 def cmd_dismiss(args, scan: dict) -> int:
-    rec = resolve(scan, args.revision)
+    rec = resolve(scan, args.revision, "dismiss")
     folder = os.path.join(scan["vault"], "Sources", rec["name"])
     if rec["judgement"] == "dismissed":
         print("Sources/%s/ is already dismissed" % rec["name"])
@@ -272,7 +289,7 @@ def cmd_dismiss(args, scan: dict) -> int:
 
 
 def cmd_restore(args, scan: dict) -> int:
-    rec = resolve(scan, args.revision)
+    rec = resolve(scan, args.revision, "restore")
     folder = os.path.join(scan["vault"], "Sources", rec["name"])
     if rec["judgement"] != "dismissed":
         print("Sources/%s/ is not dismissed" % rec["name"])
@@ -300,7 +317,7 @@ def body_of(path: str) -> bytes:
 
 
 def cmd_promote(args, scan: dict) -> int:
-    rec = resolve(scan, args.revision)
+    rec = resolve(scan, args.revision, "promote")
     src = rec["src"]
     folder = os.path.join(scan["vault"], "Sources", rec["name"])
     mnemon = args.mnemon or os.path.join(BIN_DIR, "mnemon")
@@ -369,7 +386,7 @@ def main(argv: List[str]) -> int:
     p = sub.add_parser("list", help="the queue (default: bookmarked)")
     p.add_argument("--status", default="bookmarked", choices=STATUSES + ("all",))
     p.add_argument("--json", action="store_true")
-    p = sub.add_parser("dismiss", help="store the judgement about the resource on its latest revision")
+    p = sub.add_parser("dismiss", help="store the judgement about the resource on its latest revision (a card or a full capture)")
     p.add_argument("revision")
     p.add_argument("--why", default=None)
     p = sub.add_parser("restore", help="remove the judgement")

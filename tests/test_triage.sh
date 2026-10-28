@@ -152,14 +152,41 @@ assert_eq "$rc $(shasum -a 256 "$VAULT/Sources/2026-09-05_c1f0c1f0/extract.md" |
 assert_contains "$err" "CRLF" "...saying why"
 
 # ---------------------------------------------------------------------------------------------
-echo "--- 5. refusals and the scope of the judgement ---"
-run_m triage dismiss "$full"
-assert_eq "$rc" "2" "dismissing a full capture is refused (exit 2)"
-assert_contains "$err" "is not a bookmark" "...with the reason"
+echo "--- 5. the judgement on a full revision (tier full, GH #30 / O6); refusals and scope ---"
+fex="$VAULT/Sources/$full/extract.md"
+fex_sha="$(shasum -a 256 "$fex" | cut -c1-64)"
+run_m triage dismiss "$full" --why "read it, not for the library"
+assert_eq "$rc" "0" "dismiss of a full capture exits 0 (the judgement is about the resource, whatever its tier)"
+assert_contains "$out" "dismissed Sources/$full/ — extract.md (status: dismissed)" "...the carrier is its extract.md"
+assert_eq "$(fm "$fex" status) $(fm "$fex" dismissed_from) $(fm "$fex" dismissed_why)" "dismissed \"extracted\" \"read it, not for the library\"" "status: dismissed · dismissed_from: extracted · dismissed_why"
+[[ -f "$VAULT/Sources/$full/triage.md" ]] && fail "no triage.md beside a full extract" "exists" || pass "no triage.md beside a full extract"
+run_m triage list
+assert_not_contains "$out" "$full" "a dismissed full revision is not in the default (bookmarked) queue"
+run_m triage list --status dismissed
+assert_eq "$(col "$full" 2)" "dismissed" "...but list --status dismissed shows it"
+run_m triage list --status all --json
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); r=[x for x in d["items"] if x["revision"]==sys.argv[1]][0]; print(r["status"], r["tier"], r["has_extract"])' "$full")" "dismissed full True" "--json: status dismissed · tier full"
+run_gw --url "https://example.com/full" --capture-id full-again
+assert_eq "$rc $(result status) $(result judgement)" "0 skipped-duplicate dismissed" "a new add of the dismissed resource: skipped-duplicate · RESULT:judgement=dismissed"
+assert_eq "$(python3 "$MNEMON_ROOT/bin/lib_vault.py" --vault "$VAULT" --status-counts | grep -E '^(status_dismissed|bookmarks_dismissed)=' | tr '\n' ' ')" "status_dismissed=1 bookmarks_dismissed=0 " "lib_vault: counted as an extract status, not as a dismissed bookmark"
+run_m triage restore "$full"
+assert_eq "$rc $(fm "$fex" status)" "0 extracted" "restore brings extracted back"
+assert_eq "$(shasum -a 256 "$fex" | cut -c1-64)" "$fex_sha" "...byte for byte"
+run_m triage list --status dismissed
+assert_eq "$out" "no dismissed bookmarks" "...and the dismissed list is empty again"
+# a full revision without extract.md is an unfinished capture, not a carrier: refused with the resume door
+mkdir -p "$VAULT/Sources/2026-09-08_unf1n15h"
+printf -- '---\ntype: source\nsource_type: article\norigin: url\nurl: "https://example.com/unfinished"\ntitle: "Unfinished"\ncaptured: 2026-09-08\n---\n# Unfinished\n\nbody without an extract.\n' > "$VAULT/Sources/2026-09-08_unf1n15h/source.md"
+run_m triage dismiss 2026-09-08_unf1n15h
+assert_eq "$rc" "2" "dismiss of a full revision without extract.md is refused (exit 2)"
+assert_contains "$err" "mnemon add --resume 2026-09-08_unf1n15h" "...naming the resume door"
+[[ -f "$VAULT/Sources/2026-09-08_unf1n15h/triage.md" ]] && fail "no triage.md on a full revision" "exists" || pass "...no triage.md written"
+rm -rf "$VAULT/Sources/2026-09-08_unf1n15h"
+run_m triage promote "$full"
+assert_eq "$rc" "2" "promote of a full capture is refused (exit 2)"
+assert_contains "$err" "is not a bookmark" "...with the reason (promote is for cards)"
 run_m triage dismiss 2026-01-01_00000000
 assert_eq "$rc" "2" "an unknown revision is exit 2"
-run_m triage restore "$full"
-assert_eq "$rc" "2" "restore of a full capture is exit 2"
 run_m triage dismiss
 assert_eq "$rc" "2" "dismiss without a revision is a usage error"
 # the single-writer rule: a declared writer_host that is not this host refuses the write (Codex P2-2)

@@ -96,7 +96,7 @@ Do NOT use `--render` reflexively — the default fast path is fine for 90% of w
 | `failed` | 3 | Nothing was published because the environment lacks a tool: `RESULT:error_class=environment` (Poppler for a PDF, Chrome for `--render`, a media tool) or `fence-unprobed` (no `claude`, too old for `--restricted`, or no fence record for its version) | Read the class and the engine's message: install the named tool (`mnemon doctor` lists them), or for `fence-unprobed` run `mnemon fence-probe` (once per Claude Code version); then retry |
 | `integrity-error` | 1 | A previously published `source.md` is missing or was edited (`capture.text_sha256` no longer matches) | An operator problem with the existing revision, not a capture failure — report it, do not retry |
 | — | 2 | Usage or contract: an undeclared `--context`, conflicting selectors, an invalid URL, `--resume` of a complete capture, `--supersedes` of a missing revision | The engine's message, verbatim |
-| — | 75 | The vault or the engine is locked (another capture, an ingest pass or a `mnemon release` is running) | Retry in a moment |
+| `locked` | 75 | The vault or the engine is locked (another capture, an ingest pass or a `mnemon release` is running); the vault case prints `RESULT:status=locked`, `error_class=locked`, `retryable=true` — nothing was written | Retry in a moment |
 
 The recovery follows `RESULT:error_class` and the engine's message, never the exit code alone: exit 3 is "a tool is missing", and which tool is in the message.
 
