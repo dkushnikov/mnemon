@@ -552,10 +552,20 @@ def research_context(scan: dict, budget_words: Optional[int] = None) -> dict:
     def local_exists(path: str) -> bool:
         return os.path.isfile(os.path.join(vault, path + ".md")) or os.path.isdir(os.path.join(vault, path))
 
+    g = scan["graph"]
+    cycle_members: set = set()
+    for cyc in g.get("cycles", []):
+        cycle_members.update(cyc)
+    cycle_members.update(g.get("self_edges", []))
     return {
-        "revisions": revisions, "graph_complete": not scan["graph"]["current_incomplete"],
+        "revisions": revisions,
+        "graph_complete": not g["current_incomplete"],
+        "cycle_members": cycle_members,                                  # stale is not probed for these
+        "sources_unreadable": any(r["source_state"] == "unreadable" for r in scan["folders"]),
         "collections": {c["name"]: c for c in scan.get("collections", {}).get("notes", [])},
+        "collections_unlisted": scan["snapshot"].get("collections_unlisted"),
         "charter_sha256": scan["charter"].get("sha256"),
+        "charter_unreadable": bool(scan["charter"].get("unreadable")),
         "source_text": source_text, "local_exists": local_exists,
         "budget_words": budget_words,
     }
@@ -619,11 +629,13 @@ def scan_charter(path: Optional[str], snapshot: dict) -> dict:
     """The charter's `## Contexts` (parsed like cap_charter_contexts: `### <name>`, first token,
     lowercased, deduplicated, fences skipped; `personal` without a charter) and the raw lines of
     `## Radius` (S5) for the doctor to parse."""
-    out = {"path": path, "exists": False, "contexts": ["personal"], "radius_lines": [], "has_radius": False, "sha256": None}
+    out = {"path": path, "exists": False, "contexts": ["personal"], "radius_lines": [], "has_radius": False, "sha256": None,
+           "unreadable": False}
     if not path or not os.path.isfile(path):
         return out
     data = _read_bytes(path, snapshot)
     if data is None:
+        out["unreadable"] = True        # present but not readable: never "absent" (the research context says so)
         return out
     text = data.decode("utf-8", "replace")
     out["exists"] = True

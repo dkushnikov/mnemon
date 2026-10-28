@@ -384,16 +384,35 @@ def assemble_result(path: Path, result_type: str, snippet: str | None, vault: Pa
     }
 
 
-def cut_atlas_reading(text: str) -> str:
-    """The page text without its `## Atlas reading` section (the agent's opinion, never evidence:
-    interface §7/§9) — from that heading to the next `## ` heading or the end."""
-    lines = text.split("\n")
+def searchable_wiki_text(text: str) -> str:
+    """What search sees of a page: the body without the frontmatter and without its `## Atlas
+    reading` section (the agent's opinion, never evidence: interface §7/§9) — the section runs from
+    that heading to the next `##` heading, by the reader's heading and fence rules (a `##` inside
+    a fenced block does not end it)."""
+    block, body, _offset = lib_research.split_frontmatter(text)
+    body = body if block is not None else text
     out: list[str] = []
     skipping = False
-    for line in lines:
-        if line.startswith("## "):
-            name = " ".join(line[3:].split())
-            skipping = name == "Atlas reading"
+    fence = None
+    for line in body.replace("\r\n", "\n").split("\n"):
+        stripped = line.lstrip()
+        if fence is None:
+            fo = lib_research.FENCE_OPEN_RE.match(stripped)
+            if fo:
+                fence = (fo.group(1)[0], len(fo.group(1)))
+                if not skipping:
+                    out.append(line)
+                continue
+        else:
+            fc = lib_research.FENCE_CLOSE_RE.match(stripped)
+            if fc and fc.group(1)[0] == fence[0] and len(fc.group(1)) >= fence[1]:
+                fence = None
+            if not skipping:
+                out.append(line)
+            continue
+        m = lib_research.HEADING_RE.match(line)
+        if m and len(m.group(1)) == 2:
+            skipping = " ".join(m.group(2).split()) == "Atlas reading"
             if skipping:
                 continue
         if not skipping:
@@ -401,14 +420,19 @@ def cut_atlas_reading(text: str) -> str:
     return "\n".join(out)
 
 
-def wiki_pages(vault: Path, include_orphans: bool) -> list[dict]:
-    """The usable wiki pages of the vault, validated by the research reader on the one snapshot:
-    `suppressed`, `unbound`, schema-failed and not-probed pages are left out; `orphan` pages
-    only with the flag. Each entry: {record, text (without `## Atlas reading`), domains}."""
+def wiki_pages(vault: Path, include_orphans: bool, charter: str | None = None, budget_words: int | None = None) -> list[dict]:
+    """The usable wiki pages of the vault, validated by the research reader on the one snapshot —
+    with the instance's charter and word budget, so the states are the doctor's: `suppressed`,
+    `unbound`, schema-failed and not-probed pages are left out; `orphan` pages only with the flag.
+    Raises OSError when `Wiki/` or `Collections/` exists but cannot be listed (an unlistable
+    dossier folder hides every veto: no answer is better than a wrong one). Each entry:
+    {record, path, text (the searchable text), domains}."""
     import lib_vault  # the scanner (loaded here: it is heavier than the reader, and only this flag needs it)
     lib_research.list_wiki(str(vault))             # OSError when Wiki/ exists but cannot be listed
-    scan = lib_vault.scan_vault(str(vault))
-    ctx = lib_vault.research_context(scan)
+    scan = lib_vault.scan_vault(str(vault), charter=charter)
+    if scan["snapshot"].get("collections_unlisted"):
+        raise OSError("Collections/ could not be listed (%s)" % scan["snapshot"]["collections_unlisted"])
+    ctx = lib_vault.research_context(scan, budget_words=budget_words)
     out: list[dict] = []
     for rec in scan["wiki"]["notes"]:
         lib_research.validate_wiki(rec, ctx)
@@ -427,7 +451,7 @@ def wiki_pages(vault: Path, include_orphans: bool) -> list[dict]:
             for d in (c or {}).get("domains") or []:
                 if d not in domains:
                     domains.append(d)
-        out.append({"record": rec, "path": path, "text": cut_atlas_reading(text), "domains": domains})
+        out.append({"record": rec, "path": path, "text": searchable_wiki_text(text), "domains": domains})
     return out
 
 
@@ -512,16 +536,26 @@ def dedupe_by_folder(results: list[dict]) -> list[dict]:
 SEARCH_METHOD = "grep"  # the only implemented provider
 
 
-def resolve_vault(vault_override: str | None) -> tuple[Path, str | None]:
-    """Return (vault path, configured search_provider) from --vault or the engine config.
+def resolve_vault(vault_override: str | None) -> tuple[Path, str | None, dict]:
+    """Return (vault path, configured search_provider, the research settings) from --vault or the
+    engine config.
 
     The configured provider is reported, not dispatched on: the scan is always
     grep-style (see the module docstring). None when --vault bypasses the config.
+    The research settings — the charter path and the wiki word budget the wiki
+    block validates with — come from the instance (`charter_path`,
+    `doctor_wiki_words`); with --vault they are the defaults the doctor would use
+    on a config-less vault (`_meta/charter.md`, the engine's budget).
     """
     if vault_override:
-        return Path(vault_override).expanduser(), None
+        return Path(vault_override).expanduser(), None, {"charter": None, "wiki_words": lib_research.DEFAULT_WIKI_WORDS}
     cfg = lib_config.load_config()
-    return Path(cfg["VAULT_PATH"]), cfg.get("SEARCH_PROVIDER") or "grep"
+    words = cfg.get("DOCTOR_WIKI_WORDS")
+    try:
+        words = int(words) if words else lib_research.DEFAULT_WIKI_WORDS
+    except ValueError:
+        words = lib_research.DEFAULT_WIKI_WORDS
+    return Path(cfg["VAULT_PATH"]), cfg.get("SEARCH_PROVIDER") or "grep", {"charter": cfg.get("CHARTER_PATH") or None, "wiki_words": words}
 
 
 # ---------------------------------------------------------------------------
@@ -551,7 +585,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        vault, configured_provider = resolve_vault(args.vault)
+        vault, configured_provider, research_settings = resolve_vault(args.vault)
     except lib_config.ConfigError as e:
         print(f"{e}", file=sys.stderr)
         return 2
@@ -576,9 +610,11 @@ def main() -> int:
     wiki_entries: list[dict] | None = None
     if args.include_wiki:
         try:
-            wiki_entries = wiki_pages(vault, args.include_orphans)
+            wiki_entries = wiki_pages(vault, args.include_orphans, charter=research_settings["charter"],
+                                      budget_words=research_settings["wiki_words"])
         except OSError as exc:
-            print(f"ERROR: Wiki/ could not be listed ({exc}); no answer is better than an empty one", file=sys.stderr)
+            folder = "Collections/" if "Collections/" in str(exc) else "Wiki/"
+            print(f"ERROR: {folder} could not be listed ({exc}); no answer is better than an empty one", file=sys.stderr)
             return 2
 
     # Single pass: every file matching at least one token, with the set of

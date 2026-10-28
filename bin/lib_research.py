@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -805,9 +806,12 @@ def heading_text(line: str) -> Optional[str]:
 
 def evidential_body(body: str, offset: int) -> dict:
     """The evidential body of a page (interface §9): the lines from the first heading after the
-    frontmatter to the first `## Atlas reading` / `## Log` heading (excluded), outside fences,
-    line endings LF, trailing spaces stripped, trailing blank lines dropped, one final LF.
-    Returns {text, sha256, words, start, end, cut, lines: [(ln, line, fenced)…]} — `start`/`end` are
+    frontmatter to the first `## Atlas reading` / `## Log` heading (excluded), fences tracked from
+    the first line (a heading inside a fence is text), line endings LF, trailing spaces stripped,
+    trailing blank lines dropped, one final LF. A first heading that is itself a cut heading gives
+    no body. Returns {text, sha256, words, start, end, cut, lines: [(ln, line, fenced)…], preamble
+    (non-blank text before the first heading, outside fences — a schema error), after_cut (the
+    `##`/`#` headings after the cut that are not consumable — a schema error)} — `start`/`end` are
     1-based line numbers (end exclusive, the cut heading's line or one past the last)."""
     raw_lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     start: Optional[int] = None
@@ -815,43 +819,60 @@ def evidential_body(body: str, offset: int) -> dict:
     cut: Optional[str] = None
     fence = None
     kept: List[Tuple[int, str, bool]] = []
+    preamble = False
+    after_cut: List[str] = []
     for i, line in enumerate(raw_lines):
         ln = offset + i
         stripped = line.lstrip()
         if fence is None:
             fo = FENCE_OPEN_RE.match(stripped)
-            if fo and start is not None:
+            if fo:
                 fence = (fo.group(1)[0], len(fo.group(1)))
-                kept.append((ln, line, True))
+                if start is None and end is None:
+                    preamble = True
+                elif end is None:
+                    kept.append((ln, line, True))
                 continue
         else:
             fc = FENCE_CLOSE_RE.match(stripped)
-            kept.append((ln, line, True))
+            if start is not None and end is None:
+                kept.append((ln, line, True))
             if fc and fc.group(1)[0] == fence[0] and len(fc.group(1)) >= fence[1]:
                 fence = None
             continue
         m = HEADING_RE.match(line)
         if m:
             name = " ".join(m.group(2).split())
+            consumable = len(m.group(1)) == 2 and name in WIKI_CONSUMABLE_SECTIONS
+            if end is not None:
+                if len(m.group(1)) <= 2 and not consumable:
+                    after_cut.append(name)
+                continue
             if start is None:
+                if consumable:
+                    end = ln          # the first heading is a cut heading: no evidential body
+                    cut = name
+                    continue
                 start = ln
-            elif len(m.group(1)) == 2 and name in WIKI_CONSUMABLE_SECTIONS:
+            elif consumable:
                 end = ln
                 cut = name
-                break
-        if start is not None:
+                continue
+        elif start is None and end is None and line.strip():
+            preamble = True
+        if start is not None and end is None:
             kept.append((ln, line, False))
     if start is None:
-        return {"text": "", "sha256": None, "words": 0, "start": None, "end": None, "cut": None, "lines": []}
+        return {"text": "", "sha256": None, "words": 0, "start": None, "end": None, "cut": cut, "lines": [],
+                "preamble": preamble, "after_cut": after_cut}
     if end is None:
         end = offset + len(raw_lines)
     text_lines = [line.rstrip(" \t") for _ln, line, _f in kept]
     while text_lines and not text_lines[-1]:
         text_lines.pop()
     text = "\n".join(text_lines) + "\n"
-    import hashlib
     return {"text": text, "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "words": len(text.split()),
-            "start": start, "end": end, "cut": cut, "lines": kept}
+            "start": start, "end": end, "cut": cut, "lines": kept, "preamble": preamble, "after_cut": after_cut}
 
 
 def classify_body_link(raw: str) -> dict:
@@ -940,8 +961,8 @@ def read_wiki_text(text: str, name: str, file: Optional[str] = None) -> dict:
         data, ferr = parse_frontmatter_tree(block)
         errors.extend(ferr)
     for key in WIKI_REQUIRED:
-        if key not in data or data[key] == "":
-            errors.append("missing required `%s`" % key)
+        if key not in data or (data[key] == "" and key != "collections"):
+            errors.append("missing required `%s`" % key)        # `collections:` with nothing under it is the empty list
     t = data.get("type")
     if t is not None and t != "wiki":
         errors.append("`type` must be `wiki` (got %r)" % (t,))
@@ -1075,6 +1096,9 @@ def read_wiki_text(text: str, name: str, file: Optional[str] = None) -> dict:
                     if cname is None:
                         errors.append("inputs.collections: %s" % reason)
                         continue
+                    if cname in cmap:
+                        errors.append("inputs.collections: duplicate collection `%s`" % cname)
+                        continue
                     if not isinstance(v, str) or not SHA256_RE.match(v.strip().lower()):
                         errors.append("inputs.collections: `%s` is not a sha256 hex digest" % cname)
                         cmap[cname] = None
@@ -1090,7 +1114,12 @@ def read_wiki_text(text: str, name: str, file: Optional[str] = None) -> dict:
     eb = evidential_body(body, offset)
     rec["body"] = {k: eb[k] for k in ("sha256", "words", "start", "end", "cut")}
     if eb["start"] is None:
-        errors.append("no evidential body (no heading after the frontmatter)")
+        errors.append("no evidential body (no heading before `## Atlas reading` / `## Log`)" if eb["cut"]
+                      else "no evidential body (no heading after the frontmatter)")
+    if eb["preamble"]:
+        errors.append("text before the first heading (outside the evidential body)")
+    for name_ in eb["after_cut"]:
+        errors.append("section `%s` after `## %s` is outside the evidential body (only `## Atlas reading` and `## Log` may follow it)" % (name_, eb["cut"]))
     rec["_body_lines"] = eb["lines"]
     links, locators = wiki_links(eb["lines"])
     rec["links"], rec["locators"] = links, locators
@@ -1150,16 +1179,38 @@ def scan_wiki(vault: str) -> List[dict]:
 # wiki/1 — the validator: the veto predicate and the derived states (interface §9)
 # ---------------------------------------------------------------------------------------------
 
+def suppressed_page_name(entry: str) -> str:
+    """A `suppressed_pages` entry reduced to a page file name: `[[Wiki/<name>|x]]`, `Wiki/<name>`,
+    `<name>.md` and `<name>` all name the same page (the reader still rejects the decorated forms —
+    the veto holds while the dossier is reported)."""
+    t = entry.strip()
+    if t.startswith("[[") and t.endswith("]]"):
+        t = t[2:-2]
+    if "|" in t:
+        t = t.split("|", 1)[0]
+    if "#" in t:
+        t = t.split("#", 1)[0]
+    t = t.strip()
+    if t.startswith(WIKI_DIR + "/"):
+        t = t[len(WIKI_DIR) + 1:]
+    if t.endswith(".md"):
+        t = t[:-3]
+    return t
+
+
 def is_suppressed(page_name: str, page_collections: List[str], collections: Dict[str, dict]) -> List[str]:
     """The one veto predicate: the names of the collections that veto the page — ∃ C ∈
     page.collections with C.status = open and (C.wiki = off or page ∈ C.suppressed_pages).
-    `inbox` and `closed` collections give no veto; a collection that does not exist gives none."""
+    `inbox` and `closed` collections give no veto; a collection that does not exist gives none —
+    and one that could not be read gives no answer: the caller (validate_wiki) marks the page not
+    probed for it, never clean."""
     vetoes: List[str] = []
     for cname in page_collections:
         c = collections.get(cname)
         if c is None or c.get("status") != "open":
             continue
-        if c.get("wiki") == "off" or page_name in (c.get("suppressed_pages") or []):
+        names_ = {suppressed_page_name(p) for p in (c.get("suppressed_pages") or [])}
+        if c.get("wiki") == "off" or page_name in names_:
             vetoes.append(cname)
     return vetoes
 
@@ -1215,7 +1266,16 @@ def validate_wiki(rec: dict, ctx: dict) -> dict:
         return rec
     collections = ctx["collections"]
     revisions = ctx["revisions"]
+    collections_unlisted = ctx.get("collections_unlisted")
 
+    # the veto and the orphan verdict need the supporting dossiers: an unlistable folder or an
+    # unreadable dossier gives no answer — the page is not probed, never clean (interface §9)
+    if collections_unlisted:
+        not_probed.append("Collections/ could not be listed (%s): the veto and the supporting dossiers cannot be evaluated" % collections_unlisted)
+    for cname in rec["collections"]:
+        c = collections.get(cname)
+        if c is not None and c.get("state") == "unreadable":
+            not_probed.append("collection `%s` could not be read (its veto cannot be evaluated)" % cname)
     vetoes = is_suppressed(rec["name"], rec["collections"], collections)
     for cname in vetoes:
         c = collections[cname]
@@ -1223,7 +1283,8 @@ def validate_wiki(rec: dict, ctx: dict) -> dict:
             cname, "wiki: off" if c.get("wiki") == "off" else "named in suppressed_pages"))
 
     supporting = [c for c in rec["collections"] if c in collections and collections[c].get("status") == "open"]
-    if not supporting:
+    unreadable_supporting = [c for c in rec["collections"] if c in collections and collections[c].get("state") == "unreadable"]
+    if not supporting and not collections_unlisted and not unreadable_supporting:
         if not rec["collections"]:
             add("orphan", "no collections listed")
         for cname in rec["collections"]:
@@ -1241,16 +1302,21 @@ def validate_wiki(rec: dict, ctx: dict) -> dict:
             add("unbound", "inputs.collections names `%s`, which is not in `collections`" % cname)
     for cname, sha in sorted((inp.get("collections") or {}).items()):
         c = collections.get(cname)
+        if collections_unlisted:
+            continue                    # already not probed above
         if c is None:
             add("inputs-changed", "collection `%s` is gone" % cname)
         elif c.get("state") == "unreadable" or not c.get("sha256"):
-            not_probed.append("collection `%s` could not be read" % cname)
+            if cname not in rec["collections"]:
+                not_probed.append("collection `%s` could not be read" % cname)
         elif sha and c["sha256"] != sha:
             add("inputs-changed", "collection `%s` changed (%s… ≠ printed %s…)" % (cname, c["sha256"][:12], sha[:12]))
     if inp:
         charter_now = ctx.get("charter_sha256")
         printed = inp.get("charter_sha256")
-        if (printed or None) != (charter_now or None):
+        if ctx.get("charter_unreadable"):
+            not_probed.append("the charter could not be read (inputs cannot be compared)")
+        elif (printed or None) != (charter_now or None):
             add("inputs-changed", "charter changed (%s ≠ printed %s)" % (
                 charter_now[:12] + "…" if charter_now else "none", printed[:12] + "…" if printed else "none"))
         if inp.get("protocol") and inp["protocol"] != RESEARCH_PROTOCOL:
@@ -1279,17 +1345,22 @@ def validate_wiki(rec: dict, ctx: dict) -> dict:
             elif r.get("body_sha256") != e["text_sha256"]:
                 add("unbound", "seal capture on %s: the body %s… ≠ capture.text_sha256 (integrity error)" % (e["rev"], (r.get("body_sha256") or "none")[:12]))
                 add("weak-evidence", "%s: integrity error" % e["rev"])
+                add("inputs-changed", "text of %s changed" % e["rev"])
         else:
             if r.get("klass") == "managed":
                 add("unbound", "seal observed on the managed revision %s (seal capture required)" % e["rev"])
             elif r.get("body_sha256") != e["text_sha256"]:
                 add("unbound", "seal observed on %s: printed %s… ≠ body %s…" % (e["rev"], (e["text_sha256"] or "")[:12], (r.get("body_sha256") or "none")[:12]))
                 add("inputs-changed", "text of %s changed" % e["rev"])
-        if r.get("superseded"):
-            if ctx.get("graph_complete", True):
-                add("stale", "%s is superseded" % e["rev"])
-            else:
-                not_probed.append("stale: the supersedes graph is incomplete (%s)" % e["rev"])
+        # stale: a known successor edge is a verdict; a revision inside a supersedes cycle, or any
+        # revision while a source.md could not be read (its edges unknown), is not probed — a
+        # dangling edge elsewhere changes nothing for this revision
+        if e["rev"] in (ctx.get("cycle_members") or ()):
+            not_probed.append("stale: %s lies on a supersedes cycle" % e["rev"])
+        elif ctx.get("sources_unreadable"):
+            not_probed.append("stale: a source.md could not be read, the supersedes graph is incomplete (%s)" % e["rev"])
+        elif r.get("superseded"):
+            add("stale", "%s is superseded" % e["rev"])
         comp = r.get("completeness")
         if comp in ("partial", "blocked"):
             add("weak-evidence", "%s: completeness %s" % (e["rev"], comp))
@@ -1379,10 +1450,20 @@ def validate_wiki(rec: dict, ctx: dict) -> dict:
     return rec
 
 
+def wiki_verdict(rec: dict) -> str:
+    """The word that opens a page's line: its severity after validation (`fail` · `warn` · `ok` ·
+    `not-probed`), else its schema state (`ok` · `fail` · `unreadable` — the reader without a vault)."""
+    if rec.get("severity"):
+        return rec["severity"]
+    if rec.get("not_probed"):
+        return "not-probed"
+    return rec["state"]
+
+
 def wiki_summary_line(rec: dict) -> str:
     c = rec["counts"]
     parts = ["%d based_on" % c["based_on"], "%d collections" % c["collections"], "%d locators" % c["locators"]]
-    head = "%s %s — %s · %s" % (rec["state"], rec["name"], rec["kind"] or "?", " · ".join(parts))
+    head = "%s %s — %s · %s" % (wiki_verdict(rec), rec["name"], rec["kind"] or "?", " · ".join(parts))
     if rec.get("states"):
         head += " · " + ", ".join(rec["states"])
     if rec.get("not_probed"):
@@ -1467,8 +1548,10 @@ def main(argv: List[str]) -> int:
             spec = importlib.util.spec_from_file_location("lib_vault", os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib_vault.py"))
             lv = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(lv)
+            # the door runs on defaults (the charter at _meta/charter.md, the engine's word budget);
+            # the doctor reads the instance's configuration — the states agree on a default instance
             scan = lv.scan_vault(vault)
-            ctx = lv.research_context(scan)
+            ctx = lv.research_context(scan, budget_words=DEFAULT_WIKI_WORDS)
             pages = [validate_wiki(p, ctx) for p in scan["wiki"]["notes"]]
     else:
         path = os.path.abspath(os.path.expanduser(args.file))
@@ -1491,9 +1574,9 @@ def main(argv: List[str]) -> int:
             print(wiki_summary_line(p))
         if pages:
             print("wiki: %d pages · fail %d · warn %d · not probed %d" % (
-                len(pages), sum(1 for p in pages if p["severity"] == "fail" or p["state"] != "ok"),
+                len(pages), sum(1 for p in pages if p["severity"] == "fail"),
                 sum(1 for p in pages if p["severity"] == "warn"),
-                sum(1 for p in pages if p["state"] == "ok" and p["severity"] is None and p.get("not_probed"))))
+                sum(1 for p in pages if p["severity"] is None)))
     bad = any(r["state"] != "ok" for r in records) or any(
         p["state"] != "ok" or p["severity"] == "fail" or (p["severity"] is None and p.get("not_probed")) for p in pages)
     return 1 if bad else 0

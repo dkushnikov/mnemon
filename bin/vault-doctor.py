@@ -1221,12 +1221,18 @@ def check_wiki_binding(scan: dict, cfg: dict, pages: List[dict]) -> Check:
 
 def check_wiki_stale(scan: dict, cfg: dict, pages: List[dict]) -> Check:
     c = Check("research/wiki-stale")
-    if scan["graph"]["current_incomplete"] and any(p["state"] == "ok" and p["based_on"] for p in pages):
-        return c.not_probed("the supersedes graph is incomplete (dangling targets or cycles): no page is current for sure", "warn")
     found = _state_check(c, pages, ("stale",), "warn")
-    c.counts = {"stale": len(found["stale"])}
+    # a page whose revision lies on a supersedes cycle, or any page while a source.md could not be
+    # read: its verdict is unknown — said here, next to the verdicts that are known
+    uncertain = [p["name"] for p in pages if p["state"] == "ok" and any(n.startswith("stale:") for n in p["not_probed"])]
+    for p in pages:
+        if p["name"] in uncertain:
+            c.add("warn", page_item(p, "not probed: " + "; ".join(n for n in p["not_probed"] if n.startswith("stale:"))[:200], probed=False))
+    c.counts = {"stale": len(found["stale"]), "not_probed": len(uncertain)}
     c.detail = "%d pages rest on a superseded revision" % len(found["stale"]) + (
         " (%s)" % names(found["stale"], 3) if found["stale"] else "")
+    if uncertain:
+        c.detail += "; %d not probed (a supersedes cycle or an unreadable source.md: %s)" % (len(uncertain), names(uncertain, 3))
     return c
 
 
@@ -1263,7 +1269,8 @@ def check_wiki_evidence(scan: dict, cfg: dict, pages: List[dict]) -> Check:
         covered += 1
         cited: set = set()
         for p in its:
-            cited.update(p.get("cited") or [])
+            if p.get("usable"):             # a suppressed, unbound or not-probed page cites nothing (interface §8)
+                cited.update(p.get("cited") or [])
         for it in col["items"]:
             if it["excluded"] or it["rev"] in cited or it["exists"] is False:
                 continue          # an unresolved item is research/collections' finding, not an uncited one
@@ -1418,6 +1425,9 @@ def research_counters(scan: dict) -> dict:
 
 
 def build_research_document(scan: dict, cfg: dict, today: datetime.date) -> dict:
+    stall = test_hook("MNEMON_TEST_DOCTOR_STALL_RESEARCH")
+    if stall:
+        time.sleep(float(stall))        # a slow research build: the deadline hits this document only
     checks, diagnostics, pages = run_research_checks(scan, cfg)
     checks_json = [c.as_json() for c in checks]
     snapshot = {"today": today.isoformat(), "budget_s": cfg.get("budget"), "complete": scan["snapshot"]["complete"],
@@ -1502,9 +1512,9 @@ def summary_of(checks: List[dict], diagnostics: List[dict]) -> dict:
     return s
 
 
-def build_documents(cfg: dict, today: datetime.date) -> Tuple[dict, dict]:
-    """One read-only snapshot, the radius, the 19 checks, the diagnostics — the frozen data document —
-    and, on the same snapshot, the research document (phase 3b)."""
+def build_data_document(cfg: dict, today: datetime.date) -> Tuple[dict, dict]:
+    """One read-only snapshot, the radius, the 19 checks, the diagnostics — the frozen data document
+    (and the snapshot it was built on, for the research document)."""
     scan = lv.scan_vault(cfg["vault"], state_dir=cfg["state_dir"], archive_dir=cfg["archive"], charter=cfg["charter"],
                          reader_context=cfg["reader_context"], today=today)
     radius, defaulted, errors = parse_radius(scan["charter"]["radius_lines"])
@@ -1519,12 +1529,29 @@ def build_documents(cfg: dict, today: datetime.date) -> Tuple[dict, dict]:
     data = {"schema": SCHEMA, "instance": cfg["instance"], "vault": scan["vault"], "generated_at": utc_now(),
             "snapshot": snapshot, "counters": scan["counters"], "checks": checks_json, "diagnostics": diagnostics,
             "summary": summary_of(checks_json, diagnostics)}
-    research = build_research_document(scan, cfg, today)
-    return data, research
+    return data, scan
+
+
+def build_research_or_not_probed(scan: dict, cfg: dict, today: datetime.date) -> dict:
+    """The research document on the data document's snapshot — isolated: an exception anywhere in
+    the research layer (the context, the validator, the checks' loop) yields a not-probed research
+    document with a fail-level error diagnostic and never touches the data document."""
+    try:
+        return build_research_document(scan, cfg, today)
+    except Exception as exc:
+        message = "research: %s: %s" % (type(exc).__name__, exc)
+        return not_probed_research_document(cfg, today, "error: " + message, {"code": "error", "level": "fail", "message": message})
+
+
+def build_documents(cfg: dict, today: datetime.date) -> Tuple[dict, dict]:
+    """Both documents, in process (no budget): the data one, then the research one on its snapshot."""
+    data, scan = build_data_document(cfg, today)
+    return data, build_research_or_not_probed(scan, cfg, today)
 
 
 def build_document(cfg: dict, today: datetime.date) -> dict:
-    return build_documents(cfg, today)[0]
+    """The data document alone (tests and callers that want only it)."""
+    return build_data_document(cfg, today)[0]
 
 
 def not_probed_document(cfg: dict, today: datetime.date, reason: str, diagnostic: dict) -> dict:
@@ -1572,8 +1599,9 @@ def list_lines(doc: dict, wanted: str, research: Optional[dict] = None) -> Optio
 
 
 def research_brief(research: Optional[dict]) -> str:
-    """The research part of the brief line: `research: N pages · K fail · M warn` (the pages' own
-    severities, then the checks' fails and warns when they exceed them), or `not probed (…)`."""
+    """The research part of the brief line: `research: N pages · K fail · M warn` — N the pages in
+    Wiki/, K and M the research checks' fails and warns (the same summary the data part uses) —
+    or `research: not probed (…)` when the document was not built."""
     if research is None:
         return "research: not probed"
     c = research.get("counters") or {}
@@ -1824,16 +1852,15 @@ def main(argv: List[str]) -> int:
                         fh.write(str(os.getpid()))
                 time.sleep(float(stall))
             try:
-                doc, research = build_documents(cfg, today)
+                doc, scan = build_data_document(cfg, today)
             except Exception as exc:
                 print("vault-doctor: error: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
                 return 1
-            # one document per line, the data one first: the parent keeps what arrived before a deadline
+            # one document per line, the data one first and flushed before the research build starts:
+            # the parent keeps what arrived before a deadline (interface §8)
             print(json.dumps(doc, ensure_ascii=False, default=lv._json_default))
             sys.stdout.flush()
-            stall_research = test_hook("MNEMON_TEST_DOCTOR_STALL_RESEARCH")
-            if stall_research:
-                time.sleep(float(stall_research))      # a deadline that hits the research document only
+            research = build_research_or_not_probed(scan, cfg, today)
             print(json.dumps(research, ensure_ascii=False, default=lv._json_default))
             return 0
         try:
