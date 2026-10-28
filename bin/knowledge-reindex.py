@@ -105,6 +105,33 @@ def collection_rows(vault: Path) -> list[str]:
     return rows
 
 
+def wiki_rows(vault: Path) -> list[str]:
+    """One row per `Wiki/*.md` (sorted by name), from the research reader — the stored facts only,
+    the derived states are the doctor's: `- [[Wiki/<name>|<name>]] (<kind>, <n> sources, <k> collections[,
+    updated <date>])`; a page whose schema fails: `(fail: <first error>)`; unreadable: `(unreadable)`."""
+    lr = _load_research()
+    rows: list[str] = []
+    try:
+        records = lr.scan_wiki(str(vault))
+    except OSError as exc:
+        print(f"knowledge-reindex: Wiki/ could not be listed ({exc}); the section is not regenerated", file=sys.stderr)
+        return [f"- _Wiki/ could not be listed ({type(exc).__name__}); the rows are not regenerated_"]
+    for rec in records:
+        name = rec["name"]
+        if rec["state"] == "unreadable":
+            rows.append(f"- [[Wiki/{name}|{display_text(name)}]] (unreadable)")
+            continue
+        c = rec["counts"]
+        parts = [rec["kind"] or "?", f"{c['based_on']} sources", f"{c['collections']} collections"]
+        if rec["updated"]:
+            parts.append(f"updated {rec['updated']}")
+        row = f"- [[Wiki/{name}|{display_text(name)}]] ({', '.join(parts)})"
+        if rec["errors"]:
+            row += f" (fail: {rec['errors'][0]})"
+        rows.append(row)
+    return rows
+
+
 class PreservationError(Exception):
     """The hand-edit report could not be written: the index must not be replaced."""
 
@@ -590,12 +617,17 @@ def reindex(vault: Path, hand_edit_report: bool = True) -> dict:
     col_lines = collection_rows(vault) if collections_present else []
     collections_block = (
         f"## Collections\n\n{chr(10).join(col_lines)}\n\n" if collections_present else "")
+    wiki_present = (vault / 'Wiki').is_dir()
+    wiki_lines = wiki_rows(vault) if wiki_present else []
+    wiki_block = f"## Wiki\n\n{chr(10).join(wiki_lines)}\n\n" if wiki_present else ""
 
     sources_count = len(all_source_dirs)
     extracted_count = len(extracted_dirs)
     synthesis_count = len(syn_files)
     collections_count = sum(1 for r in col_lines if r.startswith("- [[Collections/")) if not any(
         r.startswith("- _Collections/ could not be listed") for r in col_lines) else "?"
+    wiki_count = sum(1 for r in wiki_lines if r.startswith("- [[Wiki/")) if not any(
+        r.startswith("- _Wiki/ could not be listed") for r in wiki_lines) else "?"
     superseded_count = len(scan['successors'])
     today = datetime.date.today().isoformat()
 
@@ -630,6 +662,7 @@ Universal reference storage. Sources captured and extracted by AI, synthesis wri
 | Extracted | {extracted_count} |
 | Superseded | {superseded_count} |
 | Collections | {collections_count} |
+| Wiki | {wiki_count} |
 | Synthesis | {synthesis_count} |
 
 {pending_note}
@@ -638,7 +671,7 @@ Universal reference storage. Sources captured and extracted by AI, synthesis wri
 
 {chr(10).join(entries)}
 
-{collections_block}## Synthesis Notes
+{collections_block}{wiki_block}## Synthesis Notes
 
 {chr(10).join(syn_lines)}
 
@@ -663,6 +696,7 @@ Universal reference storage. Sources captured and extracted by AI, synthesis wri
         pass
     return {'sources': sources_count, 'extracted': extracted_count, 'synthesis': synthesis_count,
             'collections': collections_count, 'collections_present': collections_present,
+            'wiki': wiki_count, 'wiki_present': wiki_present,
             'pending': len(pending), 'legacy': len(legacy), 'superseded': superseded_count,
             'dangling': len(scan['dangling']), 'preserved': preserved, 'malformed': len(scan['malformed'])}
 
@@ -694,6 +728,8 @@ def main(argv: list[str]) -> int:
             f"Synthesis={c['synthesis']}, Superseded={c['superseded']}")
     if c['collections_present']:
         line += f", Collections={c['collections']}"
+    if c['wiki_present']:
+        line += f", Wiki={c['wiki']}"
     for key, label in (('pending', 'Pending'), ('legacy', 'Legacy'), ('dangling', 'Dangling-supersedes'),
                        ('preserved', 'Preserved'), ('malformed', 'Malformed-frontmatter')):
         if c[key]:
