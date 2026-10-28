@@ -1,6 +1,6 @@
 {
   "name": "mnemon",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "AI-powered personal knowledge extraction system. Capture articles, videos, podcasts, books — get structured, searchable knowledge artifacts framed by your personal context.",
   "author": {
     "name": "dkushnikov"
