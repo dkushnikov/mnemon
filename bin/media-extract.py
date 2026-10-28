@@ -41,9 +41,10 @@ no timeout (phase-1 behaviour).
 
 Walls (GH #26, capture layer D4/D6): a tool's refusal that is a wall — yt-dlp's "Sign in to
 confirm you're not a bot", youtube_transcript_api's "YouTube is blocking requests from your IP",
-an HTTP 429 — is classified by `classify_wall` and reported as `error.json` with
-`error_class: "blocked"`, `kind: "bot-wall"` (`"rate-limit"` for a 429), the tool's line in
-`error`, `retryable` false (true for a rate limit), exit 1; nothing here tries to pass a wall
+yt-dlp's age gate "Sign in to confirm your age", an HTTP 429 — is classified by `classify_wall`
+(yt-dlp's `ERROR:` lines first, so a transient 429 WARNING never masks a permanent ERROR) and
+reported as `error.json` with `error_class: "blocked"`, `kind: "bot-wall" | "login" |
+"rate-limit"`, the tool's line in `error`, `retryable` false (true for a rate limit), exit 1; nothing here tries to pass a wall
 (no cookies, no proxies — the browser lane is the designed route around it). Every other
 failure under --out-dir writes `error.json` too (`error_class: "failed"`, `kind: null`, the
 message in `error`), so the gateway's receipt carries the cause instead of "failed (exit 1)".
@@ -220,32 +221,68 @@ WALL_MARKERS = (
     ("sign in to confirm you’re not a bot", "bot-wall"),
     ("blocking requests from your ip", "bot-wall"),
     ("ip has been blocked", "bot-wall"),
+    ("sign in to confirm your age", "login"),
     ("http error 429", "rate-limit"),
     ("too many requests", "rate-limit"),
 )
 
 
+def _text_of(data):
+    return data.decode("utf-8", errors="replace") if isinstance(data, bytes) else (data or "")
+
+
+_PREFIXES = ("ERROR", "WARNING", "NOTE", "INFO", "DEBUG")
+
+
+def _wall_candidates(text):
+    """The blocks a wall is judged by, each a list of lines. A tool's output is grouped into blocks
+    at every `ERROR:` / `WARNING:` / … prefix (the lines after a prefixed line, up to the next prefix,
+    belong to it — the transcript API's exception runs to a dozen lines behind one `ERROR:`). When
+    `ERROR` blocks exist only they decide: a transient 429 `WARNING:` before a permanent
+    `ERROR: … Private video` must not make the capture retryable (reviewer A P2-3). Without any
+    prefixed ERROR every line is its own candidate."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    blocks, cur = [], None
+    for ln in lines:
+        if ln.split(":", 1)[0].upper() in _PREFIXES:
+            cur = [ln]
+            blocks.append(cur)
+        elif cur is not None:
+            cur.append(ln)
+    errors = [b for b in blocks if b[0].upper().startswith("ERROR")]
+    return errors or [[ln] for ln in lines]
+
+
+def _match_wall(block):
+    """(kind, the line that names it) for a block, or (None, None)."""
+    for ln in block:
+        low = ln.lower()
+        for marker, kind in WALL_MARKERS:
+            if marker in low:
+                return kind, ln
+    return None, None
+
+
 def classify_wall(text):
-    """The wall kind (`bot-wall` | `rate-limit`) named by a tool's output, else None."""
+    """The wall kind (`bot-wall` | `login` | `rate-limit`) named by a tool's output, else None."""
     if not text:
         return None
-    if isinstance(text, bytes):
-        text = text.decode("utf-8", errors="replace")
-    low = text.lower()
-    for marker, kind in WALL_MARKERS:
-        if marker in low:
+    for block in _wall_candidates(_text_of(text)):
+        kind, _ = _match_wall(block)
+        if kind:
             return kind
     return None
 
 
 def _wall_line(data):
-    """The tool line that names the wall (the ERROR line when there is one), one line."""
-    text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else (data or "")
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    for ln in lines:
-        if classify_wall(ln):
-            return ln
-    return lines[-1] if lines else ""
+    """The tool line that names the wall (inside an ERROR block when there is one), one line; else
+    the last candidate's first line."""
+    cands = _wall_candidates(_text_of(data))
+    for block in cands:
+        kind, line = _match_wall(block)
+        if kind:
+            return line
+    return cands[-1][0] if cands else ""
 
 
 def fail(stage, message):
@@ -760,7 +797,8 @@ def main():
         print(f"ERROR: {message}", file=sys.stderr)
         sys.exit(EXIT_TIMEOUT)
     except Blocked as b:
-        # a wall: honest class and kind for the gateway, the tool's line as the cause (GH #26)
+        # a wall: honest class and kind for the gateway, the tool's line as the cause (GH #26); only a
+        # rate limit may pass later — a bot wall or an age/login gate will not
         if args.out_dir:
             write_error_json(os.path.abspath(args.out_dir), b.stage, sup.elapsed(), error_class="blocked",
                              kind=b.kind, error=b.message, retryable=(b.kind == "rate-limit"))

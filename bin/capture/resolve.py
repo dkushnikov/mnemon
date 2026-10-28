@@ -1,9 +1,13 @@
-"""capture.resolve — canonical identity, version 1, and the per-host resolvers (spec §3.1, D5, D10).
+"""capture.resolve — canonical identity (versions 1 and 2) and the per-host resolvers (spec §3.1, D5, D10).
 
-`canonicalize(url, version=1)` applies the six frozen steps of version 1 and nothing else; `resolve(url)`
-adds the fetch URL, the kind (page · arxiv · youtube · github), the metadata URL (arXiv: the abstract page)
-and the requested arXiv version. `version` selects a frozen rule set — v1 is the only one; a later version
-adds rules and keeps v1 callable. Lookups compare under a folder's recorded version first.
+`canonicalize(url, version=VERSION)` applies the frozen steps of the named version and nothing else;
+`resolve(url)` adds the fetch URL, the kind (page · arxiv · youtube · github), the metadata URL (arXiv: the
+abstract page) and the requested arXiv version. `version` selects a frozen rule set: v1 (2026-10-15) is the
+six steps below; v2 (2026-10-28, GH #12) is v1 plus the host-scoped share parameters of step 6
+(`HOST_SHARE_KEYS`). Every version stays callable: a replay binds under the version its receipt recorded
+(`cap_binding_check` → `--canonical-only --canonical-version N`), new captures write the current one, and
+the lookup compares a folder's URLs under the current rules (a folder recorded under v1 with a share-tagged
+URL coincides with a v2 request for the same post).
 
 Not done, on purpose: `www.` stripping, http → https, trailing-slash collapsing, path lowercasing, AMP and
 mobile variants, following redirects, GitHub path rewriting. `lib_url.normalize_url` is the depth helpers'
@@ -16,7 +20,8 @@ import string
 from typing import List, NamedTuple, Optional
 from urllib.parse import unquote, urlsplit
 
-VERSION = 1
+VERSION = 2
+VERSIONS = (1, 2)
 
 TRACKING_KEYS = (
     "utm_*", "fbclid", "gclid", "dclid", "gbraid", "wbraid", "msclkid", "yclid", "twclid", "ttclid", "igshid",
@@ -33,7 +38,7 @@ HOST_SHARE_KEYS = {
     "x": ("s", "t"),
     "substack": ("r",),
 }
-_X_HOSTS = frozenset(("x.com", "www.x.com", "mobile.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"))
+_X_HOSTS = frozenset(("x.com", "www.x.com", "mobile.x.com", "m.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com", "m.twitter.com"))
 
 _UNRESERVED = frozenset(string.ascii_letters + string.digits + "-._~")
 _PCT = re.compile(r"%([0-9A-Fa-f]{2})")
@@ -148,9 +153,9 @@ def _split(url: str):
 
 
 def canonicalize(url: str, version: int = VERSION) -> Canonical:
-    """The canonical form of a URL under a frozen rule set; raises InvalidURL."""
-    if version != 1:
-        raise ValueError("unknown canonicalization version: %r (only 1 exists)" % (version,))
+    """The canonical form of a URL under a frozen rule set (1 or 2); raises InvalidURL."""
+    if version not in VERSIONS:
+        raise ValueError("unknown canonicalization version: %r (versions: %s)" % (version, ", ".join(map(str, VERSIONS))))
     scheme, host, port, path, query, fragment = _split(url)
     path = _normalize_pct(path)
     kept, dropped = [], []
@@ -170,15 +175,16 @@ def canonicalize(url: str, version: int = VERSION) -> Canonical:
     if host in _ARXIV_HOSTS:
         m = _ARXIV_PATH.match(path)
         if m:
-            return Canonical("https://arxiv.org/abs/" + m.group("id"), 1, "arxiv", dropped, dropped_fragment)
+            return Canonical("https://arxiv.org/abs/" + m.group("id"), version, "arxiv", dropped, dropped_fragment)
     if host in _YT_HOSTS or host == "youtu.be":
         video = _youtube_id(host, path, kept)
         if video:
             # every parameter but `v` goes (list, index, t, si, feature, pp, …): the video is the resource
             dropped_yt = [p.split("=", 1)[0] for p in kept if unquote(p.split("=", 1)[0]) != "v"]
-            return Canonical("https://www.youtube.com/watch?v=" + video, 1, "youtube", dropped + dropped_yt,
+            return Canonical("https://www.youtube.com/watch?v=" + video, version, "youtube", dropped + dropped_yt,
                              dropped_fragment)
-    share_rule = _host_share_rule(host)
+    # version 2: the host-scoped share parameters (v1 keeps them — a replay of a v1 receipt binds the same key)
+    share_rule = _host_share_rule(host) if version >= 2 else None
     if share_rule:
         kept, dropped_share = _drop_share_keys(kept, share_rule)
         if dropped_share:
@@ -189,7 +195,7 @@ def canonicalize(url: str, version: int = VERSION) -> Canonical:
         result += "?" + "&".join(kept)
     if fragment:
         result += "#" + fragment
-    return Canonical(result, 1, host_rule, dropped, dropped_fragment)
+    return Canonical(result, version, host_rule, dropped, dropped_fragment)
 
 
 def _youtube_id(host: str, path: str, query_parts) -> Optional[str]:
@@ -238,9 +244,9 @@ def resolve(url: str, version: int = VERSION) -> Resolution:
     return Resolution(canonical, canonical.url, "page", None, None)
 
 
-def canonical_object(url: str) -> dict:
+def canonical_object(url: str, version: int = VERSION) -> dict:
     """The `mnemon-canonical/1` object of `capture-fetch.py --canonical-only` (no network)."""
-    res = resolve(url)
+    res = resolve(url, version)
     return {"schema": "mnemon-canonical/1", "url": url.strip(), "canonical_url": res.canonical.url,
             "canonical_version": res.canonical.version, "kind": res.kind, "fetch_url": res.fetch_url,
             "requested_version": res.requested_version}

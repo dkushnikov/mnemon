@@ -39,19 +39,20 @@ from capture import report as reportmod  # noqa: E402
 
 
 def canonical_only(args) -> int:
+    version = args.canonical_version or resolve.VERSION
     if args.stdin:
         for line in sys.stdin:
             url = line.strip()
             if not url:
                 continue
             try:
-                obj = resolve.canonical_object(url)
+                obj = resolve.canonical_object(url, version)
             except resolve.InvalidURL as exc:
                 obj = {"schema": "mnemon-canonical/1", "url": url, "error_class": "invalid-url", "error": str(exc)}
             print(json.dumps(obj, ensure_ascii=False))
         return 0
     try:
-        obj = resolve.canonical_object(args.canonical_only)
+        obj = resolve.canonical_object(args.canonical_only, version)
     except resolve.InvalidURL as exc:
         print(json.dumps({"error_class": "invalid-url", "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 2
@@ -110,6 +111,9 @@ def main() -> int:
     ap.add_argument("--canonical-only", default=None, metavar="URL", nargs="?", const="",
                     help="print the mnemon-canonical/1 object and exit (no network)")
     ap.add_argument("--stdin", action="store_true", help="with --canonical-only: one URL per line")
+    ap.add_argument("--canonical-version", type=int, choices=list(resolve.VERSIONS), default=None,
+                    help="with --canonical-only: canonicalize under this frozen rule set (default: the current one, "
+                         "%d); a replay binds under the version its receipt recorded" % resolve.VERSION)
     args = ap.parse_args()
 
     proc.close_lock_fd()

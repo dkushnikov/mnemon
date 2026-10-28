@@ -172,6 +172,17 @@ _has_flag() {
   return 1
 }
 
+# _flag_value <--flag> <args…>: the value of a flag given as `--flag v` or `--flag=v`; 1 when absent.
+_flag_value() {
+  local want="$1" a prev=""; shift
+  for a in "$@"; do
+    case "$a" in "$want"=*) printf '%s' "${a#*=}"; return 0 ;; esac
+    if [[ "$prev" == "$want" ]]; then printf '%s' "$a"; return 0; fi
+    prev="$a"
+  done
+  return 1
+}
+
 # JSON string body (no surrounding quotes).
 _json_str() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n\t' '  '; }
 
@@ -673,60 +684,81 @@ _doctor_egress() {
   esac
 }
 
-# canonical — the identity rules this engine applies to new url captures: canonicalization v1,
-# answered by capture-fetch.py --canonical-only (no network) when the capture layer is present.
+# canonical — the identity rules this engine applies to new url captures: canonicalization v2
+# (v1 + the host-scoped share parameters, 2026-10-28; v1 stays callable for replays), answered by
+# capture-fetch.py --canonical-only (no network) when the capture layer is present.
 _doctor_canonical() {
-  local cf="$BIN_DIR/capture-fetch.py" out ver
+  local cf="$BIN_DIR/capture-fetch.py" out ver expect=2
   if [[ ! -f "$cf" ]]; then
-    _check warn canonical "canonicalization v1 expected, but bin/capture-fetch.py is not present in this engine (URL captures unavailable)"
+    _check warn canonical "canonicalization v$expect expected, but bin/capture-fetch.py is not present in this engine (URL captures unavailable)"
     return 0
   fi
   if out="$(python3 "$cf" --canonical-only 'https://example.com/post?utm_source=doctor' 2>/dev/null)" \
      && ver="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["canonical_version"])' 2>/dev/null)"; then
-    if [[ "$ver" == 1 ]]; then
-      _check ok canonical "canonicalization v1 (capture-fetch.py --canonical-only)"
+    if [[ "$ver" == "$expect" ]]; then
+      _check ok canonical "canonicalization v$expect (capture-fetch.py --canonical-only; v1 receipts replay under v1)"
     else
-      _check warn canonical "capture-fetch.py reports canonicalization v$ver; this engine expects v1"
+      _check warn canonical "capture-fetch.py reports canonicalization v$ver; this engine expects v$expect"
     fi
   else
-    _check warn canonical "canonicalization v1 expected, but capture-fetch.py --canonical-only failed"
+    _check warn canonical "canonicalization v$expect expected, but capture-fetch.py --canonical-only failed"
   fi
 }
 
 # captures — the ledger's receipts (failed with the --resume hint, integrity errors, missing files,
 # unreadable) and, receipt-independent (§12 A2), every Sources/*/source.md whose header is not
 # closed within 256 KB: malformed-frontmatter folders the lookup cannot read.
-_doctor_captures() {
-  local cdir out status detail tab
+# One scan of the ledger for the `captures` check and for `doctor --list captures` (GH #15): the
+# receipts in <vault state>/captures/ — failed / extract-failed (the --resume candidates), integrity
+# errors, published receipts whose revision folder or source.md is gone, unreadable files — and,
+# receipt-independent (§12 A2), every Sources/*/source.md whose header is not closed within 256 KB
+# (malformed-frontmatter folders the lookup cannot read). Mode `summary` prints `<status>\t<detail>`
+# (one failed id for --resume and, when more is counted, the one door to the whole list); mode `list`
+# prints one tab-separated row per counted receipt: <capture_id> <state/error_class> <revision or ->
+# <error [stage] [retryable]> — failed first, then integrity, missing files, unreadable.
+_doctor_captures_scan() {   # <summary|list>
+  local cdir
   cdir="$(_vault_state_dir)/captures"
-  out="$(python3 - "$cdir" "$VAULT_PATH" <<'PY' 2>/dev/null || printf 'warn\tcould not scan %s' "$cdir"
+  python3 - "$cdir" "$VAULT_PATH" "$1" <<'PY'
 import glob, json, os, sys
-cdir, vault = sys.argv[1], sys.argv[2]
-total = failed = missing = unreadable = integrity = 0
-first_failed = None
+cdir, vault, mode = sys.argv[1], sys.argv[2], sys.argv[3]
 have_ledger = os.path.isdir(cdir)
+def one(s):
+    return " ".join(str(s).split()) if s is not None else ""
+rows = {"failed": [], "integrity": [], "missing": [], "unreadable": []}
+total = 0
 for path in (sorted(glob.glob(os.path.join(glob.escape(cdir), "*.json"))) if have_ledger else []):
     total += 1
+    cid = os.path.basename(path)[:-5]
     try:
         with open(path, encoding="utf-8") as fh:
             rec = json.load(fh)
-    except Exception:
-        unreadable += 1
+    except Exception as exc:
+        rows["unreadable"].append((cid, "unreadable", "-", "not a readable receipt: %s" % one(exc)))
         continue
     if not isinstance(rec, dict) or rec.get("schema") != "mnemon-capture-receipt/1":
-        unreadable += 1
+        rows["unreadable"].append((cid, "unreadable", "-", "not a mnemon-capture-receipt/1 document"))
         continue
-    state = rec.get("state")
+    cid = rec.get("capture_id") or cid
+    state = rec.get("state") or "?"
+    rev = rec.get("revision") if isinstance(rec.get("revision"), str) and rec.get("revision") else "-"
+    cls = rec.get("error_class") or "-"
+    err = one(rec.get("error")) or "-"
+    retry = rec.get("retryable")
     if state in ("failed", "extract-failed"):
-        failed += 1
-        if first_failed is None:
-            first_failed = rec.get("capture_id") or os.path.basename(path)[:-5]
+        stage = rec.get("stage")
+        detail = err + ((" [stage %s]" % stage) if stage else "") + (" [retryable]" if retry is True else " [not retryable]" if retry is False else "")
+        rows["failed"].append((cid, "%s/%s" % (state, cls), rev, detail))
     elif state == "integrity-error":
-        integrity += 1
+        rows["integrity"].append((cid, "%s/%s" % (state, cls), rev, err))
     elif state in ("source-published", "extracted", "bookmarked"):
-        rev = rec.get("revision")
-        if not isinstance(rev, str) or not rev or not os.path.isfile(os.path.join(vault, "Sources", rev, "source.md")):
-            missing += 1
+        if rev == "-" or not os.path.isfile(os.path.join(vault, "Sources", rev, "source.md")):
+            rows["missing"].append((cid, "%s/missing-files" % state, rev, "the receipt names a revision whose source.md is not in the vault"))
+if mode == "list":
+    for key in ("failed", "integrity", "missing", "unreadable"):
+        for cid, kind, rev, detail in rows[key]:
+            print("%s\t%s\t%s\t%s" % (cid, kind, rev, detail))
+    sys.exit(0)
 # §12 A2 — the whole header of every source.md, through the closing delimiter, cap 256 KB: an opening
 # `---` without a closing `---`/`...` within the cap is malformed-frontmatter (never silently truncated)
 CAP = 256 * 1024
@@ -751,79 +783,42 @@ for sm in sorted(glob.glob(os.path.join(glob.escape(vault), "Sources", "*", "sou
         pos += len(ln) + 1
     if not closed:
         malformed.append(folder)
+failed, integrity, missing, unreadable = (len(rows[k]) for k in ("failed", "integrity", "missing", "unreadable"))
 parts = []
 if failed:
-    parts.append("%d failed/extract-failed receipt(s) — finish with: mnemon add --resume %s%s" % (
-        failed, first_failed, "; all of them: mnemon doctor --list captures" if failed > 1 else ""))
+    parts.append("%d failed/extract-failed receipt(s) — finish with: mnemon add --resume %s" % (failed, rows["failed"][0][0]))
 if integrity:
     parts.append("%d integrity-error receipt(s) — a published source.md is missing or was edited (operator: restore it, then replay)" % integrity)
 if missing:
     parts.append("%d receipt(s) point at missing files" % missing)
 if unreadable:
     parts.append("%d unreadable receipt(s)" % unreadable)
+if failed + integrity + missing + unreadable > 1:
+    parts.append("all of them: mnemon doctor --list captures")
 if malformed:
     parts.append("%d malformed-frontmatter folder(s) — source.md header without a closing --- within 256 KB, unreadable to the lookup: %s"
                  % (len(malformed), ", ".join(malformed[:5]) + (", …" if len(malformed) > 5 else "")))
 if parts:
-    if integrity or missing or unreadable:
-        parts.append("list: mnemon doctor --list captures")
     print("warn\t" + ("none (no %s yet); " % cdir if not have_ledger else "") + "; ".join(parts))
 elif not have_ledger:
     print("ok\tnone (no %s yet)" % cdir)
 else:
     print("ok\t%d receipt(s), none failed" % total)
 PY
-)"
+}
+
+_doctor_captures() {
+  local out status detail tab
+  out="$(_doctor_captures_scan summary 2>/dev/null || printf 'warn\tcould not scan %s' "$(_vault_state_dir)/captures")"
   tab=$'\t'
   status="${out%%$tab*}"
   detail="${out#*$tab}"
   _check "$status" captures "$detail"
 }
 
-# `mnemon doctor --list captures` (GH #15): every receipt the `captures` check counts, one per line,
-# tab-separated — <capture_id> <state/error_class> <revision or -> <error or reason> — failed and
-# extract-failed receipts (the --resume candidates) first, then integrity errors, receipts whose
-# revision files are missing, and unreadable files. Read-only; exit 0 (an empty list is a list).
-_doctor_captures_list() {
-  local cdir
-  cdir="$(_vault_state_dir)/captures"
-  python3 - "$cdir" "$VAULT_PATH" <<'PY'
-import glob, json, os, sys
-cdir, vault = sys.argv[1], sys.argv[2]
-rows = {"failed": [], "integrity": [], "missing": [], "unreadable": []}
-def one(s):
-    return " ".join(str(s).split()) if s is not None else ""
-for path in (sorted(glob.glob(os.path.join(glob.escape(cdir), "*.json"))) if os.path.isdir(cdir) else []):
-    cid = os.path.basename(path)[:-5]
-    try:
-        with open(path, encoding="utf-8") as fh:
-            rec = json.load(fh)
-    except Exception as exc:
-        rows["unreadable"].append((cid, "unreadable", "-", "not a readable receipt: %s" % one(exc)))
-        continue
-    if not isinstance(rec, dict) or rec.get("schema") != "mnemon-capture-receipt/1":
-        rows["unreadable"].append((cid, "unreadable", "-", "not a mnemon-capture-receipt/1 document"))
-        continue
-    cid = rec.get("capture_id") or cid
-    state = rec.get("state") or "?"
-    rev = rec.get("revision") or "-"
-    cls = rec.get("error_class") or "-"
-    err = one(rec.get("error")) or "-"
-    retry = rec.get("retryable")
-    if state in ("failed", "extract-failed"):
-        stage = rec.get("stage")
-        detail = err + ((" [stage %s]" % stage) if stage else "") + (" [retryable]" if retry is True else " [not retryable]" if retry is False else "")
-        rows["failed"].append((cid, "%s/%s" % (state, cls), rev, detail))
-    elif state == "integrity-error":
-        rows["integrity"].append((cid, "%s/%s" % (state, cls), rev, err))
-    elif state in ("source-published", "extracted", "bookmarked"):
-        if not isinstance(rev, str) or rev == "-" or not os.path.isfile(os.path.join(vault, "Sources", rev, "source.md")):
-            rows["missing"].append((cid, "%s/missing-files" % state, rev, "the receipt names a revision whose source.md is not in the vault"))
-for key in ("failed", "integrity", "missing", "unreadable"):
-    for cid, kind, rev, detail in rows[key]:
-        print("%s\t%s\t%s\t%s" % (cid, kind, rev, detail))
-PY
-}
+# `mnemon doctor --list captures` (GH #15): the rows of the same scan; read-only; exit 0 (an empty
+# list is a list).
+_doctor_captures_list() { _doctor_captures_scan list; }
 
 # ingest — per known inbox: results still pending — a retryable failed, exhausted, incomplete
 # or deferred — raise a warning; permanent failures (failed, retryable false: a contract
@@ -1090,7 +1085,7 @@ cmd_doctor() {
   # today (GH #9): `mnemon search` scans with grep whatever the provider — the note used to be
   # printed on every search; it is a doctor line now
   if $have_config && [[ "$SEARCH_PROVIDER" == qmd ]]; then
-    _check warn qmd-search "search_provider is qmd, but mnemon search scans with grep (no qmd-backed search yet: the JSON reports provider=grep, configured_provider=qmd); the setting drives the post-capture qmd refresh and the qmd-collection check"
+    _check ok qmd-search "note: search_provider is qmd, but mnemon search scans with grep (no qmd-backed search yet; the JSON reports provider=grep, configured_provider=qmd) — the setting drives the post-capture qmd refresh and the qmd-collection check"
     if ! command -v qmd >/dev/null 2>&1; then
       _check fail qmd "search_provider is qmd but qmd is not installed"
     else
@@ -1690,7 +1685,8 @@ case "$cmd" in
             # descriptor already holds it (§12 A1) — and execs the gateway with the
             # descriptor inherited. --dry-run writes nothing and takes no lock.
             if _has_flag --dry-run "$@"; then exec "$BIN_DIR/knowledge-gateway.sh" source-add "$@"; fi
-            exec python3 "$BIN_DIR/vault-lock.py" --vault "$VAULT_PATH" -- "$BIN_DIR/knowledge-gateway.sh" source-add "$@" ;;
+            # a refusal on the lock prints the §3.6 RESULT block with the requested capture id (GH #30)
+            exec python3 "$BIN_DIR/vault-lock.py" --vault "$VAULT_PATH" --locked-result "$(_flag_value --capture-id "$@" || _flag_value --ref-id "$@" || true)" -- "$BIN_DIR/knowledge-gateway.sh" source-add "$@" ;;
   ingest)   _reject_post_command_selectors "$@"
             # usage (no inbox dir, --help) needs no instance; the pass does
             case "${1:-}" in ""|-h|--help) exec python3 "$BIN_DIR/mnemon-ingest.py" "$@" ;; esac
@@ -1745,6 +1741,7 @@ case "$cmd" in
                                fi
                                exec python3 "$BIN_DIR/vault-lock.py" --vault "$VAULT_PATH" -- python3 "$BIN_DIR/mnemon-triage.py" --vault "$VAULT_PATH" "$_tv" "$@" ;;
               promote)         shift; exec python3 "$BIN_DIR/mnemon-triage.py" --vault "$VAULT_PATH" --mnemon "$0" promote "$@" ;;
+              -h|--help)       exec python3 "$BIN_DIR/mnemon-triage.py" --help ;;
               *)               usage_error "triage: expected list | dismiss <rev> | restore <rev> | promote <rev> (the URL-list triage \`triage <file>\` was retired; docs/capture.md §15)" ;;
             esac ;;
   research) _resolve_or_die

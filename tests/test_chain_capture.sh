@@ -343,13 +343,13 @@ assert_eq "$rc $(result status)" "0 extracted" "mnemon add --url …/article?utm
 R1="$(result revision)"; SRC1="$VAULT/Sources/$R1/source.md"
 assert_eq "$(fm "$SRC1" url)" "\"$BASE/article?utm_source=x\"" "url: keeps the literal URL"
 assert_eq "$(fm "$SRC1" canonical_url) $(result canonical_url)" "\"$BASE/article\" $BASE/article" "canonical_url: without utm_source (v1); RESULT:canonical_url agrees"
-assert_eq "$(rget a1 '.request.schema + " " + .request.resource_key + " " + (.canonical_version|tostring) + " " + .request.render + " " + .request.external')" "mnemon-request/2 $BASE/article 1 auto off" "the receipt binds mnemon-request/2 with the canonical URL as resource_key, render auto, external off"
+assert_eq "$(rget a1 '.request.schema + " " + .request.resource_key + " " + (.canonical_version|tostring) + " " + .request.render + " " + .request.external')" "mnemon-request/2 $BASE/article 2 auto off" "the receipt binds mnemon-request/2 with the canonical URL as resource_key, render auto, external off"
 assert_eq "$(capfm "$SRC1" fetch) $(capfm "$SRC1" completeness) $(capfm "$SRC1" missing_lines) $(capfm "$SRC1" glued_lines) $(capfm "$SRC1" headings_missing)" "direct complete 0 0 0" "capture: fetch direct, completeness complete, nothing missing or glued"
 conv="$(capfm "$SRC1" converter)"
 [[ "$conv" == pandoc || "$conv" == dom-text ]] && pass "converter: $conv (defuddle is not on PATH)" || fail "converter" "'$conv'"
 [[ $HAVE_PANDOC -eq 1 ]] && assert_eq "$conv" "pandoc" "...pandoc, the first candidate that passed"
 [[ "$(capfm "$SRC1" reference_lines)" -gt 0 ]] && pass "reference_lines > 0 ($(capfm "$SRC1" reference_lines), eligible $(capfm "$SRC1" eligible_lines))" || fail "reference_lines > 0" "$(capfm "$SRC1" reference_lines)"
-assert_eq "$(capfm "$SRC1" acquisition) $(capfm "$SRC1" canonical_version) $(capfm "$SRC1" http_status) $(capfm "$SRC1" raw_kind) $(capfm "$SRC1" repairs)" 'ok 1 200 response "none"' "...acquisition ok, canonical_version 1, http_status 200, raw_kind response, repairs none"
+assert_eq "$(capfm "$SRC1" acquisition) $(capfm "$SRC1" canonical_version) $(capfm "$SRC1" http_status) $(capfm "$SRC1" raw_kind) $(capfm "$SRC1" repairs)" 'ok 2 200 response "none"' "...acquisition ok, canonical_version 2, http_status 200, raw_kind response, repairs none"
 assert_eq "$(fm "$SRC1" published)" '"2026-09-01"' "published: from article:published_time (source_type article)"
 assert_eq "$(fm "$SRC1" source_type) $(fm "$SRC1" title)" 'article "The Example Article"' "source_type article, the title from the page"
 assert_eq "$(fm "$SRC1" final_url)" "\"$BASE/article\"" "final_url from the fetch report: the canonical form is what the chain fetched"
@@ -721,7 +721,7 @@ assert_contains "$out" " capture-deps — " "doctor: the capture-deps line"
 assert_contains "$out" "defuddle missing" "...defuddle reported missing (it is off PATH here)"
 if [[ $HAVE_PANDOC -eq 1 ]]; then assert_contains "$out" "pandoc $(pandoc --version | head -1 | awk '{print $2}')" "...pandoc with its version"; else assert_contains "$out" "pandoc missing" "...pandoc reported missing"; fi
 assert_contains "$out" "ok egress — external_fetch off (never past the local chain)" "doctor: the egress line (off for instance t)"
-assert_contains "$out" "ok canonical — canonicalization v1 (capture-fetch.py --canonical-only)" "doctor: canonicalization v1 answered by capture-fetch.py"
+assert_contains "$out" "ok canonical — canonicalization v2 (capture-fetch.py --canonical-only; v1 receipts replay under v1)" "doctor: canonicalization v2 answered by capture-fetch.py"
 run "$MNEMON" --instance t2 doctor
 assert_contains "$out" "egress — external_fetch auto" "doctor: instance t2 reports external_fetch auto"
 assert_contains "$out" "FIRECRAWL_API_KEY not set" "...and that no key is set in this environment (never the key)"
@@ -731,9 +731,9 @@ assert_contains "$out" "$BASE/article" "...groups the two utm variants' folders 
 assert_contains "$out" "  $R1  url=$BASE/article?utm_source=x  supersedes=-  extract=ok" "...the first revision"
 assert_contains "$out" "  $R3  url=$BASE/article?utm_source=y  supersedes=$R1  extract=ok" "...and the recapture with its supersedes link"
 assert_contains "$out" "  $RG2  url=$BASE/  supersedes=$RG  extract=ok" "...the site landing's revisions form the second group"
-assert_contains "$out" "2 group(s) coincide under canonicalization v1; nothing was merged" "...two groups, nothing merged"
+assert_contains "$out" "2 group(s) coincide under canonicalization v2; nothing was merged" "...two groups, nothing merged"
 run "$MNEMON" --instance t audit --canonical --json
-assert_eq "$(printf '%s' "$out" | jq -r '.schema + " " + (.canonical_version|tostring) + " " + (.groups|length|tostring)')" "mnemon-canonical-audit/1 1 2" "...--json: mnemon-canonical-audit/1, v1, two groups"
+assert_eq "$(printf '%s' "$out" | jq -r '.schema + " " + (.canonical_version|tostring) + " " + (.groups|length|tostring)')" "mnemon-canonical-audit/1 2 2" "...--json: mnemon-canonical-audit/1, v2, two groups"
 
 # ==================================================================================================
 echo "--- (j) status: superseded and chunked counts ---"

@@ -252,7 +252,7 @@ assert_eq "$(fm "$csrc" origin) $(fm "$csrc" resource_kind)" "file url" "origin 
 assert_eq "$(fm "$csrc" url)" "\"https://docs.example.com/document/d/ABC/edit?usp=sharing&utm_source=slack\"" "url: is the literal given URL"
 assert_eq "$(fm "$csrc" canonical_url)" "\"https://docs.example.com/document/d/ABC/edit?usp=sharing\"" "canonical_url: the computed v1 form"
 assert_eq "$(fm "$csrc" origin_path)" "\"$TEST_TMPDIR/doc-v1.md\"" "origin_path: the file"
-assert_eq "$(capfm "$csrc" canonical_version)" "1" "capture.canonical_version 1"
+assert_eq "$(capfm "$csrc" canonical_version)" "2" "capture.canonical_version 2"
 assert_eq "$(result canonical_url)" "https://docs.example.com/document/d/ABC/edit?usp=sharing" "RESULT:canonical_url printed"
 assert_eq "$(rget cu-1 '.request.resource_kind') $(rget cu-1 '.request.resource_key') $(rget cu-1 '.request.origin') $(rget cu-1 '.request.url')" "url https://docs.example.com/document/d/ABC/edit?usp=sharing file https://docs.example.com/document/d/ABC/edit?usp=sharing&utm_source=slack" "the request: resource url/canonical key, origin file, the literal url"
 assert_eq "$(rget cu-1 '.request.input_sha256')" "$(shasum -a 256 "$TEST_TMPDIR/doc-v1.md" | cut -c1-64)" "...input_sha256 binds the file's bytes"

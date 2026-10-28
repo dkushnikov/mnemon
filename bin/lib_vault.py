@@ -386,7 +386,7 @@ def read_folder(sources: str, name: str, snapshot: dict) -> dict:
 
 def resource_relation(a: dict, b: dict) -> str:
     """same · different · incomparable — by `resource_sha256` when both carry it (the deciding
-    key), else by the canonical URL v1 when both have one (S1)."""
+    key), else by the canonical URL (current version) when both have one (S1)."""
     if a["resource_sha256"] and b["resource_sha256"]:
         return "same" if a["resource_sha256"] == b["resource_sha256"] else "different"
     if a["canonical"] and b["canonical"]:

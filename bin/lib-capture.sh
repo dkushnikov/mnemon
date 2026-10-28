@@ -107,8 +107,9 @@
 #   files. Exit 0 extracted / skipped-duplicate / replay of a complete capture · 1 failed or
 #   integrity-error · 2 usage/contract · 3 extractor environment missing before publication ·
 #   4 source published, extract not · 75 lock held — with `RESULT:status=locked`,
-#   `error_class=locked`, `retryable=true` and nothing else set (GH #30): the gateway waits for
-#   vault-lock.py instead of exec'ing it, so the refusal still reaches a RESULT parser.
+#   `error_class=locked`, `retryable=true` and nothing else set (GH #30): vault-lock.py prints the
+#   block itself on its refusal (`--locked-result <capture_id>`, passed by the dispatcher's `add`
+#   and by cap_reexec_under_lock), the inherited-descriptor refusal prints it from cap_under_lock.
 
 _LIB_CAPTURE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -785,14 +786,9 @@ cap_reexec_under_lock() {  # <script> <args…>
   fi
   unset MNEMON_VAULT_LOCK_FD MNEMON_VAULT_LOCK_INODE
   export MNEMON_VAULT_LOCK_REEXEC=1
-  # Not an exec: this shell waits so that a refusal (exit 75) can still print its RESULT block.
-  # It holds no descriptor — vault-lock.py opens the lock file in its own process and *becomes* the
-  # capture (execvp), so nothing here can release the lock early (§12 A1); any other status is the
-  # capture's own and is passed through untouched.
-  local rc=0
-  python3 "$_LIB_CAPTURE_DIR/vault-lock.py" --vault "$VAULT_PATH" -- "$@" || rc=$?
-  if [[ $rc -eq 75 ]]; then cap_result_locked; fi
-  exit $rc
+  # an exec: the PID stays the capture's, signals reach it; on a refusal vault-lock.py itself prints
+  # the §3.6 block (--locked-result, GH #30) before exit 75 — no waiting parent (reviewer A P3-1)
+  exec python3 "$_LIB_CAPTURE_DIR/vault-lock.py" --vault "$VAULT_PATH" --locked-result "${CAPTURE_ID:-}" -- "$@"
 }
 
 # For a background subshell that must not keep the lock alive (the qmd refresh): close the
@@ -869,16 +865,19 @@ cap_resource_kind() {   # <origin>
 # says on stderr (the warning about ignored test variables, §3.2) goes to the attempt's stderr.txt,
 # or to the gateway's own stderr before an attempt dir exists (--dry-run, identity) — never into
 # the JSON the parser reads.
-cap_canonical_lookup() {   # <url>
-  local url="$1" json rc=0 errf detail
+cap_canonical_lookup() {   # <url> [canonical version — a replay binds under the one its receipt recorded]
+  local url="$1" ver="${2:-}" json rc=0 errf detail
+  local -a vargs
+  vargs=()
+  [[ -n "$ver" ]] && vargs=(--canonical-version "$ver")
   url="$(printf '%s' "$url" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
-  [[ "${CAP_CANON_FOR:-}" == "$url" && -n "${CANONICAL_URL:-}" ]] && return 0
+  [[ "${CAP_CANON_FOR:-}" == "$url@$ver" && -n "${CANONICAL_URL:-}" ]] && return 0
   if [[ ! -x "$CAP_FETCH_CMD" ]]; then
     echo "ERROR: $CAP_FETCH_CMD is missing or not executable — the capture layer (bin/capture-fetch.py) is not installed" >&2
     exit 3
   fi
   errf="$(mktemp "${TMPDIR:-/tmp}/mnemon-canonical.XXXXXX")"
-  json="$("$CAP_FETCH_CMD" --canonical-only "$url" 2>"$errf")" || rc=$?
+  json="$("$CAP_FETCH_CMD" --canonical-only ${vargs[@]+"${vargs[@]}"} "$url" 2>"$errf")" || rc=$?
   detail="$(tail -1 "$errf" 2>/dev/null | tr -d '\000-\037' | cut -c1-300)"
   if [[ -s "$errf" ]]; then
     if [[ -n "${ATTEMPT_DIR:-}" && -d "$ATTEMPT_DIR" ]]; then cat "$errf" >> "$ATTEMPT_DIR/stderr.txt"; else cat "$errf" >&2; fi
@@ -892,7 +891,7 @@ cap_canonical_lookup() {   # <url>
   FETCH_URL="$(printf '%s' "$json" | jq -r '.fetch_url // .canonical_url')"
   URL_KIND="$(printf '%s' "$json" | jq -r '.kind // "page"')"
   REQUESTED_VERSION="$(printf '%s' "$json" | jq -r '.requested_version // ""')"
-  CAP_CANON_FOR="$url"
+  CAP_CANON_FOR="$url@$ver"
   return 0
 }
 
@@ -907,7 +906,9 @@ cap_resource_identity() {
     url)
       RESOURCE_KEY="$(printf '%s' "$URL" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
       if [[ "${CAP_BIND_SCHEMA:-$CAP_REQUEST_SCHEMA}" != "$CAP_REQUEST_SCHEMA_V1" ]]; then
-        cap_canonical_lookup "$RESOURCE_KEY"
+        # a /2 replay canonicalizes under the version its receipt recorded (CAP_BIND_CANON_VERSION,
+        # set by cap_binding_check): the rule set is frozen per version, the identity never moves
+        cap_canonical_lookup "$RESOURCE_KEY" "${CAP_BIND_CANON_VERSION:-}"
         RESOURCE_KEY="$CANONICAL_URL"
       fi
       # a site plan given as a file is the capture's input (D9, §12 A4), hashed like --file-text
@@ -1017,9 +1018,12 @@ cap_canonical_request() {
        {schema:$schema, origin:$origin, resource_kind:$kind, resource_key:$key, input_sha256:($input|nz),
         url:($url|nz), ref_path:($ref|nz), context:$context, source_type:($st|nz), recapture:$recapture,
         supersedes:($sup|sup), render:$render, external:$external, site:($site|nz),
-        requested_version:(if $rv == "" then null else ($rv|tonumber) end), canonical_version:1, depth:$depth}
-       + (if $tier == "bookmark" then {tier:$tier} else {} end)')"
-       # (`tier` is bound only when it is bookmark — every full request keeps the hash it always had, B1)
+        requested_version:(if $rv == "" then null else ($rv|tonumber) end), canonical_version:$cv, depth:$depth}
+       + (if $tier == "bookmark" then {tier:$tier} else {} end)' --argjson cv "${CANONICAL_VERSION:-1}")"
+       # (`tier` is bound only when it is bookmark — every full request keeps the hash it always had, B1;
+       # `canonical_version` is the version the url identity was computed under — the lookup's, i.e. the
+       # current one for a new capture and the receipt's on a replay; a non-url request keeps 1, so every
+       # existing non-url receipt binds unchanged)
   fi
   REQUEST_SHA256="$(cap_sha256_str "$REQUEST_JSON")"
 }
@@ -1624,9 +1628,24 @@ cap_acquire_render() {
 # --budget-s <remaining> --context <frozen acquisition context>; never for --render, arXiv, a site
 # capture, --depth off or a paywall-teaser landing. Returns 0 when it folded (depth.json and the
 # manifest in the attempt dir).
+# Why a capture is not folded — one predicate for the fold and the dry-run's `Depth:` line (GH #12,
+# reviewer A P2-2). Prints the reason, or nothing when the depth fold may run: a plain url page
+# (origin url, not arXiv, not a site, not --render), a full tier, --depth auto|force.
+cap_depth_reason() {
+  if [[ "${TIER:-full}" == "bookmark" ]]; then printf 'a bookmark card fetches nothing'
+  elif [[ "${ORIGIN:-}" != "url" ]]; then case "${ORIGIN:-?}" in a*|e*|i*|o*|u*) printf 'an %s capture is never folded' "$ORIGIN" ;; *) printf 'a %s capture is never folded' "${ORIGIN:-?}" ;; esac
+  elif [[ -z "${URL:-}" ]]; then printf 'no url'
+  elif [[ -n "${SITE_MODE:-}" ]]; then printf 'a site capture folds nothing'
+  elif [[ "${URL_KIND:-page}" == "arxiv" ]]; then printf 'an arXiv paper is never folded'
+  elif ${RENDER:-false}; then printf -- '--render: a forced render is never folded'
+  elif [[ "${DEPTH:-auto}" == "off" ]]; then printf -- '--depth off'
+  fi
+  return 0
+}
+
 cap_depth_fold_run() {   # <landing file>
   DEPTH_MANIFEST_FILE=""
-  [[ "$ORIGIN" == "url" && -n "$URL" && "$DEPTH" != "off" && "${URL_KIND:-page}" != "arxiv" && -z "${SITE_MODE:-}" ]] || return 1
+  [[ -z "$(cap_depth_reason)" ]] || return 1
   ${RENDER:-false} && return 1
   local fold="${MNEMON_DEPTH_FOLD_CMD:-$_LIB_CAPTURE_DIR/kb-depth-fold.py}"
   [[ -x "$fold" ]] || return 1
@@ -1823,6 +1842,7 @@ cap_media_run() {   # <class on exit 1: fetch|convert> <args…>
   local cls="$1" rc=0 stage ej="$ATTEMPT_DIR/error.json" eclass="" line=""
   shift
   rm -f "$ej"
+  FAIL_CLASS=""; FAIL_MSG=""
   "$(cap_media_tool)" "$@" --timeout "${TRANSCRIBE_TIMEOUT:-3600}" 2>>"$ATTEMPT_DIR/stderr.txt" || rc=$?
   FAIL_STAGE=""; FAIL_RETRYABLE=""; FAIL_ACQUISITION=""
   case $rc in

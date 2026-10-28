@@ -40,7 +40,20 @@ assert_contains "$out" "Depth: force" "--depth force is shown"
 run_gw --url "https://example.com/test" --depth off --dry-run
 assert_contains "$out" "Depth: off" "--depth off is shown"
 run_gw --url "https://arxiv.org/abs/2401.12345" --depth force --dry-run
-assert_contains "$out" "Depth: off (" "an arXiv capture says depth is off whatever the flag"
+assert_contains "$out" "Depth: off (an arXiv paper is never folded)" "an arXiv capture says depth is off whatever the flag, and why"
+# the line answers from the fold's own predicate (reviewer A P2-2): every case that never folds says so
+run_gw --url "https://example.com/test" --render --dry-run
+assert_contains "$out" "Depth: off (--render: a forced render is never folded)" "--render: off, with the reason"
+run_gw --url "https://youtube.com/watch?v=abc123" --dry-run
+assert_contains "$out" "Depth: off (a youtube capture is never folded)" "a youtube capture: off"
+run_gw --url "https://example.com/a.pdf" --origin pdf --dry-run
+assert_contains "$out" "Depth: off (a pdf capture is never folded)" "a pdf url: off"
+run_gw --url "https://example.com/test" --tier bookmark --dry-run
+assert_contains "$out" "Depth: off (a bookmark card fetches nothing)" "a bookmark card: off"
+run_gw --url "https://example.com/talk.mp3" --origin audio --dry-run
+assert_contains "$out" "Depth: off (an audio capture is never folded)" "an audio url: off"
+run_gw --url "https://example.com/test" --depth off --dry-run
+assert_contains "$out" "Depth: off (--depth off)" "--depth off names the flag"
 
 # --- Test 2: Auto-detection of YouTube URLs ---
 run_gw --url "https://youtube.com/watch?v=abc123" --dry-run

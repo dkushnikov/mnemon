@@ -862,7 +862,7 @@ assert_eq "$rl" 'a "quoted" \ title' "knowledge-reindex parse_field decodes exac
 # =============================================================================================
 # Phase 2 — the capture layer's gateway side (docs/specs/2026-10-15-capture-layer.md §4, §7)
 # =============================================================================================
-echo "--- p2.1 identity under canonical v1 (§7.2) ---"
+echo "--- p2.1 identity under canonical v2 (v1 frozen for replays; §7.2) ---"
 stub_reset
 run_gw --url "https://example.com/post?utm_source=a" --capture-id can-1
 assert_eq "$rc $(result status)" "0 extracted" "a url capture under canonical identity exits 0"
@@ -870,9 +870,37 @@ revc="$(result revision)"
 assert_eq "$(result canonical_url)" "https://example.com/post" "RESULT:canonical_url strips the tracking parameter"
 assert_eq "$(fm "$VAULT/Sources/$revc/source.md" canonical_url)" '"https://example.com/post"' "source.md carries canonical_url (the computed identity)"
 assert_eq "$(fm "$VAULT/Sources/$revc/source.md" url)" '"https://example.com/post?utm_source=a"' "...and the literal url"
-assert_eq "$(capfm "$VAULT/Sources/$revc/source.md" canonical_version)" "1" "...capture.canonical_version 1"
-assert_eq "$(rget can-1 '.request.schema') $(rget can-1 '.request.resource_key') $(rget can-1 '.request.render') $(rget can-1 '.request.external') $(rget can-1 '.request.site') $(rget can-1 '.request.requested_version') $(rget can-1 '.request.canonical_version')" "mnemon-request/2 https://example.com/post auto off null null 1" "the receipt binds a mnemon-request/2: the canonical key and the new fields at their defaults"
-assert_eq "$(rget can-1 '.request_schema') $(rget can-1 '.canonical_url') $(rget can-1 '.canonical_version')" "mnemon-request/2 https://example.com/post 1" "...and records request_schema / canonical_url / canonical_version"
+assert_eq "$(capfm "$VAULT/Sources/$revc/source.md" canonical_version)" "2" "...capture.canonical_version 2 (the current rule set)"
+assert_eq "$(rget can-1 '.request.schema') $(rget can-1 '.request.resource_key') $(rget can-1 '.request.render') $(rget can-1 '.request.external') $(rget can-1 '.request.site') $(rget can-1 '.request.requested_version') $(rget can-1 '.request.canonical_version')" "mnemon-request/2 https://example.com/post auto off null null 2" "the receipt binds a mnemon-request/2: the canonical key and the new fields at their defaults"
+assert_eq "$(rget can-1 '.request_schema') $(rget can-1 '.canonical_url') $(rget can-1 '.canonical_version')" "mnemon-request/2 https://example.com/post 2" "...and records request_schema / canonical_url / canonical_version"
+# a non-url request keeps canonical_version 1 (no url identity to version): every existing text/file receipt binds unchanged
+printf 'a text under the v2 engine\n' > "$TEST_TMPDIR/cv.txt"
+run_gw_stdin "$TEST_TMPDIR/cv.txt" --origin text --capture-id can-text
+assert_eq "$rc $(rget can-text '.request.canonical_version')" "0 1" "a text request's canonical_version stays 1"
+# the frozen versions (GH #12 / Codex review 2026-10-28): a receipt recorded under v1 with a share-tagged X URL
+# replays under v1 — the same request hash, no `capture-id reuse` refusal — while a new capture of the same
+# post is a v2 identity; the lookup compares under the current rules, so the two coincide
+run_gw --url "https://x.com/u/status/777?s=20" --capture-id can-x2
+assert_eq "$rc $(result canonical_url) $(rget can-x2 '.request.canonical_version')" "0 https://x.com/u/status/777 2" "a share-tagged X URL is a v2 identity without the share tag"
+revx="$(result revision)"
+python3 - "$(receipt can-x2)" <<'PY' && pass "the receipt rewritten as a v1 recording (resource_key with ?s=20, canonical_version 1, request_sha256 recomputed)" || fail "rewrite the receipt as v1" "python failed"
+import hashlib, json, sys
+p = sys.argv[1]
+r = json.load(open(p, encoding="utf-8"))
+r["request"]["resource_key"] = "https://x.com/u/status/777?s=20"
+r["request"]["canonical_version"] = 1
+r["canonical_version"] = 1
+r["canonical_url"] = "https://x.com/u/status/777?s=20"
+r["request_sha256"] = hashlib.sha256(json.dumps(r["request"], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+json.dump(r, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+PY
+run_gw --url "https://x.com/u/status/777?s=20" --capture-id can-x2
+assert_eq "$rc $(result status) $(result revision)" "0 extracted $revx" "replaying the v1 receipt with its literal URL binds under v1 (no 'capture-id reuse' exit 2) and answers from the files"
+run_gw --url "https://x.com/u/status/777?s=46&t=zz" --capture-id can-x2
+assert_eq "$rc" "2" "...while another share tag is a different v1 request (binding mismatch, as v1 always said)"
+run_gw --url "https://x.com/u/status/777?s=99" --capture-id can-x3
+assert_eq "$rc $(result status) $(result revision)" "0 skipped-duplicate $revx" "a new capture of the same post with another share tag finds the v1 folder under the current rules: skipped-duplicate"
+assert_eq "$(result canonical_url)" "https://x.com/u/status/777" "...reporting the v2 identity"
 assert_eq "$(rget can-1 '.resource_sha256')" "$(printf 'url:https://example.com/post' | shasum -a 256 | cut -c1-64)" "resource_sha256 = sha256(\"url:\" + canonical_url)"
 assert_eq "$revc" "$(date +%Y-%m-%d)_$(printf 'https://example.com/post' | shasum -a 256 | cut -c1-8)" "the folder label = sha256(canonical_url)[:8]"
 python3 - "$(receipt can-1)" "$FIX/reports/receipts/request-v2-page.json" <<'PY' && pass "the receipt's key set equals receipts/request-v2-page.json (top level, request, capture_report, calls[])" || fail "receipt key set == the frozen fixture" "differs"
@@ -1085,7 +1113,7 @@ assert_eq "$rc $(rget m-rep '.capture_report.text.schema')" "0 mnemon-capture-te
 src1="$VAULT/Sources/$(rget m-rep '.revision')/source.md"
 assert_eq "$(capfm "$src1" fetch) $(capfm "$src1" converter) $(capfm "$src1" acquisition) $(capfm "$src1" completeness)" "direct defuddle ok unknown" "capture: fetch direct, converter defuddle, acquisition ok, completeness as the converter reports it"
 assert_eq "$(capfm "$src1" reference_lines) $(capfm "$src1" eligible_lines) $(capfm "$src1" missing_lines) $(capfm "$src1" glued_lines) $(capfm "$src1" headings_missing) $(capfm "$src1" repairs)" "2 0 0 0 0 \"none\"" "...the counts: the two reference lines of the stub raw (a 1-word heading and a 4-word line, neither eligible), nothing missing; repairs none"
-assert_eq "$(capfm "$src1" canonical_version) $(capfm "$src1" http_status)" "1 200" "...canonical_version 1, http_status 200"
+assert_eq "$(capfm "$src1" canonical_version) $(capfm "$src1" http_status)" "2 200" "...canonical_version 2, http_status 200"
 assert_eq "$(fm "$src1" final_url)" '"https://example.com/report-first"' "...final_url from the fetch report"
 assert_eq "$(grep -c '^  egress:' "$src1") $(grep -c '^  blocked_kind:' "$src1")" "0 0" "...egress and blocked_kind only when they apply"
 # the flags and the policy reach capture-fetch.py

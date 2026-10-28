@@ -20,7 +20,7 @@ def bump(name):
     open(p, "w").write(str(n + 1) + "\n")
 
 
-def canonical(url):
+def canonical(url, version=2):
     u = url.strip()
     parts = urlsplit(u)
     if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
@@ -59,15 +59,22 @@ def canonical(url):
                     "requested_version": requested}
     if host in ("github.com", "www.github.com"):
         kind = "github"
+    # version 2 (GH #12): the host-scoped share parameters — X's s/t, Substack's r — mirrored here so the
+    # gateway tests see the same identity the real resolver computes; v1 keeps them
+    if version >= 2 and query:
+        share = ("s", "t") if host in ("x.com", "www.x.com", "mobile.x.com", "m.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com", "m.twitter.com") \
+            else ("r",) if host.endswith(".substack.com") and host != "www.substack.com" else ()
+        if share:
+            query = "&".join(p for p in query.split("&") if p.split("=", 1)[0] not in share)
     cu = urlunsplit((parts.scheme.lower(), netloc, path, query, frag))
     return {"canonical_url": cu, "kind": kind, "fetch_url": cu, "requested_version": requested}
 
 
-def canonical_obj(url):
-    c = canonical(url)
+def canonical_obj(url, version=2):
+    c = canonical(url, version)
     if c is None:
         return {"error_class": "invalid-url", "error": f"not an http(s) URL without userinfo: {url.strip()}"}
-    return {"schema": "mnemon-canonical/1", "url": url.strip(), "canonical_url": c["canonical_url"], "canonical_version": 1,
+    return {"schema": "mnemon-canonical/1", "url": url.strip(), "canonical_url": c["canonical_url"], "canonical_version": version,
             "kind": c["kind"], "fetch_url": c["fetch_url"], "requested_version": c["requested_version"]}
 
 
@@ -75,13 +82,17 @@ def main():
     argv = sys.argv[1:]
     if "--canonical-only" in argv:
         bump("canon-count")
+        version = 2
+        if "--canonical-version" in argv:
+            version = int(argv[argv.index("--canonical-version") + 1])
+            del argv[argv.index("--canonical-version"):argv.index("--canonical-version") + 2]
         if "--stdin" in argv:
             for line in sys.stdin.read().splitlines():
                 if line.strip():
-                    print(json.dumps(canonical_obj(line), ensure_ascii=False))
+                    print(json.dumps(canonical_obj(line, version), ensure_ascii=False))
             return 0
         url = [a for a in argv if not a.startswith("--")][0]
-        obj = canonical_obj(url)
+        obj = canonical_obj(url, version)
         if "error_class" in obj:
             print(json.dumps(obj), file=sys.stderr)
             return 2

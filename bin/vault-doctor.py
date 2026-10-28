@@ -65,6 +65,7 @@ from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lib_vault as lv  # noqa: E402
+resolve = lv.resolve   # the one identity rule (canonicalization, current version)
 import lib_research as lr  # noqa: E402
 
 SCHEMA = "mnemon-doctor-data/1"
@@ -273,11 +274,21 @@ def check_identity(scan: dict, cfg: dict) -> Check:
                 seen.add(frozenset(members))
                 groups.append((label + " " + key, members))
     # severity by cause (S4): a duplicate that includes a managed revision bypassed the engine's dedup
-    # (fail); a group of legacy revisions only is a pre-contract capture (legacy nonconformity, warn)
+    # (fail); a group of legacy revisions only is a pre-contract capture (legacy nonconformity, warn);
+    # a canonical group whose members were captured under *different* recorded identities (two
+    # share-tagged X URLs before canonical v2, say) is a pre-rule duplicate — the rule moved, the
+    # engine did nothing wrong — and warns with the audit door (reviewer A P2-1, 2026-10-28)
     klass = {r["name"]: r["klass"] for r in current}
+    recorded = {r["name"]: (r["canonical_url"] or r["url"] or "") for r in current}
     legacy_only = 0
+    pre_rule = 0
     for key, members in groups:
-        if any(klass.get(m) == "managed" for m in members):
+        distinct_recorded = len({recorded.get(m) for m in members}) > 1
+        if key.startswith("canonical ") and distinct_recorded and all(klass.get(m) == "managed" for m in members):
+            pre_rule += 1
+            c.add("warn", {"id": " + ".join(members), "reason": "pre-rule duplicate (%s) — captured as distinct identities under an older canonicalization, coinciding under the current rules; resolve: mnemon audit --canonical" % key,
+                           "members": members, "rating": None, "words": None})
+        elif any(klass.get(m) == "managed" for m in members):
             c.add("fail", {"id": " + ".join(members), "reason": "duplicate (%s)" % key, "members": members,
                            "rating": None, "words": None})
         else:
@@ -295,12 +306,14 @@ def check_identity(scan: dict, cfg: dict) -> Check:
         c.add("warn", {"id": " + ".join(members), "reason": "inconsistent canonical_url for resource_sha256 %s…" % key[:12],
                        "members": members, "rating": None, "words": None})
     c.counts = {"current": len(current), "duplicate_groups": len(groups), "legacy_only_groups": legacy_only,
-                "inconsistent": len(inconsistent), "unkeyed": unkeyed}
+                "pre_rule_groups": pre_rule, "inconsistent": len(inconsistent), "unkeyed": unkeyed}
     share = "0 share a resource" if not groups else "%s share a resource: %s" % (
         plural(len(groups), "group"), names([" + ".join(m) for _, m in groups], 3))
-    c.detail = "%d current revisions, %s (resource_sha256 · canonical URL v1)" % (len(current), share)
+    c.detail = "%d current revisions, %s (resource_sha256 · canonical URL v%d)" % (len(current), share, resolve.VERSION)
     if legacy_only:
         c.detail += "; legacy-only %d" % legacy_only
+    if pre_rule:
+        c.detail += "; pre-rule %d (canonicalization moved; mnemon audit --canonical)" % pre_rule
     if inconsistent:
         c.detail += "; inconsistent %d" % len(inconsistent)
     c.detail += "; unkeyed %d (non-url legacy)" % unkeyed

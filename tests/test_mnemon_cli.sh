@@ -441,7 +441,7 @@ QCACHE="$TEST_TMPDIR/cache"
 run env XDG_CACHE_HOME="$QCACHE" PATH="$QSTUB:$PATH" "$MNEMON" --instance qinst doctor
 assert_contains "$out" "ok qmd — $QSTUB/qmd" "doctor: ok qmd when search_provider is qmd and qmd is on PATH"
 # GH #9: the one note that mnemon search scans with grep is the doctor's qmd-search line, not a line on every search
-assert_contains "$out" "warn qmd-search — search_provider is qmd, but mnemon search scans with grep" "doctor: the qmd-search note, once"
+assert_contains "$out" "ok qmd-search — note: search_provider is qmd, but mnemon search scans with grep" "doctor: the qmd-search note, once, informational"
 assert_eq "$(printf '%s\n' "$out" | grep -c 'qmd-search')" "1" "...exactly one qmd-search line"
 qout="$out"; run "$MNEMON" doctor
 assert_not_contains "$out" "qmd-search" "...and none for a grep instance"
@@ -507,11 +507,11 @@ assert_not_contains "$out" "firecrawl:" "...and only those"
 sed -i.bak '/^external_fetch/d' "$CFG_DIR/instances/alpha.yaml"; rm -f "$CFG_DIR/instances/alpha.yaml.bak"
 
 run "$MNEMON" doctor
-assert_contains "$out" " canonical — canonicalization v1" "doctor: the canonical line names canonicalization v1"
+assert_contains "$out" " canonical — canonicalization v2" "doctor: the canonical line names canonicalization v2"
 if [[ -f "$MNEMON_ROOT/bin/capture-fetch.py" ]]; then
-  assert_contains "$out" "ok canonical — canonicalization v1 (capture-fetch.py --canonical-only)" "...answered by capture-fetch.py --canonical-only"
+  assert_contains "$out" "ok canonical — canonicalization v2 (capture-fetch.py --canonical-only; v1 receipts replay under v1)" "...answered by capture-fetch.py --canonical-only"
 else
-  assert_contains "$out" "warn canonical — canonicalization v1 expected, but bin/capture-fetch.py is not present" "...warns while the capture layer is absent from this engine"
+  assert_contains "$out" "warn canonical — canonicalization v2 expected, but bin/capture-fetch.py is not present" "...warns while the capture layer is absent from this engine"
 fi
 run "$MNEMON" doctor --json
 names=$(printf '%s' "$out" | jget '" ".join(c["name"] for c in d["checks"])')
@@ -683,7 +683,7 @@ receipt c-card bookmarked '"2026-10-15_aaaaaaaa"'      # a card whose source.md 
 receipt c-card-gone bookmarked '"2026-10-15_yyyyyyyy"' # a card whose folder is gone: missing (phase 3-capture)
 printf 'not a receipt\n' > "$VSTATE_A/captures/junk.json"
 run "$MNEMON" doctor
-assert_contains "$out" "warn captures — 2 failed/extract-failed receipt(s) — finish with: mnemon add --resume c-failed; all of them: mnemon doctor --list captures; 3 receipt(s) point at missing files; 1 unreadable receipt(s); list: mnemon doctor --list captures" "doctor: captures warns about failed receipts (with the --resume hint), missing files (a bookmarked receipt's gone card among them) and unreadable receipts"
+assert_contains "$out" "warn captures — 2 failed/extract-failed receipt(s) — finish with: mnemon add --resume c-failed; 3 receipt(s) point at missing files; 1 unreadable receipt(s); all of them: mnemon doctor --list captures" "doctor: captures warns about failed receipts (with the --resume hint), missing files (a bookmarked receipt's gone card among them) and unreadable receipts"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^fail captures' || true)" "0" "...as a warning, never a failure"
 receipt c-integ integrity-error '"2026-10-15_aaaaaaaa"'
 run "$MNEMON" doctor

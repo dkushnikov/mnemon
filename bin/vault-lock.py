@@ -3,6 +3,12 @@
 
     vault-lock.py --vault <path> -- <command> [args…]   run the command under the lock
     vault-lock.py --vault <path> --probe                 print `held` or `free` (for `mnemon doctor`)
+    vault-lock.py --vault <path> --locked-result <capture_id|""> -- <command> [args…]
+        the same, and when the lock is held print the gateway's §3.6 RESULT block on stdout
+        (status locked · error_class locked · retryable true · extract none; revision, path,
+        title and hash empty; the capture_id as given) before exit 75 — so `mnemon add` and the
+        gateway's own re-exec answer a RESULT parser instead of nothing (GH #30). Nothing else
+        changes: the command is still exec'd, the PID stays the capture's.
 
 The lock file is `<vault state>/lock`, where the vault state dir is
 `${XDG_STATE_HOME:-$HOME/.local/state}/mnemon/vaults/<sha256(physical vault path)[:16]>/`
@@ -115,17 +121,28 @@ def held_message(vault: str) -> str:
     return f"vault-lock: another writer holds the vault lock ({lock_path(vault)}); retry when it finishes"
 
 
+def locked_result(capture_id: str) -> None:
+    """The gateway's RESULT block for a refusal on the vault lock (capture contracts §3.6, GH #30)."""
+    cid = "".join(ch for ch in (capture_id or "") if ch >= " " and ch != "\x7f")
+    for line in ("RESULT:capture_id=" + cid, "RESULT:revision=", "RESULT:path=", "RESULT:status=locked",
+                 "RESULT:title=", "RESULT:source_sha256=", "RESULT:extract=none", "RESULT:error_class=locked",
+                 "RESULT:retryable=true"):
+        print(line)
+    sys.stdout.flush()
+
+
 def usage(msg: str = "") -> int:
     if msg:
         print(f"vault-lock: {msg}", file=sys.stderr)
-    print("usage: vault-lock.py --vault <path> -- <command> [args…] | vault-lock.py --vault <path> --probe",
-          file=sys.stderr)
+    print("usage: vault-lock.py --vault <path> [--locked-result <capture_id>] -- <command> [args…] | "
+          "vault-lock.py --vault <path> --probe", file=sys.stderr)
     return 2
 
 
 def main(argv: list) -> int:
     vault = ""
     probe = False
+    result_cid = None
     command: list = []
     i = 1
     while i < len(argv):
@@ -138,6 +155,11 @@ def main(argv: list) -> int:
         elif a == "--probe":
             probe = True
             i += 1
+        elif a == "--locked-result":
+            if i + 1 >= len(argv):
+                return usage("--locked-result requires a capture id (may be empty)")
+            result_cid = argv[i + 1]
+            i += 2
         elif a == "--":
             command = argv[i + 1:]
             break
@@ -147,6 +169,8 @@ def main(argv: list) -> int:
         return usage("--vault is required")
     if probe and command:
         return usage("--probe takes no command")
+    if probe and result_cid is not None:
+        return usage("--locked-result goes with a command")
     if not probe and not command:
         return usage("a command after -- is required")
 
@@ -160,11 +184,15 @@ def main(argv: list) -> int:
     if fd is not None:
         if not held:
             print(held_message(vault), file=sys.stderr)
+            if result_cid is not None:
+                locked_result(result_cid)
             return LOCK_HELD_EXIT
     else:
         fd = open_lock(vault)
         if not try_lock(fd):
             print(held_message(vault), file=sys.stderr)
+            if result_cid is not None:
+                locked_result(result_cid)
             return LOCK_HELD_EXIT
     keep_descriptor(fd)
     try:

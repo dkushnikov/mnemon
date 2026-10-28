@@ -415,14 +415,14 @@ cap_dry_run() {
   fi
   if [[ "$kind" == "url" ]]; then
     echo "Fetch: render $( $RENDER && echo force || { $NO_RENDER && echo off || echo auto; } ), external $( { [[ "${EXTERNAL_FETCH:-off}" == auto ]] && ! $NO_EXTERNAL && ! $NO_RENDER; } && echo auto || echo off ), acquire timeout ${ACQUIRE_TIMEOUT:-300}s"
-    # the depth mode the flag set (GH #12): the fold itself is decided after acquisition, like the chunk plan
-    if [[ -n "${SITE_MODE:-}" ]]; then echo "Depth: off (a site capture folds nothing)"
-    elif [[ "${URL_KIND:-page}" == "arxiv" || "$ORIGIN" == "youtube" ]]; then echo "Depth: off ($ORIGIN captures are never folded)"
+    # the depth mode the flag set (GH #12), through the same predicate the fold uses: the fold
+    # itself is decided after acquisition, like the chunk plan
+    depth_why="$(cap_depth_reason)"
+    if [[ -n "$depth_why" ]]; then echo "Depth: off ($depth_why)"
     else
       case "$DEPTH" in
         auto)  echo "Depth: auto (decided after acquisition: a thin landing is probed and its same-entity targets folded)" ;;
         force) echo "Depth: force (the landing is probed and folded whatever its size)" ;;
-        off)   echo "Depth: off" ;;
       esac
     fi
   fi
@@ -549,6 +549,9 @@ cap_binding_check() {
   want="$(cap_receipt_get "$CAPTURE_ID" '.request_sha256')"
   schema="$(cap_receipt_get "$CAPTURE_ID" '.request.schema // "mnemon-request/1"')"
   CAP_BIND_SCHEMA="$schema"
+  # a /2 receipt binds its url identity under the canonicalization version it recorded (the rule
+  # sets are frozen per version, §3.1): a receipt written under v1 replays under v1 after v2 shipped
+  CAP_BIND_CANON_VERSION="$(cap_receipt_get "$CAPTURE_ID" '.request.canonical_version // .canonical_version // ""')"
   if [[ "$schema" == "$CAP_REQUEST_SCHEMA_V1" ]]; then
     if $NO_RENDER || $NO_EXTERNAL || [[ -n "$SITE_MODE" ]]; then
       cap_die2 "capture-id reuse with a different request: '$CAPTURE_ID' is a phase-1 request (mnemon-request/1) that binds no --no-render / --no-external / --site"
@@ -582,7 +585,7 @@ cap_binding_check() {
   fi
   cap_canonical_request
   [[ -n "${tmp:-}" ]] && rm -f "$tmp"
-  CAP_BIND_SCHEMA=""
+  CAP_BIND_SCHEMA=""; CAP_BIND_CANON_VERSION=""
   if [[ "$REQUEST_SHA256" != "$want" ]]; then
     cap_die2 "capture-id reuse with a different request: '$CAPTURE_ID' is bound to $(cap_receipt_get "$CAPTURE_ID" '.request | "\(.origin) \(.resource_kind) \(.resource_key)"') (context $(cap_receipt_get "$CAPTURE_ID" '.request.context'), schema $schema)"
   fi

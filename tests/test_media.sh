@@ -44,6 +44,7 @@ env | grep '^MNEMON_VAULT_LOCK_' > "$STUB_DIR/ytdlp-env" || true
 if [[ "${1:-}" == "--dump-single-json" ]]; then
   case "${STUB_YTDLP:-ok}" in
     wall) cat "$MEDIA_FIX/ytdlp-bot-wall.stderr.txt" >&2; exit 1 ;;
+    mixed) cat "$MEDIA_FIX/ytdlp-429-warning-then-private.stderr.txt" >&2; exit 1 ;;
     fail) echo "ERROR: [youtube] abc123xyz00: Video unavailable. This video is private" >&2; exit 1 ;;
   esac
   lang='"pt"'; [[ "${STUB_YTDLP_LANG:-}" == null ]] && lang=null
@@ -319,6 +320,13 @@ assert m.classify_wall(yta) == "bot-wall", m.classify_wall(yta)
 assert m.classify_wall("ERROR: unable to download: HTTP Error 429: Too Many Requests") == "rate-limit"
 assert m.classify_wall("ERROR: [youtube] abc: Video unavailable") is None
 assert m.classify_wall("") is None and m.classify_wall(None) is None
+# reviewer A P2-3: yt-dlp's transient 429 WARNINGs before a permanent ERROR are not a wall — the ERROR lines decide
+mixed = open(os.path.join(fix, "ytdlp-429-warning-then-private.stderr.txt"), encoding="utf-8").read()
+assert m.classify_wall(mixed) is None, m.classify_wall(mixed)
+assert m._wall_line(mixed).startswith("ERROR: [youtube] abc123xyz00: Private video"), m._wall_line(mixed)
+assert m.classify_wall("WARNING: HTTP Error 429\nERROR: [youtube] x: Sign in to confirm you're not a bot.") == "bot-wall"
+# the age gate is a login wall (D6), never retryable
+assert m.classify_wall("ERROR: [youtube] x: Sign in to confirm your age. This video may be inappropriate for some users.") == "login"
 assert m._wall_line(ytdlp).startswith("ERROR: [youtube] abc123xyz00: Sign in to confirm"), m._wall_line(ytdlp)
 PY
 stub_reset
@@ -352,6 +360,12 @@ STUB_YTDLP=fail run_media youtube "$URL" --out-dir "$DF" --timeout 20 --whisper-
 assert_eq "$rc $(jget "$DF/error.json" 'd["error_class"]') $(jget "$DF/error.json" 'd["kind"]') $(jget "$DF/error.json" 'd["retryable"]')" "1 failed null null" "a plain yt-dlp refusal → error.json failed, kind null, retryable null"
 assert_contains "$(jget "$DF/error.json" 'd["error"]')" "Video unavailable" "...the cause recorded"
 assert_contains "$err" "ERROR: yt-dlp metadata failed for" "...the phase-1 stderr message kept"
+# the mixed stderr through the tool: a plain failure with the ERROR line as the cause (not rate-limit, not retryable)
+stub_reset
+DM="$TEST_TMPDIR/out-mixed"
+STUB_YTDLP=mixed run_media youtube "$URL" --out-dir "$DM" --timeout 20 --whisper-model tiny
+assert_eq "$rc $(jget "$DM/error.json" 'd["error_class"]') $(jget "$DM/error.json" 'd["kind"]') $(jget "$DM/error.json" 'd["retryable"]')" "1 failed null null" "429 WARNINGs then a private-video ERROR → failed, no wall kind, not retryable (reviewer A P2-3)"
+assert_contains "$(jget "$DM/error.json" 'd["error"]')" "Private video" "...the ERROR line is the cause"
 shape="$(keyshape "$DF/error.json" "$FIX/reports/media-error.json" 2>&1 || true)"; case "$shape" in *"type/nullability differ: ['kind']"*|*"type/nullability differ: ['retryable']"*|*"type/nullability differ: ['kind', 'retryable']"*) pass "a failed error.json differs from the timeout fixture only in the nullable kind/retryable" ;; *"same keys"*) pass "a failed error.json has the fixture's keys" ;; *) fail "a failed error.json has the fixture's keys" "$shape" ;; esac
 
 # --- 4. --timeout: one budget, process groups torn down (D11, §12 A9) ---

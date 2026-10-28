@@ -58,7 +58,7 @@ class Audit(unittest.TestCase):
         self.assertEqual(self.snapshot(), before)
         d = json.loads(so)
         self.assertEqual(d["schema"], "mnemon-canonical-audit/1")
-        self.assertEqual(d["canonical_version"], 1)
+        self.assertEqual(d["canonical_version"], 2)
         groups = {g["canonical_url"]: g for g in d["groups"]}
         self.assertEqual(sorted(groups), ["https://example.com/other", "https://example.com/post"])
         post = groups["https://example.com/post"]["revisions"]
@@ -95,7 +95,7 @@ class Audit(unittest.TestCase):
         empty = tmpdir("mnemon-audit-empty-")
         os.makedirs(os.path.join(empty, "Sources"))
         rc, so, se = run_cli([AUDIT, empty])
-        self.assertEqual((rc, so.strip()), (0, "no canonical duplicates (canonicalization v1)"))
+        self.assertEqual((rc, so.strip()), (0, "no canonical duplicates (canonicalization v2)"))
         shutil.rmtree(empty, ignore_errors=True)
 
 

@@ -44,6 +44,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import sys
 import tempfile
 from typing import List, Optional
@@ -125,7 +126,9 @@ def cmd_list(args, scan: dict) -> int:
     want = args.status
     rows = everything if want == "all" else [x for x in everything if x["status"] == want]
     if args.json:
-        counts = {s: sum(1 for x in everything if x["status"] == s) for s in STATUSES}
+        # `dismissed` counts the cards, as the brief does; dismissed full revisions are counted apart
+        counts = {s: sum(1 for x in everything if x["status"] == s and (s != "dismissed" or x["tier"] == "bookmark")) for s in STATUSES}
+        counts["dismissed_full"] = sum(1 for x in everything if x["status"] == "dismissed" and x["tier"] != "bookmark")
         print(json.dumps({"schema": "mnemon-triage/1", "vault": scan["vault"], "status": want,
                           "counts": counts, "count": len(rows), "items": rows}, ensure_ascii=False, indent=1))
         return 0
@@ -152,6 +155,11 @@ def resolve(scan: dict, revision: str, verb: str = "dismiss") -> dict:
     rec = scan["by_name"].get(revision)
     if rec is None or not rec["has_source"]:
         die("no revision named %r in %s/Sources/" % (revision, scan["vault"]))
+    if not rec["current"]:
+        # currency first: a superseded revision is refused naming the head, whatever its tier
+        heads = lv.current_heads(scan, revision)
+        die("Sources/%s/ is superseded — a judgement is about the resource and goes on its latest revision%s"
+            % (revision, (": " + ", ".join(heads)) if heads else " (none of its successors is current: a cycle?)"))
     if verb == "promote" and rec["effective_tier"] != "bookmark":
         die("Sources/%s/ is not a bookmark (tier %s) — promote captures a card in full; a full revision is "
             "re-captured with `mnemon add --recapture`" % (revision, rec["effective_tier"]))
@@ -159,17 +167,23 @@ def resolve(scan: dict, revision: str, verb: str = "dismiss") -> dict:
         die("Sources/%s/ is a full capture without extract.md (unfinished) — the judgement about a full "
             "capture goes into its extract.md: finish it first (mnemon add --resume %s), or leave it"
             % (revision, revision))
-    if not rec["current"]:
-        heads = lv.current_heads(scan, revision)
-        die("Sources/%s/ is superseded — a judgement is about the resource and goes on its latest revision%s"
-            % (revision, (": " + ", ".join(heads)) if heads else " (none of its successors is current: a cycle?)"))
     return rec
 
 
 def atomic_write(path: str, data: bytes) -> None:
+    """tmp + fsync + rename, keeping the target's mode (mkstemp creates 0600; an extract.md published
+    0644 must stay readable to Obsidian, sync and indexers — reviewer A P2-4); a new file gets the
+    umask's default."""
     d = os.path.dirname(path)
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except OSError:
+        cur = os.umask(0)
+        os.umask(cur)
+        mode = 0o666 & ~cur
     fd, tmp = tempfile.mkstemp(prefix=".triage-", dir=d)
     try:
+        os.fchmod(fd, mode)
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
             fh.flush()

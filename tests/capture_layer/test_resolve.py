@@ -1,4 +1,4 @@
-"""§7.1 — canonicalization v1 on the fixture cases, the resolver, `--canonical-only` and its schema."""
+"""§7.1 — canonicalization (v2 current, v1 frozen) on the fixture cases, the resolver, `--canonical-only` and its schema."""
 from __future__ import annotations
 
 import json
@@ -27,7 +27,7 @@ class CanonicalFixture(unittest.TestCase):
             self.assertEqual(res.canonical.url, case["canonical_url"], case["note"])
             self.assertEqual(res.kind, case["kind"], case["note"])
             self.assertEqual(res.requested_version, case["requested_version"], case["note"])
-            self.assertEqual(res.canonical.version, 1)
+            self.assertEqual(res.canonical.version, R.VERSION)
 
     def test_canonical_is_idempotent(self):
         for case in self.cases:
@@ -39,10 +39,22 @@ class CanonicalFixture(unittest.TestCase):
 
 class Rules(unittest.TestCase):
     def test_version_constant(self):
-        self.assertEqual(R.VERSION, 1)
+        """v2 is current; v1 stays callable and frozen — a share-tagged X URL keeps its `s` under v1 (a replay
+        of a v1 receipt binds the same key it always had), loses it under v2; an unknown version is refused."""
+        self.assertEqual(R.VERSION, 2)
+        self.assertEqual(R.VERSIONS, (1, 2))
         with self.assertRaises(ValueError):
-            R.canonicalize("https://example.com/", version=2)
+            R.canonicalize("https://example.com/", version=3)
         self.assertEqual(R.canonicalize("https://example.com/", version=1).url, "https://example.com/")
+        v1 = R.canonicalize("https://x.com/u/status/1?s=20&utm_source=m", version=1)
+        self.assertEqual((v1.url, v1.version, v1.dropped_params, v1.host_rule), ("https://x.com/u/status/1?s=20", 1, ["utm_source"], None))
+        v2 = R.canonicalize("https://x.com/u/status/1?s=20&utm_source=m", version=2)
+        self.assertEqual((v2.url, v2.version, v2.dropped_params, v2.host_rule), ("https://x.com/u/status/1", 2, ["utm_source", "s"], "x"))
+        self.assertEqual(R.canonicalize("https://x.com/u/status/1?s=20").url, v2.url)
+        self.assertEqual(R.canonical_object("https://pub.substack.com/p/a?r=x", 1)["canonical_url"], "https://pub.substack.com/p/a?r=x")
+        self.assertEqual(R.canonical_object("https://pub.substack.com/p/a?r=x", 1)["canonical_version"], 1)
+        self.assertEqual(R.canonicalize("https://arxiv.org/abs/2401.12345v1", version=1).version, 1)
+        self.assertEqual(R.canonicalize("https://youtu.be/abc", version=1).version, 1)
 
     def test_tracking_keys_constant(self):
         for key in ("utm_source", "utm_x", "fbclid", "hsCtaTracking", "hide_intro_popup", "_ga"):
@@ -120,7 +132,15 @@ class CanonicalOnlyCLI(unittest.TestCase):
         assert_same_keys(self, obj, fixture, "mnemon-canonical/1")
         self.assertEqual(obj["schema"], "mnemon-canonical/1")
         self.assertEqual(obj["canonical_url"], "https://example.com/post?s=alpha")
-        self.assertEqual(obj["canonical_version"], 1)
+        self.assertEqual(obj["canonical_version"], 2)
+        rc, out, err = run_cli([os.path.join(BIN, "capture-fetch.py"), "--canonical-only", "--canonical-version", "1",
+                                "https://x.com/u/status/1?s=20"])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual((json.loads(out)["canonical_url"], json.loads(out)["canonical_version"]), ("https://x.com/u/status/1?s=20", 1))
+        rc, out, err = run_cli([os.path.join(BIN, "capture-fetch.py"), "--canonical-only", "https://x.com/u/status/1?s=20"])
+        self.assertEqual((json.loads(out)["canonical_url"], json.loads(out)["canonical_version"]), ("https://x.com/u/status/1", 2))
+        rc, out, err = run_cli([os.path.join(BIN, "capture-fetch.py"), "--canonical-only", "--canonical-version", "3", "https://x.com/"])
+        self.assertEqual(rc, 2)
         self.assertEqual(obj["kind"], "page")
         self.assertEqual(obj["fetch_url"], "https://example.com/post?s=alpha")
         self.assertIsNone(obj["requested_version"])

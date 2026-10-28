@@ -42,6 +42,18 @@ assert_contains "$err" "another writer holds the vault lock" "...with the lock m
 # GH #30: the refusal prints a RESULT block (status locked, error_class locked, retryable true, nothing else)
 assert_eq "$(result status) $(result error_class) $(result retryable) $(result extract)" "locked locked true none" "...RESULT:status=locked · error_class=locked · retryable=true · extract=none"
 assert_eq "[$(result revision)] [$(result path)] [$(result source_sha256)] $(result capture_id)" "[] [] [] l-1" "...revision, path and hash empty; the requested capture_id reported"
+# ...and through the dispatcher — the GH #30 repro itself (reviewer A P1-1): vault-lock.py prints the block
+rc=0; "$MNEMON_ROOT/bin/mnemon" --config "$CONFIG" add --url "https://example.com/l1-dispatch" --capture-id d-1 >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+out="$(cat "$TEST_TMPDIR/run.out")"
+assert_eq "$rc $(result status) $(result error_class) $(result retryable) $(result capture_id)" "75 locked locked true d-1" "mnemon add while the lock is held: exit 75 with the RESULT block (capture_id d-1)"
+assert_contains "$(cat "$TEST_TMPDIR/run.err")" "another writer holds the vault lock" "...and the lock message on stderr"
+[[ -f "$(receipt d-1)" ]] && fail "no receipt on 75 (dispatcher)" "exists" || pass "...no receipt written"
+rc=0; "$MNEMON_ROOT/bin/mnemon" --config "$CONFIG" add --url "https://example.com/l1-dispatch2" --capture-id=d-2 >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+out="$(cat "$TEST_TMPDIR/run.out")"
+assert_eq "$rc $(result capture_id)" "75 d-2" "...the --capture-id=<id> form is reported too"
+rc=0; "$MNEMON_ROOT/bin/mnemon" --config "$CONFIG" add --url "https://example.com/l1-dispatch3" >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+out="$(cat "$TEST_TMPDIR/run.out")"
+assert_eq "$rc [$(result capture_id)] $(result status)" "75 [] locked" "...without a capture id the field is empty"
 # two configs on one vault share the lock…
 rc=0; "$GW" source-add --config "$TEST_TMPDIR/noarchive.yaml" --url "https://example.com/l2" --capture-id l-2 >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
 assert_eq "$rc" "75" "a second config pointing at the same vault sees the same lock (75)"

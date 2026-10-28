@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """canonical-audit.py — `mnemon audit --canonical` (spec §3.10, D5): existing folders that coincide under
-canonicalization v1.
+the current canonicalization version (v2; folders recorded under v1 are read under the current rules).
 
     canonical-audit.py <vault path> [--json]
     canonical-audit.py --vault <vault path> [--json]     # the form `mnemon audit --canonical` dispatches
@@ -141,7 +141,7 @@ def audit(vault: str) -> List[dict]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Folders that coincide under canonicalization v1 (read-only)")
+    ap = argparse.ArgumentParser(description="Folders that coincide under the current canonicalization version (read-only)")
     ap.add_argument("vault", nargs="?", help="the vault path (holds Sources/)")
     ap.add_argument("--vault", dest="vault_opt", metavar="PATH", help="the vault path (the dispatcher's form)")
     ap.add_argument("--json", action="store_true")

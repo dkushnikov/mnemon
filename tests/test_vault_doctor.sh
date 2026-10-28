@@ -566,7 +566,7 @@ mk_legacy 2026-09-01_aaaa0001 350 'url: "https://example.com/a"'; mk_extract 202
 mk_legacy 2026-09-02_bbbb0002 350 'url: "https://example.com/b"' 'supersedes: "2026-09-01_aaaa0001"'; mk_extract 2026-09-02_bbbb0002 5
 doc
 assert_eq "$(line_of store/supersedes)" "warn store/supersedes — 1 edges, 0 dangling, 0 cycles; 1 cross-resource edge (2026-09-02_bbbb0002 → 2026-09-01_aaaa0001)" "I4 warn only; no incomplete mark"
-assert_eq "$(line_of store/identity)" "ok store/identity — 1 current revisions, 0 share a resource (resource_sha256 · canonical URL v1); unkeyed 0 (non-url legacy)" "I2: the superseded revision is not current"
+assert_eq "$(line_of store/identity)" "ok store/identity — 1 current revisions, 0 share a resource (resource_sha256 · canonical URL v2); unkeyed 0 (non-url legacy)" "I2: the superseded revision is not current"
 
 echo "--- I2/I4: one managed revision supersedes two legacy duplicates of its resource (a block list, O9) ---"
 fresh_vault o9
@@ -576,7 +576,7 @@ mk_pair 2026-09-03_dup00003 350 7 'url: "https://example.com/dup"' 'canonical_ur
   'supersedes:'$'\n''  - "2026-09-01_dup00001"'$'\n''  - "Sources/2026-09-02_dup00002/extract"'
 doc
 assert_eq "$(line_of store/supersedes)" "ok store/supersedes — 2 edges, 0 dangling, 0 cycles" "I4: one source.md naming two predecessors is two edges of one resource (no cross-resource edge)"
-assert_eq "$(line_of store/identity)" "ok store/identity — 1 current revisions, 0 share a resource (resource_sha256 · canonical URL v1); unkeyed 0 (non-url legacy)" "I2: the pair of legacy duplicates is superseded — only the managed revision is current"
+assert_eq "$(line_of store/identity)" "ok store/identity — 1 current revisions, 0 share a resource (resource_sha256 · canonical URL v2); unkeyed 0 (non-url legacy)" "I2: the pair of legacy duplicates is superseded — only the managed revision is current"
 doc --json
 assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=[x for x in d["checks"] if x["name"]=="store/supersedes"][0]; print(c["counts"]["edges"], c["counts"]["fan_out"], c["counts"]["current_incomplete"])')" "2 0 False" "I4 JSON: two edges, no fan-out, current complete"
 doc --brief
@@ -699,9 +699,9 @@ printf '{"schema":"mnemon-capture-receipt/1","capture_id":"c-gone","state":"extr
 printf '{"schema":"mnemon-capture-receipt/1","capture_id":"c-ok","state":"extracted","revision":"2026-10-20_ok000001","error_class":null,"retryable":null,"error":null}\n' > "$CAPSTATE/captures/c-ok.json"
 printf 'not json\n' > "$CAPSTATE/captures/c-bad.json"
 run "$MNEMON" --config "$TEST_TMPDIR/capv.yaml" doctor
-assert_contains "$out" "warn captures — 3 failed/extract-failed receipt(s) — finish with: mnemon add --resume c-ext; all of them: mnemon doctor --list captures" "the captures line names one id and the door to all of them"
-assert_contains "$out" "1 integrity-error receipt(s)" "...and counts the integrity error"
-assert_contains "$out" "list: mnemon doctor --list captures" "...naming the list door for the other kinds too"
+assert_contains "$out" "warn captures — 3 failed/extract-failed receipt(s) — finish with: mnemon add --resume c-ext; 1 integrity-error receipt(s)" "the captures line names one id for --resume and counts the integrity error"
+assert_eq "$(printf '%s\n' "$out" | grep -c 'mnemon doctor --list captures')" "1" "...and names the door to the whole list once"
+assert_contains "$out" "1 unreadable receipt(s); all of them: mnemon doctor --list captures" "...at the end of the counts"
 run "$MNEMON" --config "$TEST_TMPDIR/capv.yaml" doctor --list captures
 assert_eq "$rc" "0" "doctor --list captures exits 0"
 assert_eq "$(printf '%s\n' "$out" | grep -c .)" "6" "...one line per counted receipt: 3 failed/extract-failed, 1 integrity, 1 missing files, 1 unreadable (the consistent one is not listed)"
@@ -771,6 +771,25 @@ assert_contains "$idx" '- `/source-status`' "Commands: /source-status"
 assert_contains "$idx" '- `mnemon reindex`' "Commands: mnemon reindex"
 assert_not_contains "$idx" "/source-process" "Commands: the removed /source-process is gone"
 assert_not_contains "$idx" "/knowledge-status" "Commands: the removed /knowledge-status is gone"
+
+echo "--- I2: a pre-rule pair (canonicalization moved, v1 → v2) is a warning with the audit door, never a fail (reviewer A P2-1) ---"
+VAULT="$TEST_TMPDIR/prerule"; mkdir -p "$VAULT/Sources" "$VAULT/_meta"
+XS1=2026-10-09_xs000001; XS2=2026-10-10_xs000002; XS3=2026-10-11_xs000003; XS4=2026-10-12_xs000004
+mk_pair "$XS1" 350 5 'url: "https://x.com/u/status/1?s=20"' 'canonical_url: "https://x.com/u/status/1?s=20"'
+mk_pair "$XS2" 350 5 'url: "https://x.com/u/status/1?s=46"' 'canonical_url: "https://x.com/u/status/1?s=46"'
+# ...while two managed revisions recorded under the SAME identity are a real dedup bypass (fail)
+mk_pair "$XS3" 350 5 'url: "https://example.com/same"' 'canonical_url: "https://example.com/same"'
+mk_pair "$XS4" 350 5 'url: "https://example.com/same?utm_source=x"' 'canonical_url: "https://example.com/same"'
+doc
+assert_eq "$(status_of store/identity)" "fail" "I2: the same-identity managed pair still fails"
+assert_contains "$(line_of store/identity)" "2 groups share a resource" "I2: two groups"
+assert_contains "$(line_of store/identity)" "pre-rule 1 (canonicalization moved; mnemon audit --canonical)" "I2: the pre-rule pair is counted apart with the audit door"
+doc --json
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=[x for x in d["checks"] if x["name"]=="store/identity"][0]; it=[i for i in c["items"] if i["id"]==sys.argv[1]+" + "+sys.argv[2]][0]; print(c["counts"]["pre_rule_groups"], c["counts"]["duplicate_groups"], it["reason"].split(" — ")[0])' "$XS1" "$XS2")" "1 2 pre-rule duplicate (canonical https://x.com/u/status/1)" "I2 JSON: pre_rule_groups 1 of 2 groups, the pair's reason"
+assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); c=[x for x in d["checks"] if x["name"]=="store/identity"][0]; print([i["reason"].split(" ")[0] for i in c["items"] if i["id"].startswith(sys.argv[1])][0], [i["reason"].split(" ")[0] for i in c["items"] if i["id"].startswith(sys.argv[2])][0])' "$XS1" "$XS3")" "pre-rule duplicate" "...the pre-rule item vs the plain duplicate item"
+rm -rf "$VAULT/Sources/$XS3" "$VAULT/Sources/$XS4"
+doc
+assert_eq "$(status_of store/identity)" "warn" "I2: with only the pre-rule pair left the check is a warn, not a fail"
 
 echo "--- I2: a legacy-only duplicate group is a warning (pre-contract); a group with a managed revision fails ---"
 VAULT="$TEST_TMPDIR/legdup"; mkdir -p "$VAULT/Sources" "$VAULT/_meta"

@@ -97,7 +97,7 @@ DETAIL_MAX = 600                 # characters of an exception message kept in a 
 ORIGINS = (None, "text", "url", "file", "pdf", "audio")
 FIDELITIES = ("exact", "embed", "model-transcribed", "url-only")
 TIERS = ("full", "bookmark")
-RESULT_STATUSES = ("extracted", "captured", "skipped-duplicate", "failed", "integrity-error")
+RESULT_STATUSES = ("extracted", "captured", "skipped-duplicate", "failed", "integrity-error", "locked")
 EXIT1_RETRYABLE = {"fetch": True, "convert": True, "unsupported": False, "no-text": False,
                    "invalid-utf8": False, "archive-exists": False, "input-missing": False}
 COUNT_KEYS = ("processed", "captured", "failed", "needs_input", "waiting", "deferred", "done-before",

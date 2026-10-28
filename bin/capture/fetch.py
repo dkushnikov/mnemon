@@ -68,7 +68,7 @@ class Options:
 def empty_report(url: str, policy: policymod.Policy) -> dict:
     """Every key of mnemon-fetch/1 with its null shape."""
     return {
-        "schema": reportmod.FETCH, "url": url, "fetch_url": None, "canonical_url": None, "canonical_version": 1,
+        "schema": reportmod.FETCH, "url": url, "fetch_url": None, "canonical_url": None, "canonical_version": resolve.VERSION,
         "kind": None, "requested_version": None, "final_url": None, "method": None, "raw_kind": None,
         "http_status": None, "content_type": None, "charset": None, "bytes": 0, "ext": None, "audio_sniff": None,
         "egress": "direct", "stages": [], "acquisition": {"outcome": None, "kind": None, "evidence": None, "visible_words": 0},
