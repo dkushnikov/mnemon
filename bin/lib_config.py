@@ -66,6 +66,8 @@ EXPORTS = (
     "DOCTOR_STUB_WORDS",
     "DOCTOR_ARXIV_WORDS",
     "DOCTOR_RATING_HI_SHARE",
+    "DOCTOR_WIKI_PAGES_PER_COLLECTION",
+    "DOCTOR_WIKI_WORDS",
 )
 
 # The scalar keys with defaults (capture contracts §7, capture layer §5): one row per
@@ -97,6 +99,9 @@ CONFIG_KEYS = (
     ("doctor_stub_words", "DOCTOR_STUB_WORDS", "int", "40"),
     ("doctor_arxiv_words", "DOCTOR_ARXIV_WORDS", "int", "600"),
     ("doctor_rating_hi_share", "DOCTOR_RATING_HI_SHARE", "int", "20"),
+    # the research document's budget (research interface §10, phase 3b)
+    ("doctor_wiki_pages_per_collection", "DOCTOR_WIKI_PAGES_PER_COLLECTION", "int", "5"),
+    ("doctor_wiki_words", "DOCTOR_WIKI_WORDS", "int", "3000"),
 )
 
 

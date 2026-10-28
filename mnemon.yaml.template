@@ -87,3 +87,7 @@ auto_detect_origin: true
 # doctor_stub_words: 40             # below it a body is a stub / landing (data/thin, data/stubs)
 # doctor_arxiv_words: 600           # a current arXiv body below it is suspected abstract-only
 # doctor_rating_hi_share: 20        # percent of rated current revisions at ★≥7 that warns (data/rating-scale)
+# doctor_wiki_pages_per_collection: 5  # wiki pages under one dossier that warn (research/wiki-budget)
+# doctor_wiki_words: 3000           # words in a wiki page's evidential body that warn (research/wiki-budget)
+# doctor_wiki_pages_per_collection: 5  # research doctor (research/wiki-budget): pages under one dossier above which it warns
+# doctor_wiki_words: 3000           # research doctor (research/wiki-budget): words in a page's evidential body above which it warns

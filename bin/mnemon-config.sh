@@ -92,7 +92,9 @@ extract_max_parts|EXTRACT_MAX_PARTS|int|8
 doctor_thin_words|DOCTOR_THIN_WORDS|int|300
 doctor_stub_words|DOCTOR_STUB_WORDS|int|40
 doctor_arxiv_words|DOCTOR_ARXIV_WORDS|int|600
-doctor_rating_hi_share|DOCTOR_RATING_HI_SHARE|int|20'
+doctor_rating_hi_share|DOCTOR_RATING_HI_SHARE|int|20
+doctor_wiki_pages_per_collection|DOCTOR_WIKI_PAGES_PER_COLLECTION|int|5
+doctor_wiki_words|DOCTOR_WIKI_WORDS|int|3000'
 
 # The upper-case variable of a table key (empty when the key is not in the table).
 mnemon_config_var_of() {
@@ -517,4 +519,5 @@ load_config() {
   export FETCH_MAX_BYTES RENDER_TIMEOUT RENDER_MAX_BYTES ACQUIRE_TIMEOUT CONVERT_TIMEOUT TRANSCRIBE_TIMEOUT
   export SITE_MAX_PAGES SITE_TIMEOUT THIN_WORDS EXTRACT_MAX_PARTS
   export DOCTOR_THIN_WORDS DOCTOR_STUB_WORDS DOCTOR_ARXIV_WORDS DOCTOR_RATING_HI_SHARE
+  export DOCTOR_WIKI_PAGES_PER_COLLECTION DOCTOR_WIKI_WORDS
 }

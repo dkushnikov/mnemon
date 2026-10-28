@@ -1,38 +1,52 @@
 #!/usr/bin/env python3
-"""vault-doctor.py — the data group of `mnemon doctor` and the line of `mnemon status --brief`
-(docs/specs/2026-10-16-vault-store.md S3–S5, S7).
+"""vault-doctor.py — the data group of `mnemon doctor`, the research document (phase 3b) and the
+line of `mnemon status --brief` (docs/specs/2026-10-16-vault-store.md S3–S5, S7;
+docs/specs/2026-10-27-research-interface.md §8–§9).
 
-    vault-doctor.py [--json | --tsv | --list <check> | --brief [--json]] [--budget <s>] [--today YYYY-MM-DD]
-                    [--vault <path> [--archive <dir>] [--charter <path>] [--reader-context <path>]
+    vault-doctor.py [--json [--research] | --envelope | --tsv | --list <check> | --brief [--json]] [--budget <s>]
+                    [--today YYYY-MM-DD] [--vault <path> [--archive <dir>] [--charter <path>] [--reader-context <path>]
                      [--state-dir <dir>] [--instance <name>] [--writer-host <host>] [--guide-version <n>]
-                     [--thin-words N] [--stub-words N] [--arxiv-words N] [--rating-hi-share N]]
+                     [--thin-words N] [--stub-words N] [--arxiv-words N] [--rating-hi-share N]
+                     [--wiki-pages-per-collection N] [--wiki-words N]]
 
 Nineteen checks with stable names — 11 of the store (I1–I11), 5 of data quality (Q1–Q5), 3 of
-the human loop (H1–H3) — on one read-only snapshot of the vault (bin/lib_vault.py). Severity by
-cause (S4): `fail` = a managed-schema or graph violation, `warn` = a legacy mismatch, a stale
-derivative or a threshold passed; a check that cannot run here says so (`probed: false` +
-`reason`) and is never a `0 fail`. Tool problems are not checks: they go to `diagnostics`
-(`radius-parse` warn · `error` fail · `budget` warn), printed as `<level> doctor/<code> — …`.
-Nothing is fixed, written or created — the vault lock is probed, never taken.
+the human loop (H1–H3) — on one read-only snapshot of the vault (bin/lib_vault.py), and on the
+same snapshot the research document `mnemon-doctor-research/1`: ten checks `research/<name>` —
+the collection schemas and grammar, the age of open dossiers, the wiki pages' schema, binding
+(`unbound` · `suppressed`), staleness, inputs, evidence (`uncited` · `weak-evidence`), orphans,
+budget, and the research sections of the index — the states derived by lib_research.validate_wiki
+and never stored. Severity by cause (S4): `fail` = a managed-schema or graph violation, an
+unbound or vetoed page, `warn` = a legacy mismatch, a stale derivative or a threshold passed; a
+check that cannot run here says so (`probed: false` + `reason`) and is never a `0 fail`. Tool
+problems are not checks: they go to `diagnostics` (`radius-parse` warn · `error` fail · `budget`
+warn), printed as `<level> doctor/<code> — …`. Nothing is fixed, written or created — the vault
+lock is probed, never taken.
 
-Output: `ok|warn|fail <group>/<name> — <detail>` (the dispatcher's line; the 19 checks, then
-the diagnostics), `--tsv` the same as `status<TAB>name<TAB>detail` (what bin/mnemon routes
-through `_check`), `--json` the frozen `mnemon-doctor-data/1` document (always all 19 checks),
-`--list <check>` every item of one check (`<id>\t<reason or class>\t<rating>\t<words>`),
-`--brief` the one line of `mnemon status --brief` (`--json`: the counters and the summary).
+Output: `ok|warn|fail <group>/<name> — <detail>` (the dispatcher's line; the 19 data checks, their
+diagnostics, then the 10 research checks and theirs), `--tsv` the same as `status<TAB>name<TAB>detail`
+(what bin/mnemon routes through `_check`), `--json` the frozen `mnemon-doctor-data/1` document
+(always all 19 checks; with `--research` the research document instead), `--envelope` both as
+`{"data": …, "research": …}` (the dispatcher's input), `--list <check>` every item of one check
+(`<id>\t<reason or class>\t<rating>\t<words>`; `research/<name>` for those), `--brief` the one
+line of `mnemon status --brief` with its `research: N pages · K fail · M warn` part (`--json`: the
+counters and the summaries).
 
-`--budget <s>` (the default for `--brief`: 10) is a deadline around the whole run: the scan and
-the checks execute in a child worker (this script with `--worker`), the parent waits at most
-the budget, terminates then kills the worker when it expires and says so — `data: not probed
-(budget 10 s exceeded)`, a `budget` diagnostic, exit 0 — rather than guess.
+`--budget <s>` (the default for `--brief`: 10) is one deadline around the whole run: the scan and
+the checks execute in a child worker (this script with `--worker`) that prints the data document
+as soon as it is built and the research one after it, one JSON per line; the parent waits at most
+the budget, terminates then kills the worker when it expires, keeps the document that arrived and
+marks the one the deadline hit `not probed` — `data: not probed (budget 10 s exceeded)` /
+`research: not probed (…)`, a `budget` diagnostic, exit 0 — rather than guess.
 
 Without `--vault` the configuration comes from `lib_config.load_config()` (the instance the
 dispatcher resolved); with `--vault` the tool runs on defaults, for tests. Exit 0 unless an
 exception (the dispatcher derives its exit from the fail lines); `--today` fixes the clock.
 Test hooks, honoured only under MNEMON_TEST_HOOKS=1: MNEMON_TEST_DOCTOR_TODAY=<YYYY-MM-DD> (the
 clock when no --today is given — the dispatcher passes none), MNEMON_TEST_DOCTOR_STALL=<s> (the worker
-sleeps before scanning; with MNEMON_TEST_DOCTOR_PIDFILE it writes its pid first) and
-MNEMON_TEST_DOCTOR_RAISE=<check> (that check raises). Stdlib only, python 3.9.
+sleeps before scanning; with MNEMON_TEST_DOCTOR_PIDFILE it writes its pid first),
+MNEMON_TEST_DOCTOR_STALL_RESEARCH=<s> (the worker sleeps after printing the data document, before the
+research one) and MNEMON_TEST_DOCTOR_RAISE=<check> (that check raises; a research check too). Stdlib
+only, python 3.9.
 """
 
 from __future__ import annotations
@@ -51,6 +65,7 @@ from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lib_vault as lv  # noqa: E402
+import lib_research as lr  # noqa: E402
 
 SCHEMA = "mnemon-doctor-data/1"
 # the 19 stable names (S3) and the door each one prints
@@ -1054,6 +1069,384 @@ CHECKS = (
 
 
 # ---------------------------------------------------------------------------------------------
+# R — the research document (mnemon-doctor-research/1, interface §8): the collection schemas and
+# grammar, the age of open dossiers, the derived states of the wiki pages (§9), the index sections
+# ---------------------------------------------------------------------------------------------
+
+RESEARCH_SCHEMA = "mnemon-doctor-research/1"
+RESEARCH_FIX = (
+    ("research/collections", "operator"), ("research/collection-age", "operator"),
+    ("research/wiki-schema", "research-update"), ("research/wiki-binding", "research-update"),
+    ("research/wiki-stale", "research-update --propose"), ("research/wiki-inputs", "research-update"),
+    ("research/wiki-evidence", "research-update"), ("research/wiki-orphan", "operator"),
+    ("research/wiki-budget", "operator"), ("research/index", "mnemon reindex"),
+)
+RESEARCH_CHECK_NAMES = tuple(name for name, _ in RESEARCH_FIX)
+RESEARCH_FIX_OF = dict(RESEARCH_FIX)
+FIX_OF.update(RESEARCH_FIX_OF)
+RESEARCH_DEFAULTS = {"wiki_pages_per_collection": lr.DEFAULT_WIKI_PAGES_PER_COLLECTION, "wiki_words": lr.DEFAULT_WIKI_WORDS}
+WIKI_CHECKS = ("research/wiki-schema", "research/wiki-binding", "research/wiki-stale", "research/wiki-inputs",
+               "research/wiki-evidence", "research/wiki-orphan", "research/wiki-budget")
+COLLECTION_CHECKS = ("research/collections", "research/collection-age", "research/index")
+
+
+def page_item(p: dict, reason: str, **extra) -> dict:
+    out = {"id": "Wiki/" + p["name"], "reason": reason, "rating": None, "words": p["body"]["words"] if p.get("body") else None,
+           "states": list(p.get("states") or []), "kind": p.get("kind")}
+    out.update(extra)
+    return out
+
+
+def collection_item(c: dict, reason: str, **extra) -> dict:
+    out = {"id": "Collections/" + c["name"], "reason": reason, "rating": None, "words": None, "status": c.get("status")}
+    out.update(extra)
+    return out
+
+
+def check_research_collections(scan: dict, cfg: dict, pages: List[dict]) -> Check:
+    c = Check("research/collections")
+    cols = scan["collections"]["notes"]
+    fail: List[str] = []
+    unreadable: List[str] = []
+    unresolved_total = 0
+    malformed_total = 0
+    for col in cols:
+        if col["state"] == "unreadable":
+            unreadable.append(col["name"])
+            c.add("fail", collection_item(col, "unreadable (never a clean document)"))
+            continue
+        if col["state"] == "fail":
+            fail.append(col["name"])
+            reasons = list(col["errors"]) + ["line %d: %s" % (m["line"], m["reason"]) for m in col["malformed"]]
+            malformed_total += len(col["malformed"])
+            c.add("fail", collection_item(col, "; ".join(reasons[:4]) + ("; …" if len(reasons) > 4 else ""),
+                                          errors=len(col["errors"]), malformed=len(col["malformed"])))
+        u = col["counts"].get("unresolved") or 0
+        if u:
+            unresolved_total += u
+            revs = [it["rev"] for it in col["items"] if it["exists"] is False]
+            c.add("warn", collection_item(col, "%s: %s" % (plural(u, "unresolved item"), names(revs, 3)), unresolved=u))
+    c.counts = {"documents": len(cols), "fail": len(fail), "unreadable": len(unreadable), "malformed_lines": malformed_total,
+                "unresolved_items": unresolved_total, "status": scan["counters"]["collections_status"]}
+    parts = ["%d documents" % len(cols)]
+    if fail:
+        parts.append("%d fail (%s)" % (len(fail), names(fail, 3)))
+    if unreadable:
+        parts.append("%d unreadable (%s)" % (len(unreadable), names(unreadable, 3)))
+    if malformed_total:
+        parts.append("%s" % plural(malformed_total, "malformed line"))
+    parts.append("%s" % plural(unresolved_total, "unresolved item"))
+    c.detail = "; ".join(parts)
+    return c
+
+
+def check_collection_age(scan: dict, cfg: dict, pages: List[dict]) -> Check:
+    c = Check("research/collection-age")
+    today = scan["today"]
+    cols = scan["collections"]["notes"]
+    items = []
+    for col in cols:
+        if col.get("status") != "open":
+            continue
+        when = lv.parse_date(col.get("updated")) or lv.parse_date(col.get("created"))
+        if when is None:
+            items.append(collection_item(col, "open, no valid date", age_days=None))
+            continue
+        age = age_days(today, when)
+        items.append(collection_item(col, "open %d d (since %s)" % (age, when.isoformat()), age_days=age))
+    items.sort(key=lambda i: (-(i["age_days"] if i["age_days"] is not None else -1), i["id"]))
+    for i in items:
+        c.items.append(i)                       # informational: never raises the status
+    ages = [i["age_days"] for i in items if i["age_days"] is not None]
+    st = scan["counters"]["collections_status"]
+    c.counts = {"open": len(items), "oldest_days": max(ages) if ages else 0, "inbox": st["inbox"], "closed": st["closed"]}
+    c.detail = "%d open dossiers" % len(items) + (", oldest %d d (%s)" % (max(ages), items[0]["id"]) if ages else "")
+    c.detail += "; inbox %d · closed %d" % (st["inbox"], st["closed"])
+    return c
+
+
+def check_wiki_schema(scan: dict, cfg: dict, pages: List[dict]) -> Check:
+    c = Check("research/wiki-schema")
+    fail: List[str] = []
+    not_probed: List[str] = []
+    for p in pages:
+        if p["state"] == "unreadable":
+            not_probed.append(p["name"])
+            c.add("warn", page_item(p, "unreadable — not probed (never a clean page)", probed=False))
+        elif p["state"] == "fail":
+            fail.append(p["name"])
+            c.add("fail", page_item(p, "; ".join(p["errors"][:4]) + ("; …" if len(p["errors"]) > 4 else ""), errors=len(p["errors"])))
+        elif p.get("not_probed"):
+            not_probed.append(p["name"])
+            c.add("warn", page_item(p, "not probed: " + "; ".join(p["not_probed"][:3]), probed=False))
+    c.counts = {"pages": len(pages), "fail": len(fail), "not_probed": len(not_probed),
+                "kinds": {k: sum(1 for p in pages if p.get("kind") == k) for k in lr.WIKI_KINDS}}
+    c.detail = "%d pages" % len(pages)
+    if fail:
+        c.detail += ", %d fail the schema (%s)" % (len(fail), names(fail, 3))
+    if not_probed:
+        c.detail += ", %d not probed (%s)" % (len(not_probed), names(not_probed, 3))
+    if not fail and not not_probed:
+        c.detail += ", every page read (wiki/1)"
+    return c
+
+
+def _state_check(c: Check, pages: List[dict], states: Tuple[str, ...], level: str) -> Dict[str, List[str]]:
+    found: Dict[str, List[str]] = {s: [] for s in states}
+    for p in pages:
+        if p["state"] != "ok":
+            continue
+        hit = [s for s in states if s in p["states"]]
+        if not hit:
+            continue
+        reasons = []
+        for s in hit:
+            found[s].append(p["name"])
+            reasons += ["%s: %s" % (s, r) for r in p["reasons"].get(s, [])]
+        c.add(level, page_item(p, "; ".join(reasons[:4]) + ("; …" if len(reasons) > 4 else ""), hit=hit))
+    return found
+
+
+def check_wiki_binding(scan: dict, cfg: dict, pages: List[dict]) -> Check:
+    c = Check("research/wiki-binding")
+    found = _state_check(c, pages, ("unbound", "suppressed"), "fail")
+    c.counts = {"unbound": len(found["unbound"]), "suppressed": len(found["suppressed"]),
+                "locators": sum(p["counts"]["locators"] for p in pages if p["state"] == "ok"),
+                "locators_verified": sum(1 for p in pages if p["state"] == "ok" for l in p["locators"] if l["verified"])}
+    c.detail = "%d unbound" % len(found["unbound"]) + (" (%s)" % names(found["unbound"], 3) if found["unbound"] else "")
+    c.detail += "; %d suppressed" % len(found["suppressed"]) + (" (%s)" % names(found["suppressed"], 3) if found["suppressed"] else "")
+    c.detail += "; %d of %d locators verified" % (c.counts["locators_verified"], c.counts["locators"])
+    return c
+
+
+def check_wiki_stale(scan: dict, cfg: dict, pages: List[dict]) -> Check:
+    c = Check("research/wiki-stale")
+    if scan["graph"]["current_incomplete"] and any(p["state"] == "ok" and p["based_on"] for p in pages):
+        return c.not_probed("the supersedes graph is incomplete (dangling targets or cycles): no page is current for sure", "warn")
+    found = _state_check(c, pages, ("stale",), "warn")
+    c.counts = {"stale": len(found["stale"])}
+    c.detail = "%d pages rest on a superseded revision" % len(found["stale"]) + (
+        " (%s)" % names(found["stale"], 3) if found["stale"] else "")
+    return c
+
+
+def check_wiki_inputs(scan: dict, cfg: dict, pages: List[dict]) -> Check:
+    c = Check("research/wiki-inputs")
+    found = _state_check(c, pages, ("edited-outside-update", "inputs-changed"), "warn")
+    c.counts = {"edited_outside_update": len(found["edited-outside-update"]), "inputs_changed": len(found["inputs-changed"])}
+    c.detail = "%d edited outside research-update" % len(found["edited-outside-update"]) + (
+        " (%s)" % names(found["edited-outside-update"], 3) if found["edited-outside-update"] else "")
+    c.detail += "; %d with changed inputs" % len(found["inputs-changed"]) + (
+        " (%s)" % names(found["inputs-changed"], 3) if found["inputs-changed"] else "")
+    return c
+
+
+def pages_by_collection(pages: List[dict]) -> Dict[str, List[dict]]:
+    out: Dict[str, List[dict]] = {}
+    for p in pages:
+        if p["state"] == "unreadable":
+            continue
+        for cname in p["collections"]:
+            out.setdefault(cname, []).append(p)
+    return out
+
+
+def check_wiki_evidence(scan: dict, cfg: dict, pages: List[dict]) -> Check:
+    c = Check("research/wiki-evidence")
+    by_col = pages_by_collection(pages)
+    uncited: List[str] = []
+    covered = 0
+    for col in scan["collections"]["notes"]:
+        its = by_col.get(col["name"])
+        if not its or col["state"] == "unreadable":
+            continue
+        covered += 1
+        cited: set = set()
+        for p in its:
+            cited.update(p.get("cited") or [])
+        for it in col["items"]:
+            if it["excluded"] or it["rev"] in cited or it["exists"] is False:
+                continue          # an unresolved item is research/collections' finding, not an uncited one
+            uncited.append("%s · %s" % (col["name"], it["rev"]))
+            c.add("warn", {"id": "Collections/%s · %s" % (col["name"], it["rev"]), "reason": "uncited: no verified locator on any of the %s" % plural(len(its), "page"),
+                           "rating": None, "words": None, "role": it["role"]})
+    found = _state_check(c, pages, ("weak-evidence",), "warn")
+    for p in pages:
+        for note in (p.get("reasons") or {}).get("info", []):
+            c.items.append(page_item(p, "info: " + note))
+    c.counts = {"collections_with_pages": covered, "uncited": len(uncited), "weak_evidence": len(found["weak-evidence"])}
+    c.detail = "%d dossiers have pages; %s" % (covered, plural(len(uncited), "uncited item")) + (
+        " (%s)" % names(uncited, 3) if uncited else "")
+    c.detail += "; %d pages on weak evidence" % len(found["weak-evidence"]) + (
+        " (%s)" % names(found["weak-evidence"], 3) if found["weak-evidence"] else "")
+    return c
+
+
+def check_wiki_orphan(scan: dict, cfg: dict, pages: List[dict]) -> Check:
+    c = Check("research/wiki-orphan")
+    found = _state_check(c, pages, ("orphan",), "warn")
+    c.counts = {"orphan": len(found["orphan"])}
+    c.detail = "%d pages without an open supporting dossier" % len(found["orphan"]) + (
+        " (%s)" % names(found["orphan"], 3) if found["orphan"] else "")
+    return c
+
+
+def check_wiki_budget(scan: dict, cfg: dict, pages: List[dict]) -> Check:
+    c = Check("research/wiki-budget")
+    limit_pages, limit_words = cfg["wiki_pages_per_collection"], cfg["wiki_words"]
+    by_col = pages_by_collection(pages)
+    over: List[str] = []
+    for cname, its in sorted(by_col.items()):
+        if len(its) > limit_pages:
+            over.append(cname)
+            c.add("warn", {"id": "Collections/" + cname, "reason": "%d pages under one dossier (budget %d)" % (len(its), limit_pages),
+                           "rating": None, "words": None, "pages": len(its)})
+    found = _state_check(c, pages, ("budget",), "warn")
+    c.counts = {"collections_over": len(over), "pages_over": len(found["budget"])}
+    c.threshold = {"pages_per_collection": limit_pages, "words": limit_words}
+    c.detail = "%d dossiers over %d pages" % (len(over), limit_pages) + (" (%s)" % names(over, 3) if over else "")
+    c.detail += "; %d pages over %d words" % (len(found["budget"]), limit_words) + (
+        " (%s)" % names(found["budget"], 3) if found["budget"] else "")
+    return c
+
+
+def _index_section(index_text: Optional[str], heading: str) -> Optional[List[str]]:
+    """The `- ` rows of one `## <heading>` section of index.md; None when the section is absent."""
+    if index_text is None:
+        return None
+    lines = index_text.split("\n")
+    try:
+        start = lines.index("## " + heading)
+    except ValueError:
+        return None
+    rows: List[str] = []
+    for line in lines[start + 1:]:
+        if line.startswith("## "):
+            break
+        if line.startswith("- "):
+            rows.append(line)
+    return rows
+
+
+def check_research_index(scan: dict, cfg: dict, pages: List[dict]) -> Check:
+    c = Check("research/index")
+    vault = Path(scan["vault"])
+    want = {}
+    if scan["collections"]["present"]:
+        want["Collections"] = lv.kr.collection_rows(vault)
+    if scan["wiki"]["present"]:
+        want["Wiki"] = lv.kr.wiki_rows(vault)
+    differ = 0
+    missing_sections: List[str] = []
+    if scan["index_text"] is None:
+        if want:
+            c.raise_to("warn")
+        c.counts = {"sections": len(want), "rows": sum(len(v) for v in want.values()), "differ": 0, "missing_sections": len(want)}
+        c.detail = "index.md missing; %d research rows to generate" % c.counts["rows"]
+        return c
+    for heading, rows in want.items():
+        have = _index_section(scan["index_text"], heading)
+        if have is None:
+            missing_sections.append(heading)
+            c.add("warn", {"id": "## " + heading, "reason": "section missing (%d rows to generate)" % len(rows), "rating": None, "words": None})
+            continue
+        if have != rows:
+            differ += 1
+            c.add("warn", {"id": "## " + heading, "reason": "%d rows in index.md, %d regenerated — the section differs" % (len(have), len(rows)),
+                           "rating": None, "words": None})
+    status_rows = {}
+    for key in ("Collections", "Wiki"):
+        m = re.search(r"^\| %s \| ([^|]+) \|" % key, scan["index_text"], re.M)
+        status_rows[key] = m.group(1).strip() if m else None
+        present = scan["collections"]["present"] if key == "Collections" else scan["wiki"]["present"]
+        if status_rows[key] is None and not present:
+            continue          # an index from before the row existed, on a vault without the folder: nothing to say
+        count = scan["counters"]["collections"] if key == "Collections" else scan["counters"]["wiki_pages"]
+        unlisted = scan["snapshot"].get("collections_unlisted" if key == "Collections" else "wiki_unlisted")
+        expected = "?" if unlisted else str(count)
+        if status_rows[key] != expected:
+            c.add("warn", {"id": "| %s |" % key, "reason": "Status row says %s, the vault has %s" % (status_rows[key] or "nothing", expected),
+                           "rating": None, "words": None})
+    c.counts = {"sections": len(want), "rows": sum(len(v) for v in want.values()), "differ": differ,
+                "missing_sections": len(missing_sections), "status_rows": status_rows}
+    c.detail = "%d sections, %d rows; %d differ, %d missing" % (len(want), c.counts["rows"], differ, len(missing_sections))
+    return c
+
+
+RESEARCH_CHECKS = (
+    check_research_collections, check_collection_age, check_wiki_schema, check_wiki_binding, check_wiki_stale,
+    check_wiki_inputs, check_wiki_evidence, check_wiki_orphan, check_wiki_budget, check_research_index,
+)
+
+
+def run_research_checks(scan: dict, cfg: dict) -> Tuple[List[Check], List[dict], List[dict]]:
+    """The ten research checks on the snapshot: the pages validated once (lib_research.validate_wiki),
+    an unlistable folder makes its checks not probed and a fail diagnostic, a check that raises is
+    not probed with the error named."""
+    diagnostics: List[dict] = []
+    ctx = lv.research_context(scan, budget_words=cfg["wiki_words"])
+    pages = [lr.validate_wiki(p, ctx) for p in scan["wiki"]["notes"]]
+    wiki_unlisted = scan["snapshot"].get("wiki_unlisted")
+    col_unlisted = scan["snapshot"].get("collections_unlisted")
+    if wiki_unlisted:
+        diagnostics.append({"code": "error", "level": "fail", "message": "Wiki/ could not be listed (%s): the wiki checks were not probed" % wiki_unlisted})
+    if col_unlisted:
+        diagnostics.append({"code": "error", "level": "fail", "message": "Collections/ could not be listed (%s): the collection checks were not probed" % col_unlisted})
+    checks: List[Check] = []
+    raise_in = test_hook("MNEMON_TEST_DOCTOR_RAISE")
+    for fn, name in zip(RESEARCH_CHECKS, RESEARCH_CHECK_NAMES):
+        if wiki_unlisted and (name in WIKI_CHECKS or name == "research/index"):
+            checks.append(Check(name).not_probed("Wiki/ could not be listed: %s" % wiki_unlisted, "warn"))
+            continue
+        if col_unlisted and name in COLLECTION_CHECKS + ("research/wiki-evidence", "research/wiki-binding", "research/wiki-orphan"):
+            checks.append(Check(name).not_probed("Collections/ could not be listed: %s" % col_unlisted, "warn"))
+            continue
+        try:
+            if raise_in == name:
+                raise RuntimeError("test hook")
+            checks.append(fn(scan, cfg, pages))
+        except Exception as exc:
+            checks.append(Check(name).not_probed("error: %s: %s" % (type(exc).__name__, exc), "warn"))
+            diagnostics.append({"code": "error", "level": "fail", "message": "%s: %s: %s" % (name, type(exc).__name__, exc)})
+            scan["snapshot"]["complete"] = False
+    return checks, diagnostics, pages
+
+
+def research_counters(scan: dict) -> dict:
+    c = scan["counters"]
+    return {k: c[k] for k in c if k.startswith("collection") or k.startswith("wiki")}
+
+
+def build_research_document(scan: dict, cfg: dict, today: datetime.date) -> dict:
+    checks, diagnostics, pages = run_research_checks(scan, cfg)
+    checks_json = [c.as_json() for c in checks]
+    snapshot = {"today": today.isoformat(), "budget_s": cfg.get("budget"), "complete": scan["snapshot"]["complete"],
+                "unreadable": scan["snapshot"]["unreadable"], "collections_unlisted": scan["snapshot"].get("collections_unlisted"),
+                "wiki_unlisted": scan["snapshot"].get("wiki_unlisted"), "pages_probed": sum(1 for p in pages if p["severity"] is not None),
+                "pages_not_probed": sum(1 for p in pages if p["severity"] is None)}
+    summary = summary_of(checks_json, diagnostics)
+    summary["coverage"] = {"pages": len(pages), "collections": len(scan["collections"]["notes"])}
+    summary["pages"] = {"fail": sum(1 for p in pages if p["severity"] == "fail"), "warn": sum(1 for p in pages if p["severity"] == "warn"),
+                        "ok": sum(1 for p in pages if p["severity"] == "ok"), "not_probed": snapshot["pages_not_probed"]}
+    return {"schema": RESEARCH_SCHEMA, "instance": cfg["instance"], "vault": scan["vault"], "generated_at": utc_now(),
+            "snapshot": snapshot, "counters": research_counters(scan),
+            "pages": [{"name": p["name"], "kind": p["kind"], "severity": p["severity"], "states": p["states"],
+                       "usable": p["usable"], "collections": p["collections"], "updated": p["updated"]} for p in pages],
+            "checks": checks_json, "diagnostics": diagnostics, "summary": summary}
+
+
+def not_probed_research_document(cfg: dict, today: datetime.date, reason: str, diagnostic: dict) -> dict:
+    checks = [Check(name).not_probed(reason).as_json() for name in RESEARCH_CHECK_NAMES]
+    snapshot = {"today": today.isoformat(), "budget_s": cfg.get("budget"), "complete": False, "unreadable": 0,
+                "collections_unlisted": None, "wiki_unlisted": None, "pages_probed": 0, "pages_not_probed": 0}
+    summary = summary_of(checks, [diagnostic])
+    summary["coverage"] = {"pages": None, "collections": None}
+    summary["pages"] = {"fail": 0, "warn": 0, "ok": 0, "not_probed": None}
+    return {"schema": RESEARCH_SCHEMA, "instance": cfg["instance"], "vault": cfg["vault"], "generated_at": utc_now(),
+            "snapshot": snapshot, "counters": {}, "pages": [], "checks": checks, "diagnostics": [diagnostic], "summary": summary}
+
+
+# ---------------------------------------------------------------------------------------------
 # Running: the document, its renderings, the budgeted worker
 # ---------------------------------------------------------------------------------------------
 
@@ -1109,20 +1502,29 @@ def summary_of(checks: List[dict], diagnostics: List[dict]) -> dict:
     return s
 
 
-def build_document(cfg: dict, today: datetime.date) -> dict:
-    """One read-only snapshot, the radius, the 19 checks, the diagnostics — the frozen document."""
+def build_documents(cfg: dict, today: datetime.date) -> Tuple[dict, dict]:
+    """One read-only snapshot, the radius, the 19 checks, the diagnostics — the frozen data document —
+    and, on the same snapshot, the research document (phase 3b)."""
     scan = lv.scan_vault(cfg["vault"], state_dir=cfg["state_dir"], archive_dir=cfg["archive"], charter=cfg["charter"],
                          reader_context=cfg["reader_context"], today=today)
     radius, defaulted, errors = parse_radius(scan["charter"]["radius_lines"])
     cfg.update({"radius": radius, "radius_defaulted": defaulted, "radius_errors": errors})
     checks, diagnostics = run_checks(scan, cfg)
     checks_json = [c.as_json() for c in checks]
-    snapshot = dict(scan["snapshot"])
+    # the data snapshot is what v1.3 printed: the research folder listings are reported in the
+    # research document, never here (mnemon-doctor-data/1 stays byte for byte)
+    snapshot = {k: v for k, v in scan["snapshot"].items() if k != "wiki_unlisted"}
     snapshot["today"] = today.isoformat()
     snapshot["budget_s"] = cfg.get("budget")
-    return {"schema": SCHEMA, "instance": cfg["instance"], "vault": scan["vault"], "generated_at": utc_now(),
+    data = {"schema": SCHEMA, "instance": cfg["instance"], "vault": scan["vault"], "generated_at": utc_now(),
             "snapshot": snapshot, "counters": scan["counters"], "checks": checks_json, "diagnostics": diagnostics,
             "summary": summary_of(checks_json, diagnostics)}
+    research = build_research_document(scan, cfg, today)
+    return data, research
+
+
+def build_document(cfg: dict, today: datetime.date) -> dict:
+    return build_documents(cfg, today)[0]
 
 
 def not_probed_document(cfg: dict, today: datetime.date, reason: str, diagnostic: dict) -> dict:
@@ -1139,21 +1541,25 @@ def utc_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def rows_of(doc: dict) -> List[Tuple[str, str, str]]:
-    """(status, name, detail) of the 19 checks, then the diagnostics as doctor/<code>."""
+def rows_of(doc: dict, prefix: str = "doctor/") -> List[Tuple[str, str, str]]:
+    """(status, name, detail) of a document's checks, then its diagnostics as doctor/<code>."""
     rows = [(c["status"], c["name"], c["detail"]) for c in doc["checks"]]
-    rows += [(d["level"], "doctor/" + d["code"], d["message"]) for d in doc.get("diagnostics", [])]
+    rows += [(d["level"], prefix + d["code"], d["message"]) for d in doc.get("diagnostics", [])]
     return rows
 
 
-def text_lines(doc: dict, tsv: bool) -> List[str]:
+def text_lines(doc: dict, tsv: bool, research: Optional[dict] = None) -> List[str]:
+    rows = rows_of(doc) + (rows_of(research) if research is not None else [])
     if tsv:
-        return ["%s\t%s\t%s" % (s, n, d.replace("\t", " ").replace("\n", " ")) for s, n, d in rows_of(doc)]
-    return ["%s %s — %s" % (s, n, d) for s, n, d in rows_of(doc)]
+        return ["%s\t%s\t%s" % (s, n, d.replace("\t", " ").replace("\n", " ")) for s, n, d in rows]
+    return ["%s %s — %s" % (s, n, d) for s, n, d in rows]
 
 
-def list_lines(doc: dict, wanted: str) -> Optional[List[str]]:
-    for c in doc["checks"]:
+def list_lines(doc: dict, wanted: str, research: Optional[dict] = None) -> Optional[List[str]]:
+    """Every item of one check, by its full name or the part after `/` (the data checks first,
+    then `research/<name>`)."""
+    checks = list(doc["checks"]) + (list(research["checks"]) if research is not None else [])
+    for c in checks:
         if c["name"] == wanted or c["name"].split("/", 1)[1] == wanted:
             out = []
             for i in c["items"]:
@@ -1165,14 +1571,27 @@ def list_lines(doc: dict, wanted: str) -> Optional[List[str]]:
     return None
 
 
-def brief_line(doc: dict) -> str:
+def research_brief(research: Optional[dict]) -> str:
+    """The research part of the brief line: `research: N pages · K fail · M warn` (the pages' own
+    severities, then the checks' fails and warns when they exceed them), or `not probed (…)`."""
+    if research is None:
+        return "research: not probed"
+    c = research.get("counters") or {}
+    stopped = next((d for d in research.get("diagnostics", []) if d["code"] in ("budget", "error") and not c), None)
+    if stopped:
+        return "research: not probed (%s)" % stopped["message"]
+    s = research["summary"]
+    return "research: %d pages · %d fail · %d warn" % (c.get("wiki_pages", 0), s["fail"], s["warn"])
+
+
+def brief_line(doc: dict, research: Optional[dict] = None) -> str:
     name = doc.get("instance") or "vault"
     label = name[:1].upper() + name[1:]
     s = doc["summary"]
     c = doc.get("counters") or {}
     stopped = next((d for d in doc.get("diagnostics", []) if d["code"] in ("budget", "error") and not c), None)
     if stopped:
-        return "%s · data: not probed (%s)" % (label, stopped["message"])
+        return "%s · data: not probed (%s) · %s" % (label, stopped["message"], research_brief(research))
     oldest = {}
     for check in doc["checks"]:
         if check["name"] in ("human/seeds", "human/ratification"):
@@ -1181,9 +1600,9 @@ def brief_line(doc: dict) -> str:
     draft_part = "%d drafts" % c["drafts_unratified"] + (
         " / %d d" % oldest["human/ratification"] if c["drafts_unratified"] and oldest.get("human/ratification") is not None else "")
     line = ("%s · %d sources (%d managed · %d current · %d superseded) · %d extracted · %d synthesis (%s · %s)"
-            " · data: %d fail · %d warn · probed %d/%d"
+            " · data: %d fail · %d warn · probed %d/%d · %s"
             % (label, c["folders"], c["managed"], c["current"], c["superseded"], c["extracted"], c["synthesis"],
-               seed_part, draft_part, s["fail"], s["warn"], s["probed"], s["probed"] + s["not_probed"]))
+               seed_part, draft_part, s["fail"], s["warn"], s["probed"], s["probed"] + s["not_probed"], research_brief(research)))
     if s["diagnostics_fail"] or s["diagnostics_warn"]:
         diag = []
         if s["diagnostics_fail"]:
@@ -1234,6 +1653,18 @@ def settings(args) -> dict:
                        ("arxiv_words", args.arxiv_words), ("rating_hi_share", args.rating_hi_share)):
         if value is not None:
             cfg[key] = value
+    # the research budget (interface §10): config keys, then the flags
+    if args.vault:
+        for key in RESEARCH_DEFAULTS:
+            cfg[key] = RESEARCH_DEFAULTS[key]
+    else:
+        for key, var in (("wiki_pages_per_collection", "DOCTOR_WIKI_PAGES_PER_COLLECTION"), ("wiki_words", "DOCTOR_WIKI_WORDS")):
+            cfg[key] = lv.parse_int(loaded.get(var)) if loaded.get(var) else None
+            if cfg[key] is None:
+                cfg[key] = RESEARCH_DEFAULTS[key]
+    for key, value in (("wiki_pages_per_collection", args.wiki_pages_per_collection), ("wiki_words", args.wiki_words)):
+        if value is not None:
+            cfg[key] = value
     cfg["guide_version"] = args.guide_version if args.guide_version is not None else lv.engine_guide_version()
     cfg["this_host"] = this_host()
     cfg["budget"] = args.budget
@@ -1248,15 +1679,36 @@ def worker_argv(args) -> List[str]:
                         ("--state-dir", args.state_dir), ("--instance", args.instance), ("--writer-host", args.writer_host),
                         ("--guide-version", args.guide_version), ("--thin-words", args.thin_words),
                         ("--stub-words", args.stub_words), ("--arxiv-words", args.arxiv_words),
-                        ("--rating-hi-share", args.rating_hi_share), ("--budget", args.budget)):
+                        ("--rating-hi-share", args.rating_hi_share), ("--budget", args.budget),
+                        ("--wiki-pages-per-collection", args.wiki_pages_per_collection), ("--wiki-words", args.wiki_words)):
         if value is not None:
             argv += [flag, str(value)]
     return argv
 
 
-def run_with_budget(args, cfg: dict, today: datetime.date, started: float) -> Tuple[dict, int]:
+def _worker_documents(text: str) -> Tuple[Optional[dict], Optional[dict]]:
+    """(data, research) from the worker's stdout: one JSON document per line, in that order; a
+    missing or unreadable line is None (the parent decides what that means)."""
+    docs: List[Optional[dict]] = []
+    for line in text.split("\n")[:2]:
+        if not line.strip():
+            docs.append(None)
+            continue
+        try:
+            d = json.loads(line)
+            docs.append(d if isinstance(d, dict) else None)
+        except ValueError:
+            docs.append(None)
+    while len(docs) < 2:
+        docs.append(None)
+    return docs[0], docs[1]
+
+
+def run_with_budget(args, cfg: dict, today: datetime.date, started: float) -> Tuple[dict, dict, int]:
     """The whole scan in a child worker, killed at the deadline (terminate, then kill): the parent
-    never blocks past the budget, whatever the worker is stuck on."""
+    never blocks past the budget, whatever the worker is stuck on. One budget covers both documents:
+    the worker prints the data document as soon as it is built, then the research one — the
+    document the deadline hit is `not probed`, the one already printed is kept."""
     budget = float(args.budget)
     remaining = max(0.0, budget - (time.monotonic() - started))   # 0 = already late: start, then kill at once
     proc = subprocess.Popen(worker_argv(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=os.environ.copy())
@@ -1272,23 +1724,36 @@ def run_with_budget(args, cfg: dict, today: datetime.date, started: float) -> Tu
                 proc.wait(timeout=1.0)
             except subprocess.TimeoutExpired:
                 pass        # stuck in an uninterruptible call: reparented, it dies when the call returns
+        out = b""
         if proc.returncode is not None:
             try:
-                proc.communicate(timeout=1.0)
+                out, _err = proc.communicate(timeout=1.0)     # what the worker printed before the deadline
             except (subprocess.TimeoutExpired, ValueError, OSError):
-                pass
+                out = b""
         message = "budget %g s exceeded" % budget
-        return not_probed_document(cfg, today, message, {"code": "budget", "level": "warn", "message": message}), 0
+        data, research = _worker_documents((out or b"").decode("utf-8", "replace"))
+        if data is None:
+            data = not_probed_document(cfg, today, message, {"code": "budget", "level": "warn", "message": message})
+        if research is None:
+            research = not_probed_research_document(cfg, today, message, {"code": "budget", "level": "warn",
+                                                                            "message": "research: " + message})
+        return data, research, 0
     text = out.decode("utf-8", "replace")
     if proc.returncode != 0 or not text.strip():
         message = "worker exited %d: %s" % (proc.returncode, err.decode("utf-8", "replace").strip()[-300:] or "no output")
-        return not_probed_document(cfg, today, "error: " + message, {"code": "error", "level": "fail", "message": message}), 1
-    try:
-        doc = json.loads(text)
-    except ValueError as exc:
-        message = "worker printed no readable document (%s)" % exc
-        return not_probed_document(cfg, today, "error: " + message, {"code": "error", "level": "fail", "message": message}), 1
-    return doc, 0
+        diag = {"code": "error", "level": "fail", "message": message}
+        return (not_probed_document(cfg, today, "error: " + message, diag),
+                not_probed_research_document(cfg, today, "error: " + message, dict(diag, message="research: " + message)), 1)
+    data, research = _worker_documents(text)
+    if data is None or research is None:
+        message = "worker printed no readable document"
+        diag = {"code": "error", "level": "fail", "message": message}
+        if data is None:
+            data = not_probed_document(cfg, today, "error: " + message, diag)
+        if research is None:
+            research = not_probed_research_document(cfg, today, "error: " + message, dict(diag, message="research: " + message))
+        return data, research, 1
+    return data, research, 0
 
 
 def main(argv: List[str]) -> int:
@@ -1312,6 +1777,10 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--stub-words", type=int, default=None)
     ap.add_argument("--arxiv-words", type=int, default=None)
     ap.add_argument("--rating-hi-share", type=int, default=None)
+    ap.add_argument("--wiki-pages-per-collection", type=int, default=None, help="the research budget: pages under one dossier (default 5)")
+    ap.add_argument("--wiki-words", type=int, default=None, help="the research budget: words in a page's evidential body (default 3000)")
+    ap.add_argument("--research", action="store_true", help="with --json: the research document (mnemon-doctor-research/1) instead of the data one")
+    ap.add_argument("--envelope", action="store_true", help='both documents as one JSON object {"data": …, "research": …} (the dispatcher\'s input)')
     ap.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv[1:])
     if args.brief and args.budget is None:
@@ -1333,7 +1802,7 @@ def main(argv: List[str]) -> int:
         vault_hint = os.path.abspath(args.vault) if args.vault else (os.environ.get("VAULT_PATH") or "?")
         instance_hint = args.instance or (os.path.basename(vault_hint.rstrip("/")) if args.vault else os.environ.get("MNEMON_INSTANCE")) or "?"
         stub = {"instance": instance_hint, "vault": vault_hint, "budget": args.budget}
-        doc, rc = run_with_budget(args, stub, today, started)
+        doc, research, rc = run_with_budget(args, stub, today, started)
     else:
         stall_init = test_hook("MNEMON_TEST_DOCTOR_STALL_INIT")
         if stall_init:
@@ -1355,24 +1824,32 @@ def main(argv: List[str]) -> int:
                         fh.write(str(os.getpid()))
                 time.sleep(float(stall))
             try:
-                doc = build_document(cfg, today)
+                doc, research = build_documents(cfg, today)
             except Exception as exc:
                 print("vault-doctor: error: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
                 return 1
+            # one document per line, the data one first: the parent keeps what arrived before a deadline
             print(json.dumps(doc, ensure_ascii=False, default=lv._json_default))
+            sys.stdout.flush()
+            stall_research = test_hook("MNEMON_TEST_DOCTOR_STALL_RESEARCH")
+            if stall_research:
+                time.sleep(float(stall_research))      # a deadline that hits the research document only
+            print(json.dumps(research, ensure_ascii=False, default=lv._json_default))
             return 0
         try:
-            doc = build_document(cfg, today)
+            doc, research = build_documents(cfg, today)
         except Exception as exc:
             message = "%s: %s" % (type(exc).__name__, exc)
-            doc = not_probed_document(cfg, today, "error: " + message, {"code": "error", "level": "fail", "message": message})
+            diag = {"code": "error", "level": "fail", "message": message}
+            doc = not_probed_document(cfg, today, "error: " + message, diag)
+            research = not_probed_research_document(cfg, today, "error: " + message, dict(diag, message="research: " + message))
             print("vault-doctor: error: %s" % message, file=sys.stderr)
             rc = 1
 
     if args.list is not None:
-        lines = list_lines(doc, args.list)
+        lines = list_lines(doc, args.list, research)
         if lines is None:
-            print("vault-doctor: no check named %r (names: %s)" % (args.list, ", ".join(CHECK_NAMES)), file=sys.stderr)
+            print("vault-doctor: no check named %r (names: %s)" % (args.list, ", ".join(CHECK_NAMES + RESEARCH_CHECK_NAMES)), file=sys.stderr)
             return 2
         for line in lines:
             print(line)
@@ -1380,15 +1857,19 @@ def main(argv: List[str]) -> int:
     if args.brief:
         if args.json:
             out = {k: v for k, v in doc.items() if k != "checks"}
-            out["brief"] = brief_line(doc)
+            out["research"] = {k: v for k, v in research.items() if k not in ("checks", "pages")}
+            out["brief"] = brief_line(doc, research)
             print(json.dumps(out, ensure_ascii=False, default=lv._json_default))
         else:
-            print(brief_line(doc))
+            print(brief_line(doc, research))
+        return rc
+    if args.envelope:
+        print(json.dumps({"data": doc, "research": research}, ensure_ascii=False, default=lv._json_default))
         return rc
     if args.json:
-        print(json.dumps(doc, ensure_ascii=False, default=lv._json_default))
+        print(json.dumps(research if args.research else doc, ensure_ascii=False, default=lv._json_default))
         return rc
-    for line in text_lines(doc, args.tsv):
+    for line in text_lines(doc, args.tsv, research):
         print(line)
     return rc
 

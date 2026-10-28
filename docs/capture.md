@@ -191,6 +191,10 @@ Instance keys (all optional; precedence: command-line flag > instance config > d
 | `doctor_stub_words` | `40` | data doctor (`data/thin`, `data/stubs`): below it a body is a stub or landing page |
 | `doctor_arxiv_words` | `600` | data doctor (`data/arxiv-abstract`): a current arXiv body below it is suspected abstract-only |
 | `doctor_rating_hi_share` | `20` | data doctor (`data/rating-scale`): the percent of rated current revisions at ★≥7 above which the check warns |
+| `doctor_wiki_pages_per_collection` | `5` | research doctor (`research/wiki-budget`): wiki pages under one dossier above which the check warns |
+| `doctor_wiki_words` | `3000` | research doctor (`research/wiki-budget`): words in a wiki page's evidential body above which the check warns |
+| `doctor_wiki_pages_per_collection` | `5` | research doctor (`research/wiki-budget`): wiki pages under one dossier above which the check warns |
+| `doctor_wiki_words` | `3000` | research doctor (`research/wiki-budget`): words in a wiki page's evidential body above which the check warns |
 
 The ratification radius of the human loop (seeds, drafts, queues) is not a config key: it is declared in the charter's `## Radius` section ([`specs/2026-10-16-vault-store.md`](specs/2026-10-16-vault-store.md)). `mnemon.yaml.template` documents them; `mnemon config get <key>` and `mnemon config dump` show the resolved values.
 
