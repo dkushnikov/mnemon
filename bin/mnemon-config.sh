@@ -94,7 +94,12 @@ doctor_stub_words|DOCTOR_STUB_WORDS|int|40
 doctor_arxiv_words|DOCTOR_ARXIV_WORDS|int|600
 doctor_rating_hi_share|DOCTOR_RATING_HI_SHARE|int|20
 doctor_wiki_pages_per_collection|DOCTOR_WIKI_PAGES_PER_COLLECTION|int|5
-doctor_wiki_words|DOCTOR_WIKI_WORDS|int|3000'
+doctor_wiki_words|DOCTOR_WIKI_WORDS|int|3000
+research_log_path|RESEARCH_LOG_PATH|str|
+research_package_max_bytes|RESEARCH_PACKAGE_MAX_BYTES|int|400000
+research_timeout|RESEARCH_TIMEOUT|num|900
+research_max_usd|RESEARCH_MAX_USD|num|
+research_recusal_tags|RESEARCH_RECUSAL_TAGS|str|agent-identity,agent-subjecthood,atlas-architecture,atlas-identity,harness-vs-weights'
 
 # The upper-case variable of a table key (empty when the key is not in the table).
 mnemon_config_var_of() {
@@ -520,4 +525,5 @@ load_config() {
   export SITE_MAX_PAGES SITE_TIMEOUT THIN_WORDS EXTRACT_MAX_PARTS
   export DOCTOR_THIN_WORDS DOCTOR_STUB_WORDS DOCTOR_ARXIV_WORDS DOCTOR_RATING_HI_SHARE
   export DOCTOR_WIKI_PAGES_PER_COLLECTION DOCTOR_WIKI_WORDS
+  export RESEARCH_LOG_PATH RESEARCH_PACKAGE_MAX_BYTES RESEARCH_TIMEOUT RESEARCH_MAX_USD RESEARCH_RECUSAL_TAGS
 }

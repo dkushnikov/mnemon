@@ -193,8 +193,11 @@ Instance keys (all optional; precedence: command-line flag > instance config > d
 | `doctor_rating_hi_share` | `20` | data doctor (`data/rating-scale`): the percent of rated current revisions at ★≥7 above which the check warns |
 | `doctor_wiki_pages_per_collection` | `5` | research doctor (`research/wiki-budget`): wiki pages under one dossier above which the check warns |
 | `doctor_wiki_words` | `3000` | research doctor (`research/wiki-budget`): words in a wiki page's evidential body above which the check warns |
-| `doctor_wiki_pages_per_collection` | `5` | research doctor (`research/wiki-budget`): wiki pages under one dossier above which the check warns |
-| `doctor_wiki_words` | `3000` | research doctor (`research/wiki-budget`): words in a wiki page's evidential body above which the check warns |
+| `research_log_path` | unset | research operations (`mnemon research …`): the append-only journal inside the vault; refused under `Wiki/` or outside the vault; unset → `<vault state dir>/research-journal.jsonl` ([research.md §7](research.md)) |
+| `research_package_max_bytes` | `400000` | research operations: the whole build package of `research update` (dossiers, charter, every `source.md`); above it the build is refused as `oversize` |
+| `research_timeout` | `900` | research operations: one fenced build |
+| `research_max_usd` | unset | research operations: `--max-budget-usd` of one fenced build |
+| `research_recusal_tags` | `agent-identity,agent-subjecthood,atlas-architecture,atlas-identity,harness-vs-weights` | research operations: a dossier tag in this comma-separated list declares recusal — the page is built without `## Atlas reading` ([research.md §3.1](research.md)) |
 
 The ratification radius of the human loop (seeds, drafts, queues) is not a config key: it is declared in the charter's `## Radius` section ([`specs/2026-10-16-vault-store.md`](specs/2026-10-16-vault-store.md)). `mnemon.yaml.template` documents them; `mnemon config get <key>` and `mnemon config dump` show the resolved values.
 

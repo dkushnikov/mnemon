@@ -188,6 +188,11 @@ doctor_arxiv_words: 601
 doctor_rating_hi_share: 21
 doctor_wiki_pages_per_collection: 6
 doctor_wiki_words: 3001
+research_log_path: _claude/research-log.jsonl
+research_package_max_bytes: 400001
+research_timeout: 901
+research_max_usd: 1.5
+research_recusal_tags: agent-identity,one-more
 EOF2
 dump="$("$MNEMON_ROOT/bin/mnemon" --instance keys5set config dump)"
 shown=0; unshown=""

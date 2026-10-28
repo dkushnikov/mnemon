@@ -91,3 +91,13 @@ auto_detect_origin: true
 # doctor_wiki_words: 3000           # words in a wiki page's evidential body that warn (research/wiki-budget)
 # doctor_wiki_pages_per_collection: 5  # research doctor (research/wiki-budget): pages under one dossier above which it warns
 # doctor_wiki_words: 3000           # research doctor (research/wiki-budget): words in a page's evidential body above which it warns
+
+# Research operations (optional; docs/research.md §9). `mnemon research update` builds a
+# Wiki/ page from a recorded package in the same fence as the extractor; these bound it.
+# research_log_path: _claude/research-log.jsonl   # the append-only journal, inside the vault (never under Wiki/);
+#                                                  # unset = <vault state dir>/research-journal.jsonl
+# research_package_max_bytes: 400000               # the whole build package (dossiers, charter, every source.md); above it → oversize
+# research_timeout: 900                            # seconds before the fenced build's process group is terminated
+# research_max_usd: 0.50                           # --max-budget-usd of one build; unset = no cap
+# research_recusal_tags: agent-identity,agent-subjecthood,atlas-architecture,atlas-identity,harness-vs-weights
+#                                                  # a dossier tag in this list declares recusal: no `## Atlas reading`

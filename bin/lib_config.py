@@ -68,6 +68,11 @@ EXPORTS = (
     "DOCTOR_RATING_HI_SHARE",
     "DOCTOR_WIKI_PAGES_PER_COLLECTION",
     "DOCTOR_WIKI_WORDS",
+    "RESEARCH_LOG_PATH",
+    "RESEARCH_PACKAGE_MAX_BYTES",
+    "RESEARCH_TIMEOUT",
+    "RESEARCH_MAX_USD",
+    "RESEARCH_RECUSAL_TAGS",
 )
 
 # The scalar keys with defaults (capture contracts §7, capture layer §5): one row per
@@ -102,6 +107,13 @@ CONFIG_KEYS = (
     # the research document's budget (research interface §10, phase 3b)
     ("doctor_wiki_pages_per_collection", "DOCTOR_WIKI_PAGES_PER_COLLECTION", "int", "5"),
     ("doctor_wiki_words", "DOCTOR_WIKI_WORDS", "int", "3000"),
+    # the research operations (docs/research.md §9, phase 3c)
+    ("research_log_path", "RESEARCH_LOG_PATH", "str", ""),
+    ("research_package_max_bytes", "RESEARCH_PACKAGE_MAX_BYTES", "int", "400000"),
+    ("research_timeout", "RESEARCH_TIMEOUT", "num", "900"),
+    ("research_max_usd", "RESEARCH_MAX_USD", "num", ""),
+    ("research_recusal_tags", "RESEARCH_RECUSAL_TAGS", "str",
+     "agent-identity,agent-subjecthood,atlas-architecture,atlas-identity,harness-vs-weights"),
 )
 
 
