@@ -137,6 +137,11 @@ assert_eq "$rc" "0" "reindex still writes the index"
 assert_contains "$err" "Collections/ could not be listed" "...and says the section was not regenerated"
 assert_contains "$(cat "$VAULT/index.md")" "_Collections/ could not be listed" "...with one row saying so instead of an empty section"
 assert_contains "$(cat "$VAULT/index.md")" "| Collections | ? |" "...and the Status row says ?"
+run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" search --query trust --include-collections
+assert_eq "$rc" "2" "search --include-collections refuses an unlistable Collections/ (exit 2)"
+assert_contains "$err" "Collections/ could not be listed" "...and says why"
+run "$MNEMON" --config "$TEST_TMPDIR/research.yaml" search --query trust
+assert_eq "$rc" "0" "...while a search without the flag never touches the folder"
 chmod 755 "$VAULT/Collections"
 
 rm -rf "$TEST_TMPDIR"

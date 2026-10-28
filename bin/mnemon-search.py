@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -245,8 +246,12 @@ def collect_targets(
     if include_collections:
         col_dir = vault / "Collections"
         if col_dir.is_dir():
-            for md in sorted(col_dir.glob("*.md")):
-                if not md.name.startswith("."):
+            # a folder that exists but cannot be listed is never an empty one: the caller refuses
+            # (OSError) instead of answering with no collection results
+            names = sorted(os.listdir(col_dir))
+            for name in names:
+                md = col_dir / name
+                if name.endswith(".md") and not name.startswith(".") and md.is_file():
                     targets.append((md, "collection"))
     return targets
 
@@ -475,7 +480,11 @@ def main() -> int:
         print("ERROR: query contains no usable tokens (>=2 chars)", file=sys.stderr)
         return 2
 
-    targets = collect_targets(vault, args.include_source, args.include_synthesis, args.include_collections)
+    try:
+        targets = collect_targets(vault, args.include_source, args.include_synthesis, args.include_collections)
+    except OSError as exc:
+        print(f"ERROR: Collections/ could not be listed ({exc}); no answer is better than an empty one", file=sys.stderr)
+        return 2
 
     # Single pass: every file matching at least one token, with the set of
     # tokens it matched. Primary results: matched == all tokens (AND).
