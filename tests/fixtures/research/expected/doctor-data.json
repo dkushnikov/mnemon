@@ -214,10 +214,10 @@
   {
    "counts": {
     "claude_md": null,
-    "engine": 4,
+    "engine": 5,
     "protocol": null
    },
-   "detail": "vault CLAUDE.md missing, _meta/Protocol.md missing (engine guide 4)",
+   "detail": "vault CLAUDE.md missing, _meta/Protocol.md missing (engine guide 5)",
    "fix": "operator",
    "items": [
     {
