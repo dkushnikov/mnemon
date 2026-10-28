@@ -25,9 +25,10 @@
     "duplicate_groups": 0,
     "inconsistent": 0,
     "legacy_only_groups": 0,
+    "pre_rule_groups": 0,
     "unkeyed": 0
    },
-   "detail": "5 current revisions, 0 share a resource (resource_sha256 · canonical URL v1); unkeyed 0 (non-url legacy)",
+   "detail": "5 current revisions, 0 share a resource (resource_sha256 · canonical URL v2); unkeyed 0 (non-url legacy)",
    "fix": "mnemon audit --canonical",
    "items": [],
    "name": "store/identity",
