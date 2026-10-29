@@ -31,7 +31,7 @@ assert_eq "$(ls "$VSTATE/captures" | wc -l | tr -d ' ')" "$r0" "...no receipt wr
 
 # a lock held by another process → exit 75 (the holder signals readiness by creating a file after
 # its flock succeeded — exec'd under the lock, so the file proves the lock is held)
-python3 "$LOCK" --vault "$VAULT" -- bash -c ': > "$0"; sleep 12' "$TEST_TMPDIR/held-1" &   # long enough for the four refusals below (dispatcher runs resolve the instance first)
+python3 "$LOCK" --vault "$VAULT" -- bash -c ': > "$0"; sleep 20' "$TEST_TMPDIR/held-1" &   # long enough for the six refusals below (dispatcher runs resolve the instance first)
 holder=$!
 wait_file "$TEST_TMPDIR/held-1"
 assert_eq "$(python3 "$LOCK" --vault "$VAULT" --probe)" "held" "probe reports held while another process holds the lock"
@@ -57,6 +57,15 @@ assert_eq "$rc [$(result capture_id)]" "75 []" "...a --capture-id=<id> is not th
 rc=0; "$MNEMON_ROOT/bin/mnemon" --config "$CONFIG" add --url "https://example.com/l1-dispatch3" >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
 out="$(cat "$TEST_TMPDIR/run.out")"
 assert_eq "$rc [$(result capture_id)] $(result status)" "75 [] locked" "...without a capture id the field is empty"
+# a batch refused on the lock prints the batch summary shape: nothing ran
+printf '[{"url": "https://example.com/b1"}, {"url": "https://example.com/b2"}]\n' > "$TEST_TMPDIR/held.manifest.json"
+rc=0; "$MNEMON_ROOT/bin/mnemon" --config "$CONFIG" add --manifest "$TEST_TMPDIR/held.manifest.json" >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+out="$(cat "$TEST_TMPDIR/run.out")"
+assert_eq "$rc $(result status) $(result error_class) $(result retryable) $(result batch_total) $(result batch_passed) $(result batch_failed)" "75 locked locked true 2 0 0" "a batch refused on the lock: the batch shape (total 2, passed 0, failed 0) with status locked"
+assert_not_contains "$out" "RESULT:capture_id=" "...and no single-capture lines"
+rc=0; "$GW" source-add --config "$CONFIG" --manifest "$TEST_TMPDIR/held.manifest.json" >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
+out="$(cat "$TEST_TMPDIR/run.out")"
+assert_eq "$rc $(result status) $(result batch_total)" "75 locked 2" "...the gateway's own re-exec of a batch prints the same shape"
 # two configs on one vault share the lock…
 rc=0; "$GW" source-add --config "$TEST_TMPDIR/noarchive.yaml" --url "https://example.com/l2" --capture-id l-2 >"$TEST_TMPDIR/run.out" 2>"$TEST_TMPDIR/run.err" || rc=$?
 assert_eq "$rc" "75" "a second config pointing at the same vault sees the same lock (75)"

@@ -1685,7 +1685,12 @@ case "$cmd" in
             # descriptor already holds it (§12 A1) — and execs the gateway with the
             # descriptor inherited. --dry-run writes nothing and takes no lock.
             if _has_flag --dry-run "$@"; then exec "$BIN_DIR/knowledge-gateway.sh" source-add "$@"; fi
-            # a refusal on the lock prints the §3.6 RESULT block with the requested capture id (GH #30)
+            # a refusal on the lock prints the §3.6 RESULT block with the requested capture id (GH #30);
+            # a batch (--manifest) gets the batch summary shape (nothing ran)
+            _m="$(_flag_value --manifest "$@" || true)"
+            if [[ -n "$_m" ]]; then
+              exec python3 "$BIN_DIR/vault-lock.py" --vault "$VAULT_PATH" --locked-batch "$_m" -- "$BIN_DIR/knowledge-gateway.sh" source-add "$@"
+            fi
             exec python3 "$BIN_DIR/vault-lock.py" --vault "$VAULT_PATH" --locked-result "$(_flag_value --capture-id "$@" || _flag_value --ref-id "$@" || true)" -- "$BIN_DIR/knowledge-gateway.sh" source-add "$@" ;;
   ingest)   _reject_post_command_selectors "$@"
             # usage (no inbox dir, --help) needs no instance; the pass does

@@ -96,7 +96,14 @@ class Rules(unittest.TestCase):
             c = R.canonicalize(url)
             self.assertEqual(c.url, url, url)
             self.assertIsNone(c.host_rule)
-        self.assertEqual(R.HOST_SHARE_KEYS, {"x": ("s", "t"), "substack": ("r",)})
+        self.assertEqual(R.HOST_SHARE_KEYS, {"x": ("s", "t"), "substack": ("r", "showWelcomeOnShare")})
+        # the apex reader app: post paths only
+        c = R.canonicalize("https://substack.com/@pub/p-1?r=a&showWelcomeOnShare=true")
+        self.assertEqual((c.url, c.host_rule, c.dropped_params), ("https://substack.com/@pub/p-1", "substack", ["r", "showWelcomeOnShare"]))
+        self.assertEqual(R.canonicalize("https://substack.com/inbox/post/1?r=a").url, "https://substack.com/inbox/post/1")
+        for url in ("https://substack.com/home?r=a", "https://www.substack.com/@pub?r=a", "https://substack.com/@pub/notes?r=a"):
+            self.assertEqual(R.canonicalize(url).url, url, url)
+        self.assertEqual(R.canonicalize("https://substack.com/@pub/p-1?r=a", version=1).url, "https://substack.com/@pub/p-1?r=a")
         self.assertEqual(R.resolve("https://x.com/a/status/1?s=20").kind, "page")
 
     def test_arxiv_resolution(self):

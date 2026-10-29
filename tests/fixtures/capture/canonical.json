@@ -51,7 +51,10 @@
  {"url": "https://somepub.substack.com/p/some-post?r=abc12&utm_medium=ios", "canonical_url": "https://somepub.substack.com/p/some-post", "kind": "page", "requested_version": null, "note": "Substack: the sharer's referral `r` is dropped with the utm (GH #12)"},
  {"url": "https://lenny.substack.com/archive?sort=new&r=abc", "canonical_url": "https://lenny.substack.com/archive?sort=new", "kind": "page", "requested_version": null, "note": "Substack: `r` dropped on any path of a *.substack.com host, other keys kept"},
  {"url": "https://example.com/post?r=abc12", "canonical_url": "https://example.com/post?r=abc12", "kind": "page", "requested_version": null, "note": "`r` is a page key on an unknown host"},
- {"url": "https://substack.com/home?r=abc12", "canonical_url": "https://substack.com/home?r=abc12", "kind": "page", "requested_version": null, "note": "the apex substack.com is not a publication host: `r` kept (its reader-app post links are a named gap)"},
+ {"url": "https://substack.com/home?r=abc12", "canonical_url": "https://substack.com/home?r=abc12", "kind": "page", "requested_version": null, "note": "the apex substack.com outside a post path keeps `r`"},
+ {"url": "https://substack.com/@somepub/p-123456789?r=abc12&utm_campaign=post&showWelcomeOnShare=true", "canonical_url": "https://substack.com/@somepub/p-123456789", "kind": "page", "requested_version": null, "note": "the apex reader app's post link: `r` and `showWelcomeOnShare` dropped with the utm"},
+ {"url": "https://substack.com/home/post/p-123456789?r=abc12", "canonical_url": "https://substack.com/home/post/p-123456789", "kind": "page", "requested_version": null, "note": "the apex /home/post form"},
+ {"url": "https://somepub.substack.com/p/some-post?showWelcomeOnShare=true&x=1", "canonical_url": "https://somepub.substack.com/p/some-post?x=1", "kind": "page", "requested_version": null, "note": "showWelcomeOnShare is a share parameter on a publication host; other keys kept"},
  {"url": "example.com/no-scheme", "error": "invalid-url", "note": "a scheme-less string refused"},
  {"url": "", "error": "invalid-url", "note": "empty refused"}
 ]

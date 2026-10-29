@@ -789,7 +789,11 @@ cap_reexec_under_lock() {  # <script> <args…>
   unset MNEMON_VAULT_LOCK_FD MNEMON_VAULT_LOCK_INODE
   export MNEMON_VAULT_LOCK_REEXEC=1
   # an exec: the PID stays the capture's, signals reach it; on a refusal vault-lock.py itself prints
-  # the §3.6 block (--locked-result, GH #30) before exit 75 — no waiting parent (reviewer A P3-1)
+  # the §3.6 block (--locked-result, GH #30; the batch summary shape for a --manifest run) before
+  # exit 75 — no waiting parent (reviewer A P3-1)
+  if [[ "${ORIGIN:-}" == "batch" && -n "${MANIFEST:-}" ]]; then
+    exec python3 "$_LIB_CAPTURE_DIR/vault-lock.py" --vault "$VAULT_PATH" --locked-batch "$MANIFEST" -- "$@"
+  fi
   exec python3 "$_LIB_CAPTURE_DIR/vault-lock.py" --vault "$VAULT_PATH" --locked-result "${CAPTURE_ID:-}" -- "$@"
 }
 

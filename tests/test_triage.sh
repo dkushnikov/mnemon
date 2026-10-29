@@ -165,7 +165,7 @@ assert_eq "$(fm "$fex" status) $(fm "$fex" dismissed_from) $(fm "$fex" dismissed
 run_m triage list
 assert_not_contains "$out" "$full" "a dismissed full revision is not in the default (bookmarked) queue"
 run_m triage list --status dismissed
-assert_eq "$(col "$full" 2)" "dismissed" "...but list --status dismissed shows it"
+assert_eq "$(col "$full" 2)" "dismissed/full" "...but list --status dismissed shows it, the status column naming the tier"
 run_m triage list --status all --json
 assert_eq "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); r=[x for x in d["items"] if x["revision"]==sys.argv[1]][0]; print(r["status"], r["tier"], r["has_extract"], d["counts"]["dismissed"], d["counts"]["dismissed_full"])' "$full")" "dismissed full True 0 1" "--json: status dismissed · tier full; counts.dismissed counts the cards, counts.dismissed_full the full revision"
 run_gw --url "https://example.com/full" --capture-id full-again

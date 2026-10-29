@@ -9,6 +9,10 @@
         title and hash empty; the capture_id as given) before exit 75 — so `mnemon add` and the
         gateway's own re-exec answer a RESULT parser instead of nothing (GH #30). Nothing else
         changes: the command is still exec'd, the PID stays the capture's.
+    vault-lock.py --vault <path> --locked-batch <manifest> -- <command> [args…]
+        a batch (`--manifest`) refused on the lock prints the batch summary shape instead:
+        status locked · error_class locked · retryable true · batch_total=<items in the manifest,
+        or - when it cannot be read> · batch_passed=0 · batch_failed=0 — nothing ran.
 
 The lock file is `<vault state>/lock`, where the vault state dir is
 `${XDG_STATE_HOME:-$HOME/.local/state}/mnemon/vaults/<sha256(physical vault path)[:16]>/`
@@ -45,6 +49,7 @@ from __future__ import annotations
 import errno
 import fcntl
 import hashlib
+import json
 import os
 import sys
 
@@ -121,6 +126,22 @@ def held_message(vault: str) -> str:
     return f"vault-lock: another writer holds the vault lock ({lock_path(vault)}); retry when it finishes"
 
 
+def locked_batch_result(manifest: str) -> None:
+    """The batch summary shape of a refusal on the vault lock: nothing ran (§3.6 batch mode)."""
+    total = "-"
+    try:
+        with open(manifest, encoding="utf-8") as fh:
+            items = json.load(fh)
+        if isinstance(items, list):
+            total = str(len(items))
+    except (OSError, ValueError):
+        pass
+    for line in ("RESULT:status=locked", "RESULT:error_class=locked", "RESULT:retryable=true",
+                 "RESULT:batch_total=" + total, "RESULT:batch_passed=0", "RESULT:batch_failed=0"):
+        print(line)
+    sys.stdout.flush()
+
+
 def locked_result(capture_id: str) -> None:
     """The gateway's RESULT block for a refusal on the vault lock (capture contracts §3.6, GH #30)."""
     cid = "".join(ch for ch in (capture_id or "") if ch >= " " and ch != "\x7f")
@@ -134,7 +155,7 @@ def locked_result(capture_id: str) -> None:
 def usage(msg: str = "") -> int:
     if msg:
         print(f"vault-lock: {msg}", file=sys.stderr)
-    print("usage: vault-lock.py --vault <path> [--locked-result <capture_id>] -- <command> [args…] | "
+    print("usage: vault-lock.py --vault <path> [--locked-result <capture_id> | --locked-batch <manifest>] -- <command> [args…] | "
           "vault-lock.py --vault <path> --probe", file=sys.stderr)
     return 2
 
@@ -143,6 +164,7 @@ def main(argv: list) -> int:
     vault = ""
     probe = False
     result_cid = None
+    result_batch = None
     command: list = []
     i = 1
     while i < len(argv):
@@ -160,6 +182,11 @@ def main(argv: list) -> int:
                 return usage("--locked-result requires a capture id (may be empty)")
             result_cid = argv[i + 1]
             i += 2
+        elif a == "--locked-batch":
+            if i + 1 >= len(argv):
+                return usage("--locked-batch requires a manifest path")
+            result_batch = argv[i + 1]
+            i += 2
         elif a == "--":
             command = argv[i + 1:]
             break
@@ -169,8 +196,16 @@ def main(argv: list) -> int:
         return usage("--vault is required")
     if probe and command:
         return usage("--probe takes no command")
-    if probe and result_cid is not None:
-        return usage("--locked-result goes with a command")
+    if probe and (result_cid is not None or result_batch is not None):
+        return usage("--locked-result / --locked-batch go with a command")
+
+    def refused() -> int:
+        print(held_message(vault), file=sys.stderr)
+        if result_batch is not None:
+            locked_batch_result(result_batch)
+        elif result_cid is not None:
+            locked_result(result_cid)
+        return LOCK_HELD_EXIT
     if not probe and not command:
         return usage("a command after -- is required")
 
@@ -183,17 +218,11 @@ def main(argv: list) -> int:
     fd, held = inherited_descriptor(lock_path(vault))
     if fd is not None:
         if not held:
-            print(held_message(vault), file=sys.stderr)
-            if result_cid is not None:
-                locked_result(result_cid)
-            return LOCK_HELD_EXIT
+            return refused()
     else:
         fd = open_lock(vault)
         if not try_lock(fd):
-            print(held_message(vault), file=sys.stderr)
-            if result_cid is not None:
-                locked_result(result_cid)
-            return LOCK_HELD_EXIT
+            return refused()
     keep_descriptor(fd)
     try:
         os.execvp(command[0], command)

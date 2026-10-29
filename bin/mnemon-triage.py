@@ -23,7 +23,7 @@ doctor and `status --brief` use. Statuses are derived, never stored (vault store
 `dismissed` is a judgement about the **resource**, carried by its latest revision **whatever its
 tier** (O6, GH #30): `dismiss`/`restore` take a full revision too — the judgement goes into its
 extract.md (`status: dismissed` + `dismissed_from`), and `list --status dismissed|all` shows it
-beside the cards (a `tier` column in --json). A full revision without extract.md is an unfinished
+beside the cards (`tier` in --json; `dismissed/full` in the text status column). A full revision without extract.md is an unfinished
 capture, not a carrier: dismissing it is refused (`mnemon add --resume` first). Dismissing a
 superseded revision is refused naming the head. A later full capture (promotion) supersedes the
 carrier and the judgement lapses with it. `promote` is for bookmark cards only. `dismiss` and `restore` write under the vault lock (the
@@ -137,7 +137,9 @@ def cmd_list(args, scan: dict) -> int:
         return 0
     for x in rows:
         what = x["url"] or ("text" if x["origin"] in ("text", "idea") else x["origin"] or "?")
-        line = "%s\t%s\t%s\t%s\t%s" % (x["revision"], x["status"], x["captured"], x["title"] or "(untitled)", what)
+        # a full revision in the listing (a dismissed one) says so in the status column: `dismissed/full`
+        status = x["status"] if x["tier"] == "bookmark" else "%s/%s" % (x["status"], x["tier"])
+        line = "%s\t%s\t%s\t%s\t%s" % (x["revision"], status, x["captured"], x["title"] or "(untitled)", what)
         if x["status"] == "dismissed" and (x["dismissed"] or x["why"]):
             line += "\t%s%s" % (x["dismissed"] or "", (" — " + x["why"]) if x["why"] else "")
         print(line)

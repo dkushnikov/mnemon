@@ -63,7 +63,8 @@ def canonical(url, version=2):
     # gateway tests see the same identity the real resolver computes; v1 keeps them
     if version >= 2 and query:
         share = ("s", "t") if host in ("x.com", "www.x.com", "mobile.x.com", "m.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com", "m.twitter.com") \
-            else ("r",) if host.endswith(".substack.com") and host != "www.substack.com" else ()
+            else ("r", "showWelcomeOnShare") if (host.endswith(".substack.com") and host not in ("substack.com", "www.substack.com")) \
+            or (host in ("substack.com", "www.substack.com") and re.match(r"^/(?:@[^/]+/p-[^/]+|home/post/p-[^/]+|inbox/post/[^/]+)/?$", path)) else ()
         if share:
             query = "&".join(p for p in query.split("&") if p.split("=", 1)[0] not in share)
     cu = urlunsplit((parts.scheme.lower(), netloc, path, query, frag))

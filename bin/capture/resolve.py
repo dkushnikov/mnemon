@@ -36,8 +36,12 @@ TRACKING_KEYS = (
 # there only — X's `s` (the share source) and `t` (the share token), Substack's `r` (the sharer's referral).
 HOST_SHARE_KEYS = {
     "x": ("s", "t"),
-    "substack": ("r",),
+    "substack": ("r", "showWelcomeOnShare"),
 }
+# the apex substack.com reader app's post links (`/@handle/p-<id>`, `/home/post/p-<id>`, `/inbox/post/<id>`)
+# carry the same share parameters as a publication host; any other apex path keeps its keys
+_SUBSTACK_APEX = frozenset(("substack.com", "www.substack.com"))
+_SUBSTACK_APEX_POST = re.compile(r"^/(?:@[^/]+/p-[^/]+|home/post/p-[^/]+|inbox/post/[^/]+)/?$")
 _X_HOSTS = frozenset(("x.com", "www.x.com", "mobile.x.com", "m.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com", "m.twitter.com"))
 
 _UNRESERVED = frozenset(string.ascii_letters + string.digits + "-._~")
@@ -89,11 +93,14 @@ def is_tracking_key(key: str) -> bool:
     return False
 
 
-def _host_share_rule(host: str) -> Optional[str]:
-    """The name of the host-scoped share rule for this host (`x` · `substack`), else None."""
+def _host_share_rule(host: str, path: str = "") -> Optional[str]:
+    """The name of the host-scoped share rule for this host (`x` · `substack`), else None: X's hosts; a
+    `*.substack.com` publication host on any path; the apex `substack.com` reader app on its post paths only."""
     if host in _X_HOSTS:
         return "x"
-    if host.endswith(".substack.com") and host != "www.substack.com":
+    if host.endswith(".substack.com") and host not in _SUBSTACK_APEX:
+        return "substack"
+    if host in _SUBSTACK_APEX and _SUBSTACK_APEX_POST.match(path):
         return "substack"
     return None
 
@@ -184,7 +191,7 @@ def canonicalize(url: str, version: int = VERSION) -> Canonical:
             return Canonical("https://www.youtube.com/watch?v=" + video, version, "youtube", dropped + dropped_yt,
                              dropped_fragment)
     # version 2: the host-scoped share parameters (v1 keeps them — a replay of a v1 receipt binds the same key)
-    share_rule = _host_share_rule(host) if version >= 2 else None
+    share_rule = _host_share_rule(host, path) if version >= 2 else None
     if share_rule:
         kept, dropped_share = _drop_share_keys(kept, share_rule)
         if dropped_share:
