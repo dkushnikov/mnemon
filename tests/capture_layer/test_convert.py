@@ -571,6 +571,11 @@ class CaptureTextCLI(unittest.TestCase):
         old `\\[([^\\]]*)\\]` rescanned to the end of the line from every bracket (quadratic: a 102 KB page of
         `[` held the vault lock 163 s)."""
         from capture import check, sanitize
+        # the bound: 2 s on a developer machine (the whole test runs in ~1.8 s there). The shared CI runners
+        # missed it on macos-15 · legacy twice (2026-10-28 main, 2026-10-29 PR #33) — the system python 3.9
+        # under load, not a regex. Under CI the bound is 10 s, like the SIGKILL test: the property is
+        # "linear, not quadratic" (the quadratic shape took 163 s), and 10 s separates the two just as well.
+        bound = 10.0 if os.environ.get("CI") else 2.0
         shapes = {"[": "[" * 200000, "](": "](" * 100000, "<a": "<a " * 66000}
         for label, text in shapes.items():
             raw = ("<html><head><title>Hostile</title></head><body><p>%s</p><p>A paragraph with more than six words after it.</p>"
@@ -579,7 +584,7 @@ class CaptureTextCLI(unittest.TestCase):
             rc, out, report, se = self.run_ct(None, raw_bytes=raw, extra=["--raw-kind", "rendered", "--timeout", "30"])
             secs = time.monotonic() - t0
             self.assertEqual(rc, 0, "%s: %s" % (label, se))
-            self.assertLess(secs, 2.0, "%s: %.2f s" % (label, secs))
+            self.assertLess(secs, bound, "%s: %.2f s (bound %g s)" % (label, secs, bound))
             self.assertIn(b"A paragraph with more than six words after it.", out, label)
             self.assertEqual(report["completeness"], "complete", label)
         # the pure functions, on the candidate side (a markdown candidate that is all brackets, parens or tags)
@@ -589,7 +594,7 @@ class CaptureTextCLI(unittest.TestCase):
             check.candidate_text(md)
             check.markdown_counts(md)
             sanitize.markdown(md, "page")
-            self.assertLess(time.monotonic() - t0, 2.0, "%s: candidate_text + markdown_counts + sanitize.markdown" % label)
+            self.assertLess(time.monotonic() - t0, bound, "%s: candidate_text + markdown_counts + sanitize.markdown" % label)
         # the bounded shapes still match what they must
         self.assertEqual(check.candidate_text("see [t](u) and ![a](i \"t\") and [r][1] and <https://h/x>\n\n[1]: https://h/y\n").split(),
                          ["see", "t", "and", "a", "and", "r", "and", "https://h/x"])
