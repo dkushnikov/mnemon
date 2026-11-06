@@ -272,6 +272,30 @@ MEDIA = {
     "track": {"lang": "pt", "kind": "manual", "orig": False},
     "channel": "Example Channel",
 }
+# A13 — the browser lane's bundle record: the flat mnemon-media/1 of media-extract.py plus the lane's additive keys
+# (`chapters`, `captions_path`, `captions_code`, `producer`); written by browser-lane.py, read by cap_media_bundle_check
+MEDIA_BUNDLE = {
+    "schema": "mnemon-media/1",
+    "method": "captions:en:auto",
+    "audio_path": None,
+    "title": "An example talk about agents",
+    "duration": "0:01:40",
+    "upload_date": "20260901",
+    "video_id": "abc123xyz00",
+    "language": "en",
+    "original_language": "en-US",
+    "track": {"lang": "en", "kind": "auto", "orig": True},
+    "channel": "Example Channel",
+    "chapters": [
+        {"start": 0.0, "end": 52.0, "title": "Intro"},
+        {"start": 52.0, "end": 94.0, "title": "Why personal agents took off"},
+        {"start": 94.0, "end": 100.0, "title": "Why that breaks in finance"},
+    ],
+    "captions_path": "abc123xyz00.en-orig.vtt",
+    "captions_code": "en-orig",
+    "producer": {"lane": "browser", "browser": "safari", "tool": "yt-dlp", "tool_version": "2026.10.26",
+                 "acquired_at": "2026-11-05T00:00:00Z"},
+}
 MEDIA_ERROR = {"schema": "mnemon-media-error/1", "error_class": "timeout", "stage": "download", "elapsed_s": 3600.4,
                "kind": None, "error": "timeout after 3600.4s in stage download (budget 3600s); process groups terminated",
                "retryable": True}
@@ -366,6 +390,7 @@ FILES = {
     "site-bundle-stdout.json": BUNDLE_STDOUT,
     "site-report.json": SITE_REPORT,
     "media.json": MEDIA,
+    "media-bundle.json": MEDIA_BUNDLE,
     "media-error.json": MEDIA_ERROR,
     "media-error-blocked.json": MEDIA_ERROR_BLOCKED,
     "receipts/request-v1.json": RECEIPT_V1,

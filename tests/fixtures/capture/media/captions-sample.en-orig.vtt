@@ -1,0 +1,72 @@
+WEBVTT
+Kind: captions
+Language: en
+
+NOTE
+A synthetic automatic track in the shape yt-dlp writes for YouTube (srv3 → vtt): every cue repeats the
+previous cue's last line as its first line (the rolling window), re-displays a cue for 10 ms before the
+next one, carries word timing tags and <c> spans, and encodes `>>` as &gt;&gt;.
+
+00:00:00.160 --> 00:00:03.350 align:start position:0%
+ 
+[Music]<00:00:00.880><c> &gt;&gt;</c><00:00:01.199><c> I</c><00:00:01.520><c> was</c><00:00:01.839><c> previously</c><00:00:02.240><c> an</c><00:00:02.480><c> analyst</c>
+
+00:00:03.350 --> 00:00:03.360 align:start position:0%
+[Music] &gt;&gt; I was previously an analyst
+
+
+00:00:03.360 --> 00:00:06.470 align:start position:0%
+[Music] &gt;&gt; I was previously an analyst
+in<00:00:03.680><c> a</c><00:00:03.919><c> previous</c><00:00:04.240><c> life</c><00:00:04.640><c> at</c><00:00:05.040><c> a</c><00:00:05.359><c> fund</c>
+
+00:00:06.470 --> 00:00:06.480 align:start position:0%
+in a previous life at a fund
+
+
+00:00:06.480 --> 00:00:09.990 align:start position:0%
+in a previous life at a fund
+spent<00:00:06.799><c> way</c><00:00:07.120><c> too</c><00:00:07.359><c> much</c><00:00:07.680><c> time</c><00:00:08.080><c> in</c><00:00:08.400><c> spreadsheets</c>
+
+00:00:09.990 --> 00:00:10.000 align:start position:0%
+spent way too much time in spreadsheets
+
+
+00:00:10.000 --> 00:00:13.120 align:start position:0%
+spent way too much time in spreadsheets
+so<00:00:10.320><c> I</c><00:00:10.559><c> decided</c><00:00:10.880><c> to</c><00:00:11.200><c> build</c><00:00:11.519><c> tools</c>
+
+00:00:13.120 --> 00:00:13.130 align:start position:0%
+so I decided to build tools
+
+
+00:00:52.000 --> 00:00:55.200 align:start position:0%
+so I decided to build tools
+why<00:00:52.320><c> did</c><00:00:52.640><c> personal</c><00:00:53.040><c> agents</c><00:00:53.440><c> take</c><00:00:53.760><c> off</c>
+
+00:00:55.200 --> 00:00:55.210 align:start position:0%
+why did personal agents take off
+
+
+00:00:55.210 --> 00:00:58.900 align:start position:0%
+why did personal agents take off
+three<00:00:55.520><c> answers</c><00:00:55.840><c> reliable</c><00:00:56.320><c> background</c><00:00:56.800><c> agents</c>
+
+00:00:58.900 --> 00:00:58.910 align:start position:0%
+three answers reliable background agents
+
+
+00:00:58.910 --> 00:01:02.300 align:start position:0%
+three answers reliable background agents
+<v Speaker>proactivity and integrations</v> <i>that</i> <b>matter</b>
+
+00:01:34.000 --> 00:01:36.500 align:start position:0%
+proactivity and integrations that matter
+yeah
+
+00:01:36.500 --> 00:01:40.000 align:start position:0%
+yeah
+but<00:01:36.800><c> none</c><00:01:37.120><c> of</c><00:01:37.440><c> it</c><00:01:37.760><c> translates</c><00:01:38.240><c> to</c><00:01:38.560><c> institutional</c><00:01:39.040><c> finance</c>
+
+00:01:40.000 --> 00:01:40.010 align:start position:0%
+but none of it translates to institutional finance
+

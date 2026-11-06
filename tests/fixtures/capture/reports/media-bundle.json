@@ -1,0 +1,43 @@
+{
+ "schema": "mnemon-media/1",
+ "method": "captions:en:auto",
+ "audio_path": null,
+ "title": "An example talk about agents",
+ "duration": "0:01:40",
+ "upload_date": "20260901",
+ "video_id": "abc123xyz00",
+ "language": "en",
+ "original_language": "en-US",
+ "track": {
+  "lang": "en",
+  "kind": "auto",
+  "orig": true
+ },
+ "channel": "Example Channel",
+ "chapters": [
+  {
+   "start": 0.0,
+   "end": 52.0,
+   "title": "Intro"
+  },
+  {
+   "start": 52.0,
+   "end": 94.0,
+   "title": "Why personal agents took off"
+  },
+  {
+   "start": 94.0,
+   "end": 100.0,
+   "title": "Why that breaks in finance"
+  }
+ ],
+ "captions_path": "abc123xyz00.en-orig.vtt",
+ "captions_code": "en-orig",
+ "producer": {
+  "lane": "browser",
+  "browser": "safari",
+  "tool": "yt-dlp",
+  "tool_version": "2026.10.26",
+  "acquired_at": "2026-11-05T00:00:00Z"
+ }
+}

@@ -1,0 +1,24 @@
+{
+ "id": "abc123xyz00",
+ "title": "An example talk about agents",
+ "channel": "Example Channel",
+ "uploader": "Example Channel",
+ "duration": 100,
+ "upload_date": "20260901",
+ "language": "en-US",
+ "webpage_url": "https://www.youtube.com/watch?v=abc123xyz00",
+ "description": "a description",
+ "chapters": [
+  {"start_time": 0.0, "end_time": 52.0, "title": "Intro"},
+  {"start_time": 52.0, "end_time": 94.0, "title": "Why personal agents took off"},
+  {"start_time": 94.0, "end_time": 100.0, "title": "Why that breaks in finance"}
+ ],
+ "subtitles": {},
+ "automatic_captions": {
+  "ar-orig": [{"ext": "vtt", "name": "Arabic (Original)"}],
+  "en": [{"ext": "vtt", "name": "English"}, {"ext": "json3", "name": "English"}],
+  "en-orig": [{"ext": "json3", "name": "English (Original)"}, {"ext": "vtt", "name": "English (Original)"}],
+  "ru": [{"ext": "vtt", "name": "Russian"}],
+  "pt": [{"ext": "vtt", "name": "Portuguese"}]
+ }
+}
