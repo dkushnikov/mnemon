@@ -60,6 +60,7 @@ fi
 run "$MNEMON" help
 assert_contains "$out" "ingest <inbox-dir>" "help lists ingest"
 assert_contains "$out" "fence-probe" "help lists fence-probe"
+assert_contains "$out" "browser-lane youtube <url>" "help lists browser-lane (the producer of the browser lane's media form)"
 assert_contains "$out" "scan | monitor             Reserved" "help keeps scan and monitor reserved"
 run "$MNEMON" version
 assert_eq "$rc" "0" "version exits 0"
@@ -163,6 +164,16 @@ run "$MNEMON" --instance odd audit
 assert_eq "$rc" "0" "audit (python, via lib_config) resolves the odd vault"
 
 # A8: --search-provider, --reader-context-path, and an existing vault's own reader context
+# the browser lane runs through the dispatcher with the instance resolved once; --dry-run runs nothing
+run "$MNEMON" --instance alpha browser-lane youtube "https://youtu.be/abc123xyz00?t=3" --dry-run
+assert_eq "$rc" "0" "browser-lane youtube --dry-run through the dispatcher exits 0"
+assert_contains "$out" "plan abc123xyz00 — yt-dlp --no-update --no-playlist --no-progress --cookies-from-browser safari --skip-download --dump-single-json https://www.youtube.com/watch?v=abc123xyz00" "...the plan canonicalizes the URL and names the browser's cookies"
+assert_contains "$out" "plan abc123xyz00 — $MNEMON add --url https://www.youtube.com/watch?v=abc123xyz00 --media-bundle" "...and the add goes back through this dispatcher"
+run "$MNEMON" browser-lane --help
+assert_eq "$rc" "0" "browser-lane --help needs no instance"
+run "$MNEMON" browser-lane youtube "https://youtu.be/abc123xyz00" --instance alpha --dry-run
+assert_eq "$rc" "2" "a selector after the command is refused, as for every command"
+
 echo "--- init: existing vault (A8) ---"
 run "$MNEMON" init sp --vault "$TEST_TMPDIR/vault-sp" --search-provider qmd --non-interactive
 assert_eq "$rc" "0" "init --search-provider qmd exits 0"
@@ -688,7 +699,25 @@ assert_eq "$(printf '%s\n' "$out" | grep -c '^fail captures' || true)" "0" "...a
 receipt c-integ integrity-error '"2026-10-15_aaaaaaaa"'
 run "$MNEMON" doctor
 assert_contains "$out" "; 1 integrity-error receipt(s) — a published source.md is missing or was edited (operator: restore it, then replay); 3 receipt(s) point at missing files" "doctor: captures counts integrity-error receipts (A3) as an operator item, apart from the --resume hint"
-rm -rf "$VSTATE_A/captures" "$VAULT_A/Sources/2026-10-15_aaaaaaaa" "$VAULT_A/Sources/2026-10-15_bbbbbbbb"
+# a failed receipt whose resource the vault holds through another capture (the same resource_sha256, or the same
+# canonical URL — a bot-walled video captured again through the browser lane) is resolved: not a --resume
+# candidate, not counted as failed; the receipt stays as the record (field test 2026-11-03, defect 2)
+mkdir -p "$VAULT_A/Sources/2026-10-15_cccccccc-2"
+printf -- '---\ntype: source\nurl: "https://www.youtube.com/watch?v=abc123xyz00"\ncanonical_url: "https://www.youtube.com/watch?v=abc123xyz00"\nresource_sha256: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"\n---\nbody\n' > "$VAULT_A/Sources/2026-10-15_cccccccc-2/source.md"
+printf '{"schema":"mnemon-capture-receipt/1","capture_id":"c-wall","state":"failed","error_class":"blocked","retryable":false,"stage":"download","error":"bot-wall: Sign in","revision":"2026-10-15_cccccccc","resource_sha256":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef","canonical_url":"https://www.youtube.com/watch?v=abc123xyz00"}\n' > "$VSTATE_A/captures/c-wall.json"
+printf '{"schema":"mnemon-capture-receipt/1","capture_id":"c-wall-canon","state":"failed","error_class":"blocked","retryable":false,"revision":"2026-10-15_dddddddd","resource_sha256":"0000000000000000000000000000000000000000000000000000000000000000","canonical_url":"https://www.youtube.com/watch?v=abc123xyz00"}\n' > "$VSTATE_A/captures/c-wall-canon.json"
+printf '{"schema":"mnemon-capture-receipt/1","capture_id":"c-wall-other","state":"failed","error_class":"blocked","retryable":false,"revision":"2026-10-15_eeeeeeee","resource_sha256":"1111111111111111111111111111111111111111111111111111111111111111","canonical_url":"https://www.youtube.com/watch?v=other000000"}\n' > "$VSTATE_A/captures/c-wall-other.json"
+run "$MNEMON" doctor
+assert_contains "$out" "warn captures — 3 failed/extract-failed receipt(s) — finish with: mnemon add --resume c-failed;" "doctor: a failed receipt whose resource is still absent stays a --resume candidate (c-wall-other), beside c-failed and c-xfailed"
+assert_contains "$out" "all of them: mnemon doctor --list captures (2 failed receipt(s) resolved by a later capture of the same resource, not counted)" "...the two resolved ones — by resource_sha256 and by canonical URL — are noted, not counted"
+run "$MNEMON" doctor --list captures
+assert_contains "$out" "$(printf 'c-wall\tfailed/resolved\t2026-10-15_cccccccc\tresolved by a later capture of the same resource: Sources/2026-10-15_cccccccc-2/ (blocked)')" "doctor --list captures: the resolved receipt row names the holding revision and the old class"
+assert_contains "$out" "$(printf 'c-wall-canon\tfailed/resolved\t2026-10-15_dddddddd\tresolved by a later capture')" "...matched by canonical URL alone as well"
+assert_eq "$(printf '%s\n' "$out" | grep -c '^c-wall-other	failed/blocked')" "1" "...the unresolved wall keeps its failed row"
+rm -f "$VSTATE_A/captures/c-failed.json" "$VSTATE_A/captures/c-xfailed.json" "$VSTATE_A/captures/c-wall-other.json" "$VSTATE_A/captures/c-integ.json" "$VSTATE_A/captures/c-gone.json" "$VSTATE_A/captures/c-nosrc.json" "$VSTATE_A/captures/c-card-gone.json" "$VSTATE_A/captures/junk.json"
+run "$MNEMON" doctor
+assert_contains "$out" "ok captures — 4 receipt(s), none failed (2 failed receipt(s) resolved by a later capture of the same resource, not counted)" "doctor: resolved receipts alone leave captures ok, with the note"
+rm -rf "$VSTATE_A/captures" "$VAULT_A/Sources/2026-10-15_aaaaaaaa" "$VAULT_A/Sources/2026-10-15_bbbbbbbb" "$VAULT_A/Sources/2026-10-15_cccccccc-2"
 # §12 A2 — receipt-independent: a source.md whose header is never closed is malformed-frontmatter
 mkdir -p "$VAULT_A/Sources/2026-10-15_mmmmmmmm" "$VAULT_A/Sources/2026-10-15_nnnnnnnn"
 printf -- '---\ntype: source\nurl: "https://example.com/open"\n' > "$VAULT_A/Sources/2026-10-15_mmmmmmmm/source.md"
