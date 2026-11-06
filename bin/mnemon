@@ -43,7 +43,7 @@ Commands:
                              (a regex is searched in the page's path plus ?query, e.g. ^/blog/;
                              --include keeps the landing and only the matching pages, --exclude
                              then removes, the cap applies last)
-  search --query <q> [...]   Search extracts (JSON; --human for text)
+  search --query <q> [...]   Search extracts and their videos' titles (JSON; --human for text)
   reindex [--no-hand-edit-report]
                              Rebuild the vault's index.md from Sources/: every row regenerated,
                              replaced rows preserved in _inputs/index-hand-edits-<date>.md

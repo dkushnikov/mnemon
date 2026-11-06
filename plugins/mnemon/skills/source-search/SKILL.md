@@ -7,7 +7,7 @@ description: Search the Mnemon knowledge library for sources, extracts, synthesi
 
 Searches the library of the selected Mnemon instance for sources matching a query. Results are ranked by rating (higher is more useful to the reader) then recency.
 
-The engine performs a grep-style token scan — every token must appear in the file. It does **not** run a semantic (qmd) search, whatever the instance's `search_provider` says: the JSON reports `provider: "grep"` (the method that ran) and `configured_provider` (the config value, `null` when `--vault` was given). Never tell the user that semantic search was used.
+The engine performs a grep-style token scan — every token must appear in the file (for a video: in its extract or in the video's title, which the engine reads from `source.md`). It does **not** run a semantic (qmd) search, whatever the instance's `search_provider` says: the JSON reports `provider: "grep"` (the method that ran) and `configured_provider` (the config value, `null` when `--vault` was given). Never tell the user that semantic search was used.
 
 ## How to run
 
@@ -35,7 +35,7 @@ The command prints a JSON object to stdout. Parse it and format the results for 
 | `--query` | required | The search query. Tokenized into lowercase words of ≥2 chars; matching is AND across tokens (a file must contain all of them). |
 | `--domain` | none | Filter by one domain tag from the extract frontmatter, e.g. `career`, `learning`, `ai`. |
 | `--limit` | 10 | Max number of results to return. |
-| `--include-source` | off | Also search `source.md` (raw captured content), not just `extract.md`. Use when the user is looking for a specific phrase that might only appear in the raw source. |
+| `--include-source` | off | Also search `source.md` (raw captured content), not just `extract.md`. Use when the user is looking for a specific phrase that might only appear in the raw source. Not needed to find a video by its title: the default search matches each extract together with the title of its video. |
 | `--include-synthesis` | off | Also search the `Synthesis/` directory (the reader's own notes). Use when the user might be looking for their own writing, not just captured material. |
 | `--include-collections` | off | Also search `Collections/` (research dossiers: a question and the revisions filed under it). Use when the user asks what has been gathered on a topic, or which dossier a source belongs to. |
 | `--include-wiki` | off | Also search `Wiki/` pages — what the evidence says about a topic now, built by an agent with locators into the sources. They come as a **separate block** (`wiki` in the JSON) with its own limit; pages the doctor marks `suppressed` (vetoed by the owner), `unbound` (a broken locator or seal) or not probed are never shown, `orphan` pages (no open dossier) only with `--include-orphans`. Use when the user asks what the evidence says, not which sources exist. |
@@ -123,7 +123,7 @@ Lead with title + rating — rating is the reader's primary triage signal, so it
 
 If the first pass returns few or zero results and the user seemed to expect more, try:
 
-1. Re-run with `--include-source` — the phrase might be in the raw capture, not the summary
+1. Re-run with `--include-source` — the phrase might be in the raw capture, not the summary (a source captured without an extract is found only this way, a video too)
 2. Re-run with `--include-synthesis` — the reader may have written about it themselves
 3. Re-run with `--include-collections` — a dossier may already gather the sources on this question
 4. Re-run with `--include-wiki` — a page may already state what the evidence says (its locators lead to the sources)
