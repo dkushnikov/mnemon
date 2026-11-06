@@ -96,11 +96,13 @@ def write_extract(
     return path
 
 
-def write_source(folder: Path, body: str) -> Path:
-    """Write a minimal source.md in a folder (for --include-source tests)."""
+def write_source(folder: Path, body: str, *fields: str) -> Path:
+    """Write a minimal source.md in a folder (for --include-source tests); `fields` are extra
+    frontmatter lines, e.g. 'video_title: "A talk"' (the title rule reads them, A15)."""
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / "source.md"
-    path.write_text(f"---\ntype: source\n---\n\n{body}\n", encoding="utf-8")
+    head = "\n".join(["---", "type: source", *fields, "---"])
+    path.write_text(f"{head}\n\n{body}\n", encoding="utf-8")
     return path
 
 
@@ -618,6 +620,103 @@ class ConfigResolutionTests(TempVaultMixin, unittest.TestCase):
 # EndToEndTests — full pipeline via subprocess
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# SourcesTitleTests — the title of a Sources result is the revision's title by the index rule
+# (capture layer A14/A15): source.md's `video_title` when the source has one, else extract.md's
+# `title`, else source.md's `title`, its `# ` heading or the folder name — one function with the
+# reindexer (knowledge-reindex.folder_title).
+# ---------------------------------------------------------------------------
+
+class SourcesTitleTests(TempVaultMixin, unittest.TestCase):
+    VIDEO = "An example talk about agents"
+    THESIS = "What the talk is really about"
+
+    def _video(self, name: str, video_title_line: str) -> Path:
+        folder = self.vault / "Sources" / name
+        write_extract(folder, title=self.THESIS, rating=7, domains=["learning"], created="2026-05-05",
+                      body="The extract of a captioned talk: agents, memory, tools.")
+        write_source(folder, "The transcript body: agents everywhere.", "origin: youtube", video_title_line)
+        return folder
+
+    def test_video_title_names_an_extract_result(self):
+        folder = self._video("2026-05-05_aaa", f'video_title: "{self.VIDEO}"')
+        res = search.assemble_result(folder / "extract.md", "extract", None, self.vault)
+        self.assertEqual(res["title"], self.VIDEO)
+        self.assertEqual(res["result_type"], "extract")
+        # the extractor's own title stays its own field in extract.md; the other keys come from the extract
+        self.assertEqual(search.parse_frontmatter(folder / "extract.md")["title"], self.THESIS)
+        self.assertEqual(res["rating"], 7)
+
+    def test_video_title_names_a_source_result(self):
+        folder = self._video("2026-05-05_aaa", f'video_title: "{self.VIDEO}"')
+        res = search.assemble_result(folder / "source.md", "source", None, self.vault)
+        self.assertEqual(res["title"], self.VIDEO)
+        self.assertEqual(res["result_type"], "source")
+        self.assertEqual(res["domains"], ["learning"])      # metadata from the paired extract, as before
+
+    def test_empty_video_title_falls_back_to_the_extract(self):
+        folder = self._video("2026-05-05_aaa", 'video_title: ""')
+        res = search.assemble_result(folder / "extract.md", "extract", None, self.vault)
+        self.assertEqual(res["title"], self.THESIS)
+
+    def test_no_video_title_keeps_the_extract_title(self):
+        folder = self._video("2026-05-05_aaa", 'upload_date: "20260101"')
+        res = search.assemble_result(folder / "extract.md", "extract", None, self.vault)
+        self.assertEqual(res["title"], self.THESIS)
+
+    def test_video_title_decoded_not_display_escaped(self):
+        # the §4.4 subset: `\"` and `\\` decoded, nothing else; `]]` and `|` as they are (the index
+        # escapes them for the wikilink, the JSON carries the string)
+        folder = self._video("2026-05-05_aaa", 'video_title: "a \\"quoted\\" \\\\ title ]] with | marks"')
+        res = search.assemble_result(folder / "extract.md", "extract", None, self.vault)
+        self.assertEqual(res["title"], 'a "quoted" \\ title ]] with | marks')
+
+    def test_extract_without_a_title_takes_the_folder_title(self):
+        # one function with the reindexer: the tail is the index's (source.md's title, its heading, the
+        # folder name), no longer the file stem
+        folder = self.vault / "Sources" / "2026-05-06_bbb"
+        folder.mkdir(parents=True)
+        (folder / "extract.md").write_text("---\ntype: extract\nrating: 5\n---\n\nbody agents\n", encoding="utf-8")
+        write_source(folder, "transcript", 'title: "From the source"')
+        res = search.assemble_result(folder / "extract.md", "extract", None, self.vault)
+        self.assertEqual(res["title"], "From the source")
+        (folder / "source.md").write_text("---\ntype: source\n---\n\nbody\n", encoding="utf-8")
+        res = search.assemble_result(folder / "extract.md", "extract", None, self.vault)
+        self.assertEqual(res["title"], "2026-05-06_bbb")
+
+    def test_legacy_title_forms_decode_as_search_always_did(self):
+        # the precedence is the reindexer's, the scalars are search's own: a single-quoted title with a
+        # doubled apostrophe, a bare title with a trailing comment, `~` as absent
+        folder = self.vault / "Sources" / "2026-05-08_ddd"
+        folder.mkdir(parents=True)
+        ex = folder / "extract.md"
+        ex.write_text("---\ntype: extract\ntitle: 'It''s quoted'\nrating: 5\n---\n\nbody\n", encoding="utf-8")
+        self.assertEqual(search.assemble_result(ex, "extract", None, self.vault)["title"], "It's quoted")
+        ex.write_text("---\ntype: extract\ntitle: A title # note\nrating: 5\n---\n\nbody\n", encoding="utf-8")
+        self.assertEqual(search.assemble_result(ex, "extract", None, self.vault)["title"], "A title")
+        write_source(folder, "transcript", "video_title: 'Talk ''quoted'' # not a comment'")
+        self.assertEqual(search.assemble_result(ex, "extract", None, self.vault)["title"], "Talk 'quoted' # not a comment")
+        ex.write_text("---\ntype: extract\ntitle: ~\n---\n\nbody\n", encoding="utf-8")
+        write_source(folder, "transcript", "title: From the source")
+        self.assertEqual(search.assemble_result(ex, "extract", None, self.vault)["title"], "From the source")
+
+    def test_end_to_end_json_and_human(self):
+        self._video("2026-05-05_aaa", f'video_title: "{self.VIDEO}"')
+        write_extract(self.vault / "Sources" / "2026-05-07_ccc", title="A page about agents", rating=9,
+                      domains=["learning"], created="2026-05-07", body="An article: agents and tools.")
+        out = self._run("--query", "agents")
+        titles = [r["title"] for r in out["results"]]
+        self.assertEqual(titles, ["A page about agents", self.VIDEO])    # ranked by rating; the video by its title
+        self.assertNotIn(self.THESIS, titles)
+        out = self._run("--query", "everywhere", "--include-source")      # a token only the transcript has
+        self.assertEqual(out["count"], 1)
+        self.assertEqual((out["results"][0]["result_type"], out["results"][0]["title"]), ("source", self.VIDEO))
+        human = self._proc("--query", "agents", "--human")
+        self.assertEqual(human.returncode, 0, human.stderr)
+        self.assertIn(f"2. {self.VIDEO}", human.stdout)
+        self.assertNotIn(self.THESIS, human.stdout)
+
+
 class EndToEndTests(TempVaultMixin, unittest.TestCase):
     def setUp(self):
         super().setUp()
@@ -671,8 +770,12 @@ class EndToEndTests(TempVaultMixin, unittest.TestCase):
         write_source(self.vault / "Sources" / "2026-01-04_ddd", body="lonely-raw-marker here")
         out = self._run("--query", "lonely-raw-marker", "--include-source")
         self.assertEqual(out["count"], 1)
-        self.assertEqual(out["results"][0]["title"], "source")
+        # no extract, no title, no heading: the folder name — the index rule's tail (A15), not the file stem
+        self.assertEqual(out["results"][0]["title"], "2026-01-04_ddd")
         self.assertEqual(out["results"][0]["domains"], [])
+        write_source(self.vault / "Sources" / "2026-01-05_eee", "lonely-raw-marker too", 'title: "A card"')
+        out = self._run("--query", "lonely-raw-marker", "--include-source")
+        self.assertEqual(sorted(r["title"] for r in out["results"]), ["2026-01-04_ddd", "A card"])   # a source.md title names a card, as before
 
     def test_include_synthesis_flag(self):
         self.assertEqual(self._run("--query", "perspective")["count"], 0)

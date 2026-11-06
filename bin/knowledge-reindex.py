@@ -58,7 +58,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 HEADER_CAP = 256 * 1024          # §12 A2: the whole header, never a silent truncation
 NOTE_SEP = ' — '                 # the index_note suffix
@@ -376,24 +376,30 @@ def cycle_components(edges: dict[str, list[str]]) -> tuple[set[tuple[str, str]],
     return cycle_edges, cycles
 
 
-def folder_title(folder: Path) -> tuple[str, str]:
+def folder_title(folder: Path, field: Callable[[str, str], str | None] | None = None) -> tuple[str, str]:
     """(title, link target) of a folder — the one rule for a row and for a `⤳ superseded by`
     marker. The title: source.md's `video_title` when the source has one (a video is named by
     its title, not by the extractor's — capture layer A14; an empty value counts as absent),
     else extract.md's `title`, else source.md's `title`, its `# ` heading or the folder name.
-    The target is `extract` when extract.md exists, else `source`."""
+    The target is `extract` when extract.md exists, else `source`. `field(text, key)` reads a
+    top-level scalar of a file's text — `parse_field` by default; a caller passes its own reader
+    to keep its own scalar decoding under this precedence. Shared with mnemon-search.py (A15): a
+    search result of a Sources revision carries this title, its scalars read by search's own
+    frontmatter parser; the gateway's `RESULT:title=` reads the same three fields in bash
+    (`cap_title_from_files`, contracts A11) with an empty tail."""
+    get = field or parse_field
     ex_path = folder / 'extract.md'
     src_path = folder / 'source.md'
     src = src_path.read_text(encoding='utf-8', errors='ignore') if src_path.exists() else ''
     target = 'extract' if ex_path.exists() else 'source'
-    title = parse_field(src, 'video_title')
+    title = get(src, 'video_title')
     if title:
         return title, target
     if ex_path.exists():
-        title = parse_field(ex_path.read_text(encoding='utf-8', errors='ignore'), 'title')
+        title = get(ex_path.read_text(encoding='utf-8', errors='ignore'), 'title')
         if title:
             return title, target
-    title = parse_field(src, 'title')
+    title = get(src, 'title')
     if not title:
         m = re.search(r'^#\s+(.+)$', src, re.M)
         title = m.group(1).strip() if m else folder.name

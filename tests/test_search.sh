@@ -57,6 +57,22 @@ EOF
 mk_extract 2026-04-04_aaa11111 "Karpathy on LLM wikis" 9 2026-04-04 "learning" "Karpathy describes an LLM-maintained wiki workflow."
 mk_extract 2026-03-01_bbb22222 "Knowledge systems review" 7 2026-03-01 "learning, career" "Review of knowledge management systems; mentions Karpathy once."
 mk_extract 2026-02-01_ccc33333 "Gardening notes" 5 2026-02-01 "home" "Tomatoes need staking in June."
+# mk_source <dir> <frontmatter line>: a source.md beside the extract — the title rule reads it (A15)
+mk_source() {
+  local d="$VAULT/Sources/$1"
+  mkdir -p "$d"
+  cat > "$d/source.md" <<EOF
+---
+type: source
+origin: youtube
+$2
+---
+
+A transcript body: personal agents everywhere.
+EOF
+}
+mk_extract 2026-05-05_ddd44444 "What the talk is really about" 8 2026-05-05 "learning" "A captioned talk on personal agents."
+mk_source 2026-05-05_ddd44444 'video_title: "An example talk about agents"'
 
 out=$("$MNEMON" --instance searchtest search --query karpathy)
 assert_eq "$(printf '%s' "$out" | jget 'd["count"]')" "2" "two extracts match karpathy"
@@ -90,6 +106,14 @@ assert_eq "$(printf '%s' "$out" | jget 'd["count"]')" "1" "--limit respected"
 out=$("$MNEMON" --instance searchtest search --query karpathy --human)
 assert_contains "$out" "Found 2 result(s) for 'karpathy'" "--human output"
 assert_contains "$out" "1. Karpathy on LLM wikis" "--human lists titles"
+
+out=$("$MNEMON" --instance searchtest search --query agents)
+assert_eq "$(printf '%s' "$out" | jget 'd["count"]')" "1" "one extract matches agents"
+assert_eq "$(printf '%s' "$out" | jget 'd["results"][0]["title"]')" "An example talk about agents" "a video is named by its title: source.md's video_title, not the extractor's (A15)"
+out=$("$MNEMON" --instance searchtest search --query everywhere --include-source)
+assert_eq "$(printf '%s' "$out" | jget 'd["results"][0]["result_type"] + " " + d["results"][0]["title"]')" "source An example talk about agents" "...a source result too"
+out=$("$MNEMON" --instance searchtest search --query agents --human)
+assert_contains "$out" "1. An example talk about agents" "...and the human list"
 
 rc=0; out=$(MNEMON_INSTANCE=nosuch "$MNEMON" search --query karpathy --vault "$VAULT" 2>&1) || rc=$?
 assert_eq "$rc" "0" "--vault override needs no config"

@@ -34,6 +34,15 @@ Design notes
   use — scalar strings (quoted or not), integers, inline lists `[a, b]`, block
   lists (`- item`) and one-level nested maps (`capture_context:`). Dates stay
   strings ("YYYY-MM-DD"), which is also what the JSON output needs. No PyYAML.
+- Title of a Sources result (`extract` or `source`): the revision's title by the
+  index rule — one function with the reindexer (`knowledge-reindex.folder_title`,
+  capture layer A14/A15): source.md's `video_title` when the source has one (a
+  video is named by its title, not by the extractor's one-line thesis), else
+  extract.md's `title`, else source.md's `title`, its `# ` heading or the folder
+  name. The precedence is the reindexer's; the scalars are read by this script's
+  own frontmatter parser, so a legacy single-quoted or `#`-commented title
+  decodes as before. Not display-escaped. The gateway's `RESULT:title=` follows
+  the same rule (contracts A11).
 - Output: JSON to stdout by default (consumed by the plugin skill); `--human`
   prints a readable list for ad-hoc CLI use.
 - Provider: this script always performs the grep-style scan above — there is
@@ -45,6 +54,7 @@ Design notes
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -54,6 +64,27 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import lib_config  # noqa: E402
 import lib_research  # noqa: E402  (the one reader of Collections/*.md)
+
+
+def _load_sibling(name: str, filename: str):
+    """A sibling script whose file name is not an importable module name (as lib_vault.py loads them)."""
+    spec = importlib.util.spec_from_file_location(name, str(Path(__file__).resolve().parent / filename))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_REINDEXER = None
+
+
+def _reindexer():
+    """knowledge-reindex.py, loaded on the first Sources result (a wiki- or collection-only search never
+    needs it): its `folder_title` is the one rule that names a Sources revision — the index row, its
+    ` ⤳ superseded by ` marker and, since capture layer A15, a search result (assemble_result)."""
+    global _REINDEXER
+    if _REINDEXER is None:
+        _REINDEXER = _load_sibling("knowledge_reindex", "knowledge-reindex.py")
+    return _REINDEXER
 
 SEARCH_SCHEMA = "mnemon-search/2"
 RESULT_TYPES = ("extract", "source", "synthesis", "collection", "wiki")
@@ -192,12 +223,8 @@ def parse_frontmatter_text(block: str) -> dict:
     return data
 
 
-def parse_frontmatter(path: Path) -> dict:
-    """Extract frontmatter from a markdown file. Returns {} if absent or malformed."""
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return {}
+def parse_frontmatter_of(text: str) -> dict:
+    """The frontmatter of a markdown file's text. Returns {} if absent or malformed."""
     if not text.startswith("---"):
         return {}
     lines = text.split("\n")
@@ -209,6 +236,27 @@ def parse_frontmatter(path: Path) -> dict:
     if end_idx is None:
         return {}
     return parse_frontmatter_text("\n".join(lines[1:end_idx]))
+
+
+def parse_frontmatter(path: Path) -> dict:
+    """Extract frontmatter from a markdown file. Returns {} if absent or malformed."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    return parse_frontmatter_of(text)
+
+
+def _title_field(text: str, key: str) -> str | None:
+    """A top-level scalar of a file's text through this script's own frontmatter parser — the reader
+    handed to `knowledge-reindex.folder_title` (A15), so a legacy single-quoted (`'It''s'`) or
+    `#`-commented title decodes as every search result decoded it before; `null`, `~`, a list, a map
+    and an empty value count as absent."""
+    value = parse_frontmatter_of(text).get(key)
+    if value is None or isinstance(value, (list, dict)):
+        return None
+    value = str(value).strip()
+    return value or None
 
 
 def _as_list(value) -> list:
@@ -379,13 +427,26 @@ def assemble_result(path: Path, result_type: str, snippet: str | None, vault: Pa
         folder_rel = str(path.parent)
     rating = meta.get("rating")
     created = meta.get("created") or meta.get("extracted") or ""
+    if result_type in SOURCE_RESULT_TYPES:
+        # a Sources revision is named by the index rule, through the reindexer's own function (capture
+        # layer A14/A15): source.md's `video_title` when the source has one — a video is named by its
+        # title, not by the extractor's one-line thesis — else extract.md's `title`, else source.md's
+        # `title`, its `# ` heading or the folder name. The precedence is the reindexer's; the scalars
+        # are read by this script's own parser (_title_field); not display-escaped: the JSON carries
+        # the string, the index escapes it for the wikilink
+        try:
+            title = _reindexer().folder_title(path.parent, _title_field)[0]
+        except OSError:
+            title = str(meta.get("title") or path.stem)    # a sibling that cannot be read: as before A15
+    else:
+        title = str(meta.get("title") or path.stem)
     return {
         "path": folder_rel,
         "file": path.name,
         "result_type": result_type,
         "tier": tier,
         "status": str(status) if isinstance(status, str) and status else None,
-        "title": str(meta.get("title") or path.stem),
+        "title": title,
         "author": str(meta.get("author") or ""),
         "url": str(meta.get("url") or ""),
         "domains": _as_list(meta.get("domains")),
