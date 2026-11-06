@@ -8,7 +8,10 @@ never drifts from the files (docs/specs/2026-10-15-capture-layer.md §3.9, D14, 
 Behavior:
 - Every row is regenerated from the files — one reverse-chronological catalog entry per folder
   with an extract.md: `- [[Sources/<folder>/extract|<title>]] (<source_type>, <domains>,
-  rating <n>[, <status>])`, plus two derived suffixes:
+  rating <n>[, <status>])` — `<title>` is source.md's `video_title` when the source has one (a
+  YouTube capture through the media path or the browser lane: the catalog names the video, the
+  extractor's own `title` stays in extract.md; capture layer A14), else extract.md's `title`,
+  else source.md's `title`, its `# ` heading or the folder name — plus two derived suffixes:
     ` — <index_note>` — `index_note:` of extract.md (one line, the §4.4 serialization subset,
       decoded and display-escaped like a title): the place for a durable annotation;
     ` ⤳ superseded by [[Sources/<new>/extract|<new title>]]` — derived from every source.md's
@@ -374,21 +377,27 @@ def cycle_components(edges: dict[str, list[str]]) -> tuple[set[tuple[str, str]],
 
 
 def folder_title(folder: Path) -> tuple[str, str]:
-    """(title, link target) of a folder: extract.md's title when it exists (target `extract`),
-    else source.md's title or `# ` heading or the folder name (target `source`)."""
+    """(title, link target) of a folder — the one rule for a row and for a `⤳ superseded by`
+    marker. The title: source.md's `video_title` when the source has one (a video is named by
+    its title, not by the extractor's — capture layer A14; an empty value counts as absent),
+    else extract.md's `title`, else source.md's `title`, its `# ` heading or the folder name.
+    The target is `extract` when extract.md exists, else `source`."""
     ex_path = folder / 'extract.md'
-    if ex_path.exists():
-        ex = ex_path.read_text(encoding='utf-8', errors='ignore')
-        title = parse_field(ex, 'title')
-        if title:
-            return title, 'extract'
     src_path = folder / 'source.md'
     src = src_path.read_text(encoding='utf-8', errors='ignore') if src_path.exists() else ''
+    target = 'extract' if ex_path.exists() else 'source'
+    title = parse_field(src, 'video_title')
+    if title:
+        return title, target
+    if ex_path.exists():
+        title = parse_field(ex_path.read_text(encoding='utf-8', errors='ignore'), 'title')
+        if title:
+            return title, target
     title = parse_field(src, 'title')
     if not title:
         m = re.search(r'^#\s+(.+)$', src, re.M)
         title = m.group(1).strip() if m else folder.name
-    return title, ('extract' if ex_path.exists() else 'source')
+    return title, target
 
 
 def generate_entry(folder: Path) -> str | None:
@@ -400,10 +409,7 @@ def generate_entry(folder: Path) -> str | None:
     src_path = folder / 'source.md'
     src = src_path.read_text(encoding='utf-8', errors='ignore') if src_path.exists() else ''
 
-    title = parse_field(ex, 'title')
-    if not title:
-        m = re.search(r'^#\s+(.+)$', src, re.M)
-        title = m.group(1).strip() if m else folder.name
+    title, _ = folder_title(folder)   # video_title of source.md, else extract.md's title (A14)
 
     source_type = parse_field(ex, 'source_type') or parse_field(src, 'source_type') or '?'
     rating = parse_field(ex, 'rating')

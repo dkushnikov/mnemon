@@ -219,6 +219,26 @@ assert_eq "$(grep -c -- "— hand edit five" "$REPORT")" "0" "...without preserv
 rc=0; out="$("$MNEMON" --config "$CFG" reindex 2>"$TEST_TMPDIR/err")" || rc=$?
 assert_eq "$rc" "0" "mnemon reindex exits 0"
 
+echo "--- a video is named by its title: video_title of source.md wins over the extractor's title (A14) ---"
+R=2026-10-18_rrrr0018; S=2026-10-19_ssss0019; T=2026-10-20_tttt0020; U=2026-10-21_uuuu0021
+mk_source "$R" "An example talk about agents" 'video_title: "An example talk about agents"'; mk_extract "$R" "What the talk is really about" 6
+mk_source "$S" "An example talk about agents" 'video_title: "An example talk about agents"' "supersedes: \"$R\""; mk_extract "$S" "The extractor's second title" 7
+mk_source "$T" "Tau" 'video_title: "A | title ]] with marks"'; mk_extract "$T" "Tau extract" 5
+mk_source "$U" "Upsilon" 'video_title: ""'; mk_extract "$U" "Upsilon extract" 4
+run_ri "$VAULT"
+assert_eq "$rc" "0" "reindex exits 0"
+assert_eq "$(row_of "$R")" "- [[Sources/$R/extract|An example talk about agents]] (article, x, rating 6) ⤳ superseded by [[Sources/$S/extract|An example talk about agents]]" "the row and the marker show the video's title, not the extractor's"
+assert_eq "$(row_of "$S")" "- [[Sources/$S/extract|An example talk about agents]] (article, x, rating 7)" "...the successor's row too"
+assert_contains "$(cat "$VAULT/Sources/$R/extract.md")" 'title: "What the talk is really about"' "the extractor's title stays in extract.md, untouched"
+assert_eq "$(row_of "$T")" "- [[Sources/$T/extract|A / title ] ] with marks]] (article, x, rating 5)" "a video_title is display-escaped like any title"
+assert_eq "$(row_of "$U")" "- [[Sources/$U/extract|Upsilon extract]] (article, x, rating 4)" "an empty video_title falls back to the extractor's title"
+assert_eq "$(report_entries "$R")$(report_entries "$S")$(report_entries "$T")$(report_entries "$U")" "0000" "new rows preserve nothing"
+V=2026-10-22_vvvv0022
+mk_source "$V" "Source Title"
+printf -- '---\ntype: extract\nsource_type: article\nstatus: extracted\nrating: 3\ndomains: [x]\n---\n### Summary\n\ntext\n' > "$VAULT/Sources/$V/extract.md"   # a legacy extract without a title line
+run_ri "$VAULT"
+assert_eq "$(row_of "$V")" "- [[Sources/$V/extract|Source Title]] (article, x, rating 3)" "a legacy extract without a title takes source.md's title before its # heading — the row reads as the marker always did"
+
 cd /
 rm -rf "$TEST_TMPDIR"
 summary

@@ -471,21 +471,25 @@ assert_eq "$(call crash4 1 'd["argv"][1]')" "$SNAP" "...through --file <snapshot
 # --- 9. the outcome matrix (§5.4) ------------------------------------------------
 echo "--- outcome matrix ---"
 materialize matrix --clone text-plain=test-producer:m-exit0-malformed --clone text-plain=test-producer:m-exit4-permanent \
+  --clone text-plain=test-producer:m-exit4-invalid \
   --clone text-plain=test-producer:m-exit4-malformed --clone text-plain=test-producer:m-exit1-fetch \
   --clone text-plain=test-producer:m-exit1-unsupported --clone text-plain=test-producer:m-exit1-archive-exists \
   --clone text-plain=test-producer:m-exit1-integrity --clone text-plain=test-producer:m-exit3-environment \
   --clone text-plain=test-producer:m-exit75-locked --clone text-plain=test-producer:m-other-exit
 scenarios matrix '{"test-producer:m-exit0-malformed": "exit0-malformed", "test-producer:m-exit4-permanent": "exit4-permanent",
+  "test-producer:m-exit4-invalid": "exit4-invalid-output",
   "test-producer:m-exit4-malformed": "exit4-malformed", "test-producer:m-exit1-fetch": "exit1-fetch",
   "test-producer:m-exit1-unsupported": "exit1-unsupported", "test-producer:m-exit1-archive-exists": "exit1-archive-exists",
   "test-producer:m-exit1-integrity": "exit1-integrity", "test-producer:m-exit3-environment": "exit3-environment",
   "test-producer:m-exit75-locked": "exit75-locked", "test-producer:m-other-exit": "other-exit"}'
 ingest matrix
 assert_eq "$rc" "0" "the matrix pass exits 0"
-assert_eq "$(calls matrix)" "10" "every matrix envelope reached the stub"
+assert_eq "$(calls matrix)" "11" "every matrix envelope reached the stub"
 mx() { res matrix "test-producer:$1" 'd["state"] + "/" + str(d["error_class"]) + " retryable=" + str(d["retryable"]) + " attempts=" + str(d["attempts"]) + " revision=" + str(d["revision"])'; }
 assert_eq "$(mx m-exit0-malformed)" "failed/malformed-result retryable=True attempts=1 revision=None" "exit 0 without RESULT:status → failed/malformed-result, retryable"
-assert_eq "$(mx m-exit4-permanent)" "failed/invalid-output retryable=False attempts=1 revision=$REV1" "exit 4 retryable=false → permanent failed with the revision"
+assert_eq "$(mx m-exit4-permanent)" "failed/max-turns retryable=False attempts=1 revision=$REV1" "exit 4 retryable=false (max-turns) → permanent failed with the revision"
+assert_eq "$(mx m-exit4-invalid)" "failed/invalid-output retryable=True attempts=1 revision=$REV1" "exit 4 invalid-output → failed with the revision, retryable (A10: the extractor is a model)"
+assert_eq "$(future "$(res matrix test-producer:m-exit4-invalid 'd["next_attempt_at"]')")" "future" "...with a next attempt scheduled"
 assert_eq "$(mx m-exit4-malformed)" "failed/malformed-result retryable=True attempts=1 revision=None" "exit 4 without a RESULT block → failed/malformed-result, retryable"
 assert_eq "$(mx m-exit1-fetch)" "failed/fetch retryable=True attempts=1 revision=None" "exit 1 fetch → failed/fetch, retryable"
 assert_eq "$(mx m-exit1-unsupported)" "failed/unsupported retryable=False attempts=1 revision=None" "exit 1 unsupported → permanent"
@@ -495,25 +499,28 @@ assert_eq "$(mx m-exit3-environment)" "deferred/environment retryable=True attem
 assert_eq "$(mx m-exit75-locked)" "deferred/locked retryable=True attempts=0 revision=None" "exit 75 → deferred/locked, attempt refunded"
 assert_eq "$(mx m-other-exit)" "failed/unknown-exit retryable=True attempts=1 revision=None" "an unknown exit → failed/unknown-exit, retryable once"
 bound() { res matrix "test-producer:$1" 'str(d["receipt_bound"])'; }
-assert_eq "$(bound m-exit4-permanent) $(bound m-exit4-malformed) $(bound m-exit0-malformed) $(bound m-exit1-fetch) $(bound m-exit1-integrity) $(bound m-exit3-environment) $(bound m-exit75-locked) $(bound m-other-exit)" "True False False False False False False False" "A2: only exit 0 or 4 with RESULT:capture_id=<envelope_id> binds the record"
+assert_eq "$(bound m-exit4-permanent) $(bound m-exit4-invalid) $(bound m-exit4-malformed) $(bound m-exit0-malformed) $(bound m-exit1-fetch) $(bound m-exit1-integrity) $(bound m-exit3-environment) $(bound m-exit75-locked) $(bound m-other-exit)" "True True False False False False False False False" "A2: only exit 0 or 4 with RESULT:capture_id=<envelope_id> binds the record"
 assert_eq "$(future "$(res matrix test-producer:m-exit3-environment 'd["deadline_at"]')")" "future" "exit 3 → deadline_at in the future"
 assert_eq "$(future "$(res matrix test-producer:m-exit75-locked 'd["deadline_at"]')")" "future" "exit 75 → deadline_at in the future"
 assert_eq "$(res matrix test-producer:m-exit4-permanent 'd["next_attempt_at"]')" "None" "a permanent failure schedules no next attempt"
 ingest matrix
-assert_eq "$(calls matrix)" "10" "a pass before the deadlines dispatches nothing"
+assert_eq "$(calls matrix)" "11" "a pass before the deadlines dispatches nothing"
 assert_contains "$out" "waiting test-producer:m-exit3-environment — deferred/environment until" "deferred/environment waits for its deadline"
 assert_contains "$out" "waiting test-producer:m-exit75-locked — deferred/locked until" "deferred/locked waits for its deadline"
-assert_contains "$out" "done-before test-producer:m-exit4-permanent — failed/invalid-output" "a permanent failure is done-before"
+assert_contains "$out" "waiting test-producer:m-exit4-invalid — failed/invalid-output, next attempt at" "an invalid-output failure waits for its backoff — not done-before (A10)"
+assert_contains "$out" "done-before test-producer:m-exit4-permanent — failed/max-turns" "a permanent failure is done-before"
 assert_contains "$out" "done-before test-producer:m-exit1-integrity — failed/integrity-error" "an integrity error is done-before"
 # deadlines honoured: once past, deferred envelopes are claimed again; the fetch retry backs off 30 min; unknown-exit twice → permanent
 set_field matrix test-producer:m-exit3-environment deadline_at "\"$PAST\""
 set_field matrix test-producer:m-exit75-locked deadline_at "\"$PAST\""
 set_field matrix test-producer:m-exit1-fetch next_attempt_at "\"$PAST\""
 set_field matrix test-producer:m-other-exit next_attempt_at "\"$PAST\""
+set_field matrix test-producer:m-exit4-invalid next_attempt_at "\"$PAST\""
 scenarios matrix '{"test-producer:m-exit3-environment": "extracted", "test-producer:m-exit75-locked": "duplicate",
-  "test-producer:m-exit1-fetch": "exit1-fetch", "test-producer:m-other-exit": "other-exit"}'
+  "test-producer:m-exit1-fetch": "exit1-fetch", "test-producer:m-other-exit": "other-exit", "test-producer:m-exit4-invalid": "extracted"}'
 ingest matrix
-assert_eq "$(calls matrix)" "14" "once the deadlines passed, the four due envelopes are dispatched"
+assert_eq "$(calls matrix)" "16" "once the deadlines passed, the five due envelopes are dispatched"
+assert_eq "$(mx m-exit4-invalid)" "captured/None retryable=None attempts=2 revision=$REV1" "an invalid-output failure past its backoff is dispatched again; a valid answer captures it (A10)"
 assert_eq "$(mx m-exit3-environment)" "captured/None retryable=None attempts=1 revision=$REV1" "deferred/environment past its deadline: claimed (attempt 1) and captured"
 assert_eq "$(res matrix test-producer:m-exit75-locked 'd["state"] + " " + str(d["duplicate"]) + " " + str(d["attempts"]) + " " + d["revision"]')" "captured True 1 2026-10-12_aaaaaaaa" "deferred/locked past its deadline: captured as a duplicate"
 assert_eq "$(mx m-exit1-fetch)" "failed/fetch retryable=True attempts=2 revision=None" "a second fetch failure: attempts 2, still retryable"
@@ -539,6 +546,10 @@ assert_eq "$(calls exh)" "2" "...one dispatch per allowed attempt"
 scenarios exh '{"test-producer:text-plain": "extracted"}'
 ingest exh --max-attempts 1 --retry test-producer:text-plain
 assert_eq "$(res exh test-producer:text-plain 'd["state"] + " " + str(d["attempts"]) + "/" + str(d["attempts_allowed"]) + " retries=" + str(d["retries"]) + " " + d["revision"]')" "captured 3/3 retries=2 $REV1" "a second --retry with a working gateway → captured"
+materialize exh-invalid text-plain
+scenarios exh-invalid '{"test-producer:text-plain": "exit4-invalid-output"}'
+ingest exh-invalid --max-attempts 1
+assert_eq "$(res exh-invalid test-producer:text-plain 'd["state"] + " " + str(d["attempts"]) + "/" + str(d["attempts_allowed"]) + " " + d["error_class"] + " rev=" + str(d["revision"])')" "exhausted 1/1 invalid-output rev=$REV1" "a retryable invalid-output on the last allowed attempt → exhausted with the revision, like any transient failure (A10)"
 materialize exh2 text-plain
 scenarios exh2 '{"test-producer:text-plain": "exit4-transient"}'
 ingest exh2 --max-attempts 2

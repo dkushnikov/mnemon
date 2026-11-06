@@ -40,7 +40,8 @@ assert_eq "$(stub_calls)" "2" "...exactly two calls"
 assert_eq "$(result status)" "captured" "...status captured"
 assert_eq "$(result extract)" "invalid" "...extract=invalid"
 assert_eq "$(result error_class)" "invalid-output" "...invalid-output"
-assert_eq "$(result retryable)" "false" "...not retryable"
+assert_eq "$(result retryable)" "true" "...retryable: the extractor is a model, the next run may validate (contracts A10)"
+assert_eq "$(rget v-2 '.retryable')" "true" "...and the receipt says so"
 assert_eq "$(rget v-2 '.state')" "extract-failed" "...receipt extract-failed"
 [[ -f "$VAULT/Sources/$(result revision)/extract.md" ]] && fail "no extract.md after invalid-output" "exists" || pass "...no extract.md"
 [[ -f "$VAULT/Sources/$(result revision)/.extract.md.tmp" ]] && fail "no tmp left" "exists" || pass "...no .extract.md.tmp left"
@@ -67,6 +68,7 @@ stub_reset
 STUB_FIXTURE="$FIX/extract-bad-domains.json" run_gw --url "https://example.com/v5" --capture-id v-5
 assert_eq "$rc" "4" "all domains invalid → exit 4"
 assert_eq "$(result error_class)" "invalid-output" "...invalid-output"
+assert_eq "$(result retryable)" "true" "...retryable like every invalid-output (A10)"
 assert_contains "$(cat "$STUB_DIR/call-2.stdin")" "domains: at least 1 valid item" "...diagnostic after the bounds re-check"
 
 printf 'body\n' > "$TEST_TMPDIR/t.txt"
