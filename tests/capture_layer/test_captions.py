@@ -181,6 +181,12 @@ class Convert(unittest.TestCase):
         self.assertEqual((rep["title"], rep["authors"], rep["published_candidates"]), (None, [], []))
         text, rep = C.convert(b"WEBVTT\n", None, URL)
         self.assertEqual((text, rep["completeness"], rep["error_class"], rep["retryable"]), ("", "unknown", "convert", False))
+        # chapter headings alone are not a transcript (Codex review P2): a header-only track with chapters converts to nothing
+        text, rep = C.convert(b"WEBVTT\n", MEDIA, URL)
+        self.assertEqual((text, rep["error_class"], rep["completeness"]), ("", "convert", "unknown"))
+        # a track whose every line is under three tokens has no eligible reference line: `unknown`, not a vacuous `complete`
+        text, rep = C.convert(b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nyeah\n\n00:00:02.000 --> 00:00:03.000\nokay then\n", None, URL)
+        self.assertEqual((text.strip(), rep["completeness"], rep["eligible_count"], rep["error_class"]), ("yeah okay then", "unknown", 0, None))
         with self.assertRaises(UnicodeDecodeError):
             C.convert(b"\xff\xfe", None, URL)
 

@@ -48,6 +48,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -183,9 +184,35 @@ def ytdlp_base(browser: str):
     return ["yt-dlp", "--no-update", "--no-playlist", "--no-progress", "--cookies-from-browser", browser]
 
 
+def selector_argv() -> list:
+    """The instance selector the dispatcher resolved (`mnemon --instance <name> browser-lane …` exports the pair),
+    repeated before `add` so that the executed command and every PRINTED command name the same vault — a printed
+    command runs in the reader's shell, which has no such environment (Codex review P1). `--instance` when the
+    resolved instance is a named one, `--config` for a config loaded by path, nothing when neither is set."""
+    inst = os.environ.get("MNEMON_INSTANCE") or ""
+    cfg = os.environ.get("MNEMON_CONFIG") or ""
+    if inst and inst != "adhoc":
+        return ["--instance", inst]
+    if cfg:
+        return ["--config", cfg]
+    return []
+
+
+def render_argv(argv) -> str:
+    """A command for a human to paste: shell-quoted (Codex review P2), the plan's `<placeholders>` and `a|b`
+    alternatives left bare."""
+    out = []
+    for tok in argv:
+        if (tok.startswith("<") and tok.endswith(">")) or "|" in tok:
+            out.append(tok)
+        else:
+            out.append(shlex.quote(tok))
+    return " ".join(out)
+
+
 def add_argv(mnemon: str, canonical: str, bundle: str, track: dict, args) -> list:
-    argv = [mnemon, "add", "--url", canonical, "--media-bundle", bundle,
-            "--import-source", PRODUCER_ID, "--producer-fidelity", fidelity_of(track)]
+    argv = [mnemon] + selector_argv() + ["add", "--url", canonical, "--media-bundle", bundle,
+                                         "--import-source", PRODUCER_ID, "--producer-fidelity", fidelity_of(track)]
     if args.context:
         argv += ["--context", args.context]
     if args.intent:
@@ -234,7 +261,16 @@ def _result_map(stdout: str) -> dict:
 
 
 def one_video(url: str, args, mnemon: str, emit) -> Outcome:
+    """One video, every outcome a record: a yt-dlp call that outlives --timeout (the supervisor killed its process
+    group) is this video's `failed`, never the end of the batch (Codex review P2)."""
     o = Outcome(url)
+    try:
+        return _one_video(o, url, args, mnemon, emit)
+    except ME.Timeout as t:
+        return o.done("failed", "timeout after %.1fs in stage %s (budget %gs); the yt-dlp process group was terminated" % (t.elapsed, t.stage, args.timeout))
+
+
+def _one_video(o: Outcome, url: str, args, mnemon: str, emit) -> Outcome:
     canonical, vid = video_of(url)
     if not vid:
         return o.done("invalid", "not a YouTube video URL (watch, youtu.be, shorts, embed, live, music)")
@@ -242,10 +278,10 @@ def one_video(url: str, args, mnemon: str, emit) -> Outcome:
     if args.dry_run:
         bundle = os.path.join(args.out, vid, "<UTC timestamp>")
         o.bundle = bundle
-        emit("plan %s — %s" % (vid, " ".join(ytdlp_base(args.browser) + ["--skip-download", "--dump-single-json", canonical])))
-        emit("plan %s — %s" % (vid, " ".join(ytdlp_base(args.browser) + ["--skip-download", "--write-auto-subs|--write-subs", "--sub-langs", "<chosen at run time by the video's language>", "--sub-format", "vtt/srt/best", "-o", os.path.join(bundle, vid + ".%(ext)s"), canonical])))
+        emit("plan %s — %s" % (vid, render_argv(ytdlp_base(args.browser) + ["--skip-download", "--dump-single-json", canonical])))
+        emit("plan %s — %s" % (vid, render_argv(ytdlp_base(args.browser) + ["--skip-download", "--write-auto-subs|--write-subs", "--sub-langs", "<chosen at run time by the video's language>", "--sub-format", "vtt/srt/best", "-o", os.path.join(bundle, vid + ".%(ext)s"), canonical])))
         if not args.no_add:
-            emit("plan %s — %s" % (vid, " ".join(add_argv(mnemon, canonical, bundle, {"kind": "auto"}, args)).replace("model-transcribed", "<exact|model-transcribed by the track>")))
+            emit("plan %s — %s" % (vid, render_argv(add_argv(mnemon, canonical, bundle, {"kind": "auto"}, args)).replace("model-transcribed", "<exact|model-transcribed by the track>")))
         return o.done("planned", "nothing ran (--dry-run)")
 
     sup = ME.Supervisor(args.timeout)
@@ -301,7 +337,7 @@ def one_video(url: str, args, mnemon: str, emit) -> Outcome:
     os.replace(tmp, os.path.join(bundle, "media.json"))
     if args.no_add:
         return o.done("bundled", "%s · %s (%s) · %d chapter(s) · %s" % (bundle, track["code"], track["kind"], len(rec["chapters"]),
-                                                                        " ".join(add_argv(mnemon, canonical, bundle, track, args))))
+                                                                        render_argv(add_argv(mnemon, canonical, bundle, track, args))))
     # 5. the gateway: the bundle is its input, the video its resource
     argv = add_argv(mnemon, canonical, bundle, track, args)
     try:
@@ -325,11 +361,11 @@ def one_video(url: str, args, mnemon: str, emit) -> Outcome:
         return o.done("captured", "Sources/%s/ · %s (%s) · %d chapter(s) · completeness %s" % (
             rev, track["code"], track["kind"], len(rec["chapters"]), o.add_result.get("completeness", "?")))
     if proc.returncode == 4:
-        return o.done("captured-pending-extract", "Sources/%s/ published; finish with: mnemon add --resume %s" % (rev, rev or o.add_result.get("capture_id", "?")))
+        return o.done("captured-pending-extract", "Sources/%s/ published; finish with: %s" % (rev, render_argv([mnemon] + selector_argv() + ["add", "--resume", rev or o.add_result.get("capture_id", "?")])))
     if proc.returncode == 75:
-        return o.done("locked", "the vault is busy; the bundle stays — retry: %s" % " ".join(argv))
+        return o.done("locked", "the vault is busy; the bundle stays — retry: %s" % render_argv(argv))
     return o.done("add-failed", "mnemon add exit %d%s; the bundle stays — retry: %s" % (
-        proc.returncode, (" (%s%s)" % (o.add_result.get("error_class", ""), (": " + stderr.strip().splitlines()[-1]) if stderr.strip() else "")) if (o.add_result.get("error_class") or stderr.strip()) else "", " ".join(argv)))
+        proc.returncode, (" (%s%s)" % (o.add_result.get("error_class", ""), (": " + stderr.strip().splitlines()[-1]) if stderr.strip() else "")) if (o.add_result.get("error_class") or stderr.strip()) else "", render_argv(argv)))
 
 
 def main() -> int:

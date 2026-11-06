@@ -367,8 +367,12 @@ def convert(vtt: bytes, media: Optional[dict], url: str) -> Tuple[str, dict]:
     cues = parse_vtt(text_in)
     lines = dedupe(cues)
     chapters = chapters_of(media)
-    text = render(lines, chapters)
+    # chapter headings alone are not a transcript (Codex review P2): a track without speech converts to nothing
+    text = render(lines, chapters) if lines else ""
     chk = check(text, lines, chapters)
+    # D6: a reference with zero eligible lines proves nothing — `unknown`, never a vacuous `complete`
+    if text and chk["eligible_count"] == 0:
+        chk["completeness"] = "unknown"
     words = len(text.split())
     nbytes = len(text.encode("utf-8"))
     duration = _duration_seconds(media)

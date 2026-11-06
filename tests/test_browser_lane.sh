@@ -33,6 +33,8 @@ cat > "$STUBS/yt-dlp" <<'STUB'
 printf '%s\n' "$*" >> "$STUB_DIR/ytdlp-calls"
 for a in "$@"; do case "$a" in -x|-f|--audio-format|--extract-audio) echo "stub yt-dlp: audio download flag $a" >&2; exit 99 ;; esac; done
 case " $* " in *" --version "*) echo "2026.10.26"; exit 0 ;; esac
+# STUB_YTDLP=hang: the metadata call never answers (a child sleep of its own, both pids recorded for the teardown check)
+if [[ "${STUB_YTDLP:-ok}" == hang && " $* " == *" --dump-single-json "* ]]; then echo $$ > "$STUB_DIR/ytdlp.pid"; sleep 30 & echo $! > "$STUB_DIR/ytdlp-child.pid"; wait; exit 0; fi
 url="${@: -1}"
 id="${url##*v=}"
 if [[ " $* " == *" --dump-single-json "* ]]; then
@@ -116,9 +118,9 @@ echo "--- dry-run ---"
 stub_reset
 run_lane youtube "$URL1" "https://example.com/not-a-video" --dry-run --out "$OUT" --mnemon "$STUBS/mnemon" --intent "probe"
 assert_eq "$rc" "1" "dry-run with a non-YouTube URL exits 1 (invalid)"
-assert_contains "$out" "plan abc123xyz00 — yt-dlp --no-update --no-playlist --no-progress --cookies-from-browser safari --skip-download --dump-single-json $URL1" "...the metadata call is planned with the browser's cookies"
-assert_contains "$out" "--skip-download --write-auto-subs|--write-subs --sub-langs <chosen at run time by the video's language> --sub-format vtt/srt/best -o $OUT/abc123xyz00/<UTC timestamp>/abc123xyz00.%(ext)s" "...one caption download, one language, nothing else downloaded"
-assert_contains "$out" "$STUBS/mnemon add --url $URL1 --media-bundle $OUT/abc123xyz00/<UTC timestamp> --import-source browser-lane --producer-fidelity <exact|model-transcribed by the track> --intent probe" "...and the gateway call with the bundle"
+assert_contains "$out" "plan abc123xyz00 — yt-dlp --no-update --no-playlist --no-progress --cookies-from-browser safari --skip-download --dump-single-json '$URL1'" "...the metadata call is planned with the browser's cookies (the URL quoted for the shell: a ? is a glob)"
+assert_contains "$out" "--skip-download --write-auto-subs|--write-subs --sub-langs <chosen at run time by the video's language> --sub-format vtt/srt/best -o '$OUT/abc123xyz00/<UTC timestamp>/abc123xyz00.%(ext)s' '$URL1'" "...one caption download, one language, nothing else downloaded"
+assert_contains "$out" "$STUBS/mnemon add --url '$URL1' --media-bundle '$OUT/abc123xyz00/<UTC timestamp>' --import-source browser-lane --producer-fidelity <exact|model-transcribed by the track> --intent probe" "...and the gateway call with the bundle"
 assert_contains "$out" "invalid https://example.com/not-a-video — not a YouTube video URL" "...a non-YouTube URL is invalid, by the engine's own resolver"
 assert_contains "$out" "browser-lane: 2 video(s) · invalid 1 · planned 1" "...the summary line"
 assert_eq "$(ncalls ytdlp-calls) $(ncalls mnemon-calls)" "0 0" "...nothing ran"
@@ -203,17 +205,17 @@ stub_reset
 run_lane youtube "$URL1" --out "$OUT" --no-add --mnemon "$STUBS/mnemon" --pause 0 --recapture
 assert_eq "$rc" "0" "--no-add exits 0"
 B="$(bundle_of abc123xyz00)"
-assert_contains "$out" "bundled abc123xyz00 — $B · en-orig (auto) · 3 chapter(s) · $STUBS/mnemon add --url $URL1 --media-bundle $B --import-source browser-lane --producer-fidelity model-transcribed --recapture" "...the bundle and the exact add argv to run later (--recapture carried)"
+assert_contains "$out" "bundled abc123xyz00 — $B · en-orig (auto) · 3 chapter(s) · $STUBS/mnemon add --url '$URL1' --media-bundle $B --import-source browser-lane --producer-fidelity model-transcribed --recapture" "...the bundle and the exact add argv to run later (--recapture carried)"
 assert_eq "$(ncalls mnemon-calls)" "0" "...no gateway call"
 stub_reset
 STUB_ADD=captured run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
 assert_eq "$rc" "0" "gateway exit 4 (source published, extract pending): the lane exits 0"
-assert_contains "$out" "captured-pending-extract abc123xyz00 — Sources/2026-11-05_abcd1234/ published; finish with: mnemon add --resume 2026-11-05_abcd1234" "...with the --resume door"
+assert_contains "$out" "captured-pending-extract abc123xyz00 — Sources/2026-11-05_abcd1234/ published; finish with: $STUBS/mnemon add --resume 2026-11-05_abcd1234" "...with the --resume door through the dispatcher that ran the lane"
 stub_reset
 STUB_ADD=locked run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
 assert_eq "$rc" "1" "gateway exit 75: exit 1"
 B="$(bundle_of abc123xyz00)"
-assert_contains "$out" "locked abc123xyz00 — the vault is busy; the bundle stays — retry: $STUBS/mnemon add --url $URL1 --media-bundle $B" "...the bundle stays and the retry argv is printed"
+assert_contains "$out" "locked abc123xyz00 — the vault is busy; the bundle stays — retry: $STUBS/mnemon add --url '$URL1' --media-bundle $B" "...the bundle stays and the retry argv is printed"
 assert_file_exists "$B/media.json" "...the bundle is intact"
 stub_reset
 STUB_ADD=fail run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
@@ -228,6 +230,42 @@ assert_eq "$(jget "$TEST_TMPDIR/lane.json" 'd["schema"]') $(jget "$TEST_TMPDIR/l
 assert_eq "$(jget "$TEST_TMPDIR/lane.json" 'd["videos"][0]["outcome"]') $(jget "$TEST_TMPDIR/lane.json" 'd["videos"][0]["track"]["code"]') $(jget "$TEST_TMPDIR/lane.json" 'd["videos"][0]["add"]["exit"]') $(jget "$TEST_TMPDIR/lane.json" 'd["videos"][0]["add"]["result"]["status"]')" "captured en-orig 0 extracted" "...per video: outcome, track, the gateway's exit and RESULT map"
 assert_eq "$(jget "$TEST_TMPDIR/lane.json" 'd["videos"][1]["outcome"]') $(jget "$TEST_TMPDIR/lane.json" 'd["videos"][1]["video_id"]')" "invalid null" "...an invalid URL has no video id"
 
+# --- 5b. Codex review (2026-11-05): a timeout is one video's failure; the selector and the quoting of printed commands ---
+echo "--- timeout per video, selector, quoting ---"
+stub_reset
+STUB_YTDLP=hang run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0 --timeout 1
+assert_eq "$rc" "1" "a yt-dlp call past --timeout: exit 1"
+assert_contains "$out" "failed abc123xyz00 — timeout after 1." "...the video's line says timeout, stage and budget"
+assert_contains "$out" "in stage download (budget 1s); the yt-dlp process group was terminated" "...with the stage"
+assert_contains "$out" "browser-lane: 1 video(s) · failed 1" "...and the summary is still printed"
+for f in ytdlp.pid ytdlp-child.pid; do
+  pid="$(cat "$STUB_DIR/$f" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then fail "stub process $f terminated" "pid $pid alive"; kill -9 "$pid" 2>/dev/null; else pass "stub process $f terminated with its group"; fi
+done
+stub_reset
+STUB_YTDLP=hang run_lane youtube "$URL1" "$URL2" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0 --timeout 1 --json
+assert_eq "$rc" "1" "two hanging videos under --json: exit 1, no crash"
+printf '%s\n' "$out" > "$TEST_TMPDIR/lane-timeout.json"
+assert_eq "$(jget "$TEST_TMPDIR/lane-timeout.json" 'd["counts"]')" '{"failed": 2}' "...the second video was still tried; the document carries both"
+stub_reset
+MNEMON_INSTANCE=work run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0 --intent "a talk"
+assert_eq "$rc" "0" "with the dispatcher's resolved instance in the environment: exit 0"
+assert_eq "$(calls mnemon-calls | cut -d' ' -f1-3)" "--instance work add" "...the executed add names the instance before the command"
+stub_reset
+MNEMON_INSTANCE=work run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0 --intent "a talk" --no-add
+B="$(bundle_of abc123xyz00)"
+assert_contains "$out" "$STUBS/mnemon --instance work add --url '$URL1' --media-bundle $B --import-source browser-lane --producer-fidelity model-transcribed --intent 'a talk'" "...a printed command names the instance too, and quotes the intent for the shell"
+stub_reset
+MNEMON_CONFIG=/some/dir/work.yaml MNEMON_INSTANCE=adhoc run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0 --no-add
+assert_contains "$out" "$STUBS/mnemon --config /some/dir/work.yaml add --url" "...a config loaded by path is repeated as --config"
+stub_reset
+MNEMON_INSTANCE=work STUB_ADD=captured run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
+assert_contains "$out" "finish with: $STUBS/mnemon --instance work add --resume 2026-11-05_abcd1234" "...and the --resume hint carries the instance and the dispatcher's path"
+stub_reset
+run_lane youtube "$URL1" --out "$OUT" --dry-run --mnemon "$STUBS/mnemon" --intent "two words"
+assert_contains "$out" "--intent 'two words'" "the dry-run plan quotes a two-word intent"
+assert_contains "$out" "--sub-langs <chosen at run time by the video's language> --sub-format vtt/srt/best" "...and leaves the plan's placeholders readable"
+
 # --- 6. usage: the browser name, the tools ---
 echo "--- usage ---"
 stub_reset
@@ -235,7 +273,7 @@ run_lane youtube "$URL1" --out "$OUT" --browser "/tmp/cookies.txt" --dry-run
 assert_eq "$rc" "2" "--browser takes a browser name, never a path (a cookie file is not the lane's business)"
 run_lane youtube "$URL1" --out "$OUT" --browser "chrome:Profile 1" --dry-run --mnemon "$STUBS/mnemon"
 assert_eq "$rc" "0" "yt-dlp's BROWSER:PROFILE form passes"
-assert_contains "$out" "--cookies-from-browser chrome:Profile 1 --skip-download --dump-single-json" "...and reaches the plan verbatim"
+assert_contains "$out" "--cookies-from-browser 'chrome:Profile 1' --skip-download --dump-single-json" "...and reaches the plan, quoted for the shell"
 run_lane youtube "$URL1" --out "$OUT" --pause -1 --dry-run
 assert_eq "$rc" "2" "a negative --pause is a usage error"
 run_lane youtube "$URL1" --out "$OUT" --mnemon "$TEST_TMPDIR/no-such-mnemon" --pause 0

@@ -760,17 +760,28 @@ for sm in sorted(glob.glob(os.path.join(glob.escape(vault), "Sources", "*", "sou
         continue
     pos = len(lines[0]) + 1
     closed = False
+    sha = canon = None
+    card = False
     for ln in lines[1:]:
         if ln.strip() in ("---", "..."):
             closed = pos <= CAP
             break
         pos += len(ln) + 1
         if ln.startswith("resource_sha256:"):
-            by_sha.setdefault(literal(ln.split(":", 1)[1]), []).append(folder)
+            sha = literal(ln.split(":", 1)[1])
         elif ln.startswith("canonical_url:"):
-            by_canon.setdefault(literal(ln.split(":", 1)[1]), []).append(folder)
+            canon = literal(ln.split(":", 1)[1])
+        elif ln.startswith("tier:") and literal(ln.split(":", 1)[1]) == "bookmark":
+            card = True
     if not closed:
         malformed.append(folder)
+    # a bookmark card holds no content: it never resolves a failed full capture of its resource (a failed
+    # promotion stays a --resume candidate — Codex review P2)
+    if closed and not card:
+        if sha:
+            by_sha.setdefault(sha, []).append(folder)
+        if canon:
+            by_canon.setdefault(canon, []).append(folder)
 total = 0
 for path in (sorted(glob.glob(os.path.join(glob.escape(cdir), "*.json"))) if have_ledger else []):
     total += 1
