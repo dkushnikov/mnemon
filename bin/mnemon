@@ -72,6 +72,13 @@ Commands:
          [--retry <envelope_id>] [--json]
                              Consume mnemon-envelope/1 files from an inbox directory under
                              the vault lock; one result record per envelope (docs/inbox.md)
+  browser-lane youtube <url>… [--browser safari] [--out <dir>] [--no-add] [--context <ctx>]
+               [--intent <text>] [--recapture] [--pause <s>] [--timeout <s>] [--dry-run] [--json]
+                             The browser lane's media form: one caption track per video through
+                             yt-dlp and the reader's own browser cookies (one call per video, in
+                             order), a bundle per video, then `add --url <video> --media-bundle
+                             <dir>` for each (docs/capture.md §7). The engine itself never uses
+                             cookies; this producer runs outside its fetch chain
   fence-probe                Probe the extractor fence of the installed Claude Code and
                              record a pass for its version (needed before extraction)
   doctor [--instance <name>] [--json] [--data [--list <check>]] [--list captures]
@@ -725,7 +732,56 @@ cdir, vault, mode = sys.argv[1], sys.argv[2], sys.argv[3]
 have_ledger = os.path.isdir(cdir)
 def one(s):
     return " ".join(str(s).split()) if s is not None else ""
-rows = {"failed": [], "integrity": [], "missing": [], "unreadable": []}
+rows = {"failed": [], "resolved": [], "integrity": [], "missing": [], "unreadable": []}
+# §12 A2 — the whole header of every source.md, through the closing delimiter, cap 256 KB: an opening
+# `---` without a closing `---`/`...` within the cap is malformed-frontmatter (never silently truncated).
+# The same pass reads each header's `resource_sha256:` and `canonical_url:` — the vault's current resources,
+# against which a failed receipt is judged below (one read of every header, for both uses).
+CAP = 256 * 1024
+malformed = []
+by_sha, by_canon = {}, {}
+def literal(v):
+    v = v.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        v = v[1:-1]
+        if v and "\\" in v:
+            v = v.replace('\\"', '"').replace("\\\\", "\\")
+    return v
+for sm in sorted(glob.glob(os.path.join(glob.escape(vault), "Sources", "*", "source.md"))):
+    folder = os.path.basename(os.path.dirname(sm))
+    try:
+        with open(sm, "rb") as fh:
+            data = fh.read(CAP + 1)
+    except OSError:
+        malformed.append(folder)
+        continue
+    lines = data.decode("utf-8", errors="replace").split("\n")
+    if not lines or lines[0].strip() != "---":
+        continue
+    pos = len(lines[0]) + 1
+    closed = False
+    sha = canon = None
+    card = False
+    for ln in lines[1:]:
+        if ln.strip() in ("---", "..."):
+            closed = pos <= CAP
+            break
+        pos += len(ln) + 1
+        if ln.startswith("resource_sha256:"):
+            sha = literal(ln.split(":", 1)[1])
+        elif ln.startswith("canonical_url:"):
+            canon = literal(ln.split(":", 1)[1])
+        elif ln.startswith("tier:") and literal(ln.split(":", 1)[1]) == "bookmark":
+            card = True
+    if not closed:
+        malformed.append(folder)
+    # a bookmark card holds no content: it never resolves a failed full capture of its resource (a failed
+    # promotion stays a --resume candidate — Codex review P2)
+    if closed and not card:
+        if sha:
+            by_sha.setdefault(sha, []).append(folder)
+        if canon:
+            by_canon.setdefault(canon, []).append(folder)
 total = 0
 for path in (sorted(glob.glob(os.path.join(glob.escape(cdir), "*.json"))) if have_ledger else []):
     total += 1
@@ -748,42 +804,33 @@ for path in (sorted(glob.glob(os.path.join(glob.escape(cdir), "*.json"))) if hav
     if state in ("failed", "extract-failed"):
         stage = rec.get("stage")
         detail = err + ((" [stage %s]" % stage) if stage else "") + (" [retryable]" if retry is True else " [not retryable]" if retry is False else "")
-        rows["failed"].append((cid, "%s/%s" % (state, cls), rev, detail))
+        # a failed receipt that published nothing, whose resource the vault now holds through another capture
+        # (the same resource_sha256 or canonical URL — a bot-walled video captured again through the browser
+        # lane, say), is resolved: nothing to resume, the receipt stays as the record of the failed attempt
+        published = rev != "-" and os.path.isfile(os.path.join(vault, "Sources", rev, "source.md"))
+        holders = []
+        if not published:
+            sha = rec.get("resource_sha256")
+            canon = rec.get("canonical_url")
+            holders = list(by_sha.get(sha, [])) if isinstance(sha, str) and sha else []
+            if not holders and isinstance(canon, str) and canon:
+                holders = list(by_canon.get(canon, []))
+        if holders:
+            rows["resolved"].append((cid, "%s/resolved" % state, rev, "resolved by a later capture of the same resource: Sources/%s/ (%s)" % (
+                sorted(holders)[-1], cls)))
+        else:
+            rows["failed"].append((cid, "%s/%s" % (state, cls), rev, detail))
     elif state == "integrity-error":
         rows["integrity"].append((cid, "%s/%s" % (state, cls), rev, err))
     elif state in ("source-published", "extracted", "bookmarked"):
         if rev == "-" or not os.path.isfile(os.path.join(vault, "Sources", rev, "source.md")):
             rows["missing"].append((cid, "%s/missing-files" % state, rev, "the receipt names a revision whose source.md is not in the vault"))
 if mode == "list":
-    for key in ("failed", "integrity", "missing", "unreadable"):
+    for key in ("failed", "integrity", "missing", "unreadable", "resolved"):
         for cid, kind, rev, detail in rows[key]:
             print("%s\t%s\t%s\t%s" % (cid, kind, rev, detail))
     sys.exit(0)
-# §12 A2 — the whole header of every source.md, through the closing delimiter, cap 256 KB: an opening
-# `---` without a closing `---`/`...` within the cap is malformed-frontmatter (never silently truncated)
-CAP = 256 * 1024
-malformed = []
-for sm in sorted(glob.glob(os.path.join(glob.escape(vault), "Sources", "*", "source.md"))):
-    folder = os.path.basename(os.path.dirname(sm))
-    try:
-        with open(sm, "rb") as fh:
-            data = fh.read(CAP + 1)
-    except OSError:
-        malformed.append(folder)
-        continue
-    lines = data.decode("utf-8", errors="replace").split("\n")
-    if not lines or lines[0].strip() != "---":
-        continue
-    pos = len(lines[0]) + 1
-    closed = False
-    for ln in lines[1:]:
-        if ln.strip() in ("---", "..."):
-            closed = pos <= CAP
-            break
-        pos += len(ln) + 1
-    if not closed:
-        malformed.append(folder)
-failed, integrity, missing, unreadable = (len(rows[k]) for k in ("failed", "integrity", "missing", "unreadable"))
+failed, resolved, integrity, missing, unreadable = (len(rows[k]) for k in ("failed", "resolved", "integrity", "missing", "unreadable"))
 parts = []
 if failed:
     parts.append("%d failed/extract-failed receipt(s) — finish with: mnemon add --resume %s" % (failed, rows["failed"][0][0]))
@@ -793,17 +840,18 @@ if missing:
     parts.append("%d receipt(s) point at missing files" % missing)
 if unreadable:
     parts.append("%d unreadable receipt(s)" % unreadable)
-if failed + integrity + missing + unreadable > 1:
+if failed + integrity + missing + unreadable > 1 or (resolved and failed + integrity + missing + unreadable):
     parts.append("all of them: mnemon doctor --list captures")
+resolved_note = (" (%d failed receipt(s) resolved by a later capture of the same resource, not counted)" % resolved) if resolved else ""
 if malformed:
     parts.append("%d malformed-frontmatter folder(s) — source.md header without a closing --- within 256 KB, unreadable to the lookup: %s"
                  % (len(malformed), ", ".join(malformed[:5]) + (", …" if len(malformed) > 5 else "")))
 if parts:
-    print("warn\t" + ("none (no %s yet); " % cdir if not have_ledger else "") + "; ".join(parts))
+    print("warn\t" + ("none (no %s yet); " % cdir if not have_ledger else "") + "; ".join(parts) + resolved_note)
 elif not have_ledger:
     print("ok\tnone (no %s yet)" % cdir)
 else:
-    print("ok\t%d receipt(s), none failed" % total)
+    print("ok\t%d receipt(s), none failed%s" % (total, resolved_note))
 PY
 }
 
@@ -1697,6 +1745,13 @@ case "$cmd" in
             case "${1:-}" in ""|-h|--help) exec python3 "$BIN_DIR/mnemon-ingest.py" "$@" ;; esac
             _resolve_or_die
             exec python3 "$BIN_DIR/mnemon-ingest.py" "$@" ;;
+  browser-lane)
+            # the producer of the browser lane (docs/capture.md §7): acquires outside the fetch chain, then runs
+            # `mnemon add … --media-bundle` through this dispatcher with the instance resolved once, here
+            _reject_post_command_selectors "$@"
+            case "${1:-}" in ""|-h|--help) exec python3 "$BIN_DIR/browser-lane.py" --help ;; esac
+            _resolve_or_die
+            MNEMON_DISPATCHER="$0" exec python3 "$BIN_DIR/browser-lane.py" "$@" ;;
   fence-probe)
             if [[ -f "$BIN_DIR/fence-probe.sh" ]]; then exec "$BIN_DIR/fence-probe.sh" "$@"; fi
             printf 'mnemon fence-probe: bin/fence-probe.sh not present in this engine\n' >&2

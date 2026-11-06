@@ -139,8 +139,10 @@ CAP_REPORT_SCHEMA="mnemon-capture-report/1"
 CAP_ID_RE='^[A-Za-z0-9][A-Za-z0-9._:~-]{0,199}$'
 # the depth manifest / media keys that may merge into source.md (§3.3 allowlist, renamed per §4.1:
 # the page-declared canonical merges as declared_canonical_url — canonical_url is computed identity)
-CAP_META_ALLOWLIST="posted_url final_url declared_canonical_url folded_sources pages duration video_title upload_date original_date published fetch_status fetch_note arxiv_id arxiv_version arxiv_requested_version transcript_language original_language site_pages egress"
+CAP_META_ALLOWLIST="posted_url final_url declared_canonical_url folded_sources pages duration video_title upload_date original_date published fetch_status fetch_note arxiv_id arxiv_version arxiv_requested_version transcript_language original_language chapters site_pages egress"
 CAP_FETCH_CMD="${MNEMON_CAPTURE_FETCH_CMD:-$_LIB_CAPTURE_DIR/capture-fetch.py}"
+# the caption converter of the browser lane (A13): pure python, no network — the suites run the real one
+CAP_CAPTIONS_CMD="${MNEMON_CAPTURE_CAPTIONS_CMD:-$_LIB_CAPTURE_DIR/capture-captions.py}"
 CAP_SITE_CMD="${MNEMON_CAPTURE_SITE_CMD:-$_LIB_CAPTURE_DIR/capture-site.py}"
 CAP_TEXT_CMD="${MNEMON_CAPTURE_TEXT_CMD:-$_LIB_CAPTURE_DIR/capture-text.py}"
 
@@ -918,7 +920,10 @@ cap_resource_identity() {
         RESOURCE_KEY="$CANONICAL_URL"
       fi
       # a site plan given as a file is the capture's input (D9, §12 A4), hashed like --file-text
-      [[ "${SITE_MODE:-}" == "file" && -f "${SITE_PLAN_FILE:-}" ]] && INPUT_SHA256="$(cap_sha256 "$SITE_PLAN_FILE")" ;;
+      [[ "${SITE_MODE:-}" == "file" && -f "${SITE_PLAN_FILE:-}" ]] && INPUT_SHA256="$(cap_sha256 "$SITE_PLAN_FILE")"
+      # the browser lane's caption file is the input of a youtube capture it feeds (A13): bound like a --file,
+      # so a replay with another bundle is another request (exit 2), never a silent swap of the raw
+      [[ -n "${MEDIA_BUNDLE_VTT:-}" && -f "$MEDIA_BUNDLE_VTT" ]] && INPUT_SHA256="$(cap_sha256 "$MEDIA_BUNDLE_VTT")" ;;
     text) RESOURCE_KEY="$(cap_sha256 "$TEXT_INPUT")"; INPUT_SHA256="$RESOURCE_KEY" ;;
     file) RESOURCE_KEY="$(cap_sha256 "$FILE_PATH")"; INPUT_SHA256="$RESOURCE_KEY" ;;
     ref)  RESOURCE_KEY="$REF_PATH" ;;
@@ -1987,7 +1992,9 @@ cap_media_meta() {
   local m="$ATTEMPT_DIR/media.json" merged have t d u lang olang
   have="$(cap_receipt_get "$CAPTURE_ID" '.media_meta // {}' 2>/dev/null || echo '{}')"
   if [[ -f "$m" ]]; then
-    merged="$(jq -n --argjson r "$have" --argjson m "$(jq '{title, duration, upload_date, video_id, language: (.track.lang // .language), original_language, channel} | with_entries(select(.value != null))' "$m")" '$m + $r | with_entries(select(.value != null))')"
+    # `chapters` (the browser lane's bundle, A13) is kept as the list the producer wrote: the converter reads it
+    # from the receipt on a reconversion, the frontmatter gets its count
+    merged="$(jq -n --argjson r "$have" --argjson m "$(jq '{title, duration, upload_date, video_id, language: (.track.lang // .language), original_language, channel, method, chapters: (if (.chapters | type) == "array" then .chapters else null end)} | with_entries(select(.value != null))' "$m")" '$m + $r | with_entries(select(.value != null))')"
   else
     merged="$(printf '%s' "$have" | jq 'with_entries(select(.value != null))')"
   fi
@@ -1995,12 +2002,104 @@ cap_media_meta() {
   cap_receipt_update "$CAPTURE_ID" '.media_meta=$mm' --argjson mm "$merged"
   t="$(printf '%s' "$merged" | jq -r '.title // ""')"; d="$(printf '%s' "$merged" | jq -r '.duration // ""')"; u="$(printf '%s' "$merged" | jq -r '.upload_date // ""')"
   lang="$(printf '%s' "$merged" | jq -r '.language // ""')"; olang="$(printf '%s' "$merged" | jq -r '.original_language // ""')"
+  nch="$(printf '%s' "$merged" | jq -r 'if (.chapters | type) == "array" then (.chapters | length) else 0 end')"
   [[ -n "$t" ]] && ACQ_TITLE="$t"
   [[ -n "$d" ]] && ACQ_META_LINES="${ACQ_META_LINES}duration: $(cap_q "$(cap_norm "$d" 100)")"$'\n'
   [[ -n "$u" ]] && ACQ_META_LINES="${ACQ_META_LINES}upload_date: $(cap_q "$(cap_norm "$u" 100)")"$'\n'
   [[ "$ORIGIN" == "youtube" && -n "$t" ]] && ACQ_META_LINES="${ACQ_META_LINES}video_title: $(cap_q "$(cap_norm "$t" 300)")"$'\n'
   [[ -n "$lang" ]] && ACQ_META_LINES="${ACQ_META_LINES}transcript_language: $(cap_q "$(cap_norm "$lang" 20)")"$'\n'
   [[ -n "$olang" ]] && ACQ_META_LINES="${ACQ_META_LINES}original_language: $(cap_q "$(cap_norm "$olang" 20)")"$'\n'
+  [[ "$nch" =~ ^[0-9]+$ && "$nch" -gt 0 ]] && ACQ_META_LINES="${ACQ_META_LINES}chapters: $nch"$'\n'
+  return 0
+}
+
+# ---------------------------------------------------------------------------------------------
+# The browser lane's media form (capture layer A13; GH #12, #26): `mnemon add --url <youtube> --media-bundle
+# <dir>`. A producer that may use the reader's own browser cookies (`mnemon browser-lane youtube`, yt-dlp
+# `--cookies-from-browser`) acquires ONE caption track and writes a bundle — media.json (mnemon-media/1 with
+# `captions_path`, `chapters`, `producer`) and the WebVTT file. The gateway never touches a cookie and never
+# enters the fetch chain for such a capture: the track is the raw (`<revision>.vtt`, raw_kind captions), the
+# capture-text is capture-captions.py's conversion of that raw (paragraphs, `## <chapter> (m:ss)` headings),
+# checked against the raw it came from (completeness complete | partial), `capture.fetch: browser`.
+# ---------------------------------------------------------------------------------------------
+cap_media_bundle_check() {   # → MEDIA_BUNDLE (absolute) MEDIA_BUNDLE_JSON MEDIA_BUNDLE_VTT, or exit 2
+  local dir="$MEDIA_BUNDLE" m cp vid want
+  [[ "$ORIGIN" == "youtube" ]] || cap_die2 "--media-bundle goes with a YouTube --url (origin youtube): origin ${ORIGIN:-?} has no browser-lane bundle form"
+  [[ -n "$URL" ]] || cap_die2 "--media-bundle needs --url <youtube url>: the resource is the video, the bundle is its acquired captions"
+  [[ "${TIER:-full}" != "bookmark" ]] || cap_die2 "--media-bundle and --tier bookmark are exclusive (a card acquires nothing)"
+  [[ -z "${RESUME:-}" ]] || cap_die2 "--media-bundle and --resume are exclusive (a resume reconverts the retained raw)"
+  [[ -z "${SITE_MODE:-}" ]] || cap_die2 "--media-bundle and --site are exclusive"
+  [[ -d "$dir" ]] || cap_die2 "--media-bundle: $dir is not a directory"
+  dir="$(cd "$dir" && pwd -P)"
+  m="$dir/media.json"
+  [[ -f "$m" ]] || cap_die2 "--media-bundle: $m is missing (a mnemon-media/1 record with captions_path, written by mnemon browser-lane)"
+  jq -e '.schema == "mnemon-media/1"' "$m" >/dev/null 2>&1 || cap_die2 "--media-bundle: $m is not a mnemon-media/1 record"
+  cp="$(jq -r '.captions_path // ""' "$m")"
+  [[ -n "$cp" ]] || cap_die2 "--media-bundle: $m names no captions_path (the caption track inside the bundle)"
+  case "$cp" in */*|.*) cap_die2 "--media-bundle: captions_path must be a plain file name inside the bundle (got '$cp')" ;; esac
+  [[ -f "$dir/$cp" && ! -L "$dir/$cp" ]] || cap_die2 "--media-bundle: $dir/$cp is not a regular file"
+  [[ -s "$dir/$cp" ]] || cap_die2 "--media-bundle: $dir/$cp is empty"
+  [[ -n "${CANONICAL_URL:-}" ]] || cap_canonical_lookup "$URL"
+  want="${CANONICAL_URL##*v=}"
+  vid="$(jq -r '.video_id // ""' "$m")"
+  [[ -n "$vid" && "$vid" == "$want" ]] || cap_die2 "--media-bundle: $m is the acquisition of video '${vid:-?}', but --url names '$want' (a bundle belongs to one video)"
+  MEDIA_BUNDLE="$dir"; MEDIA_BUNDLE_JSON="$m"; MEDIA_BUNDLE_VTT="$dir/$cp"
+  return 0
+}
+
+# capture-captions.py on a caption raw: capture.md, the conversion report into the receipt (capture_report.text),
+# the CAPX_* facts through cap_text_fields (converter vtt-text, completeness and its counts, the channel as the
+# author), `fetch: browser`, the method from media.json (`captions:<lang>:<manual|auto>`). The record comes from
+# the attempt dir (a fresh acquisition copies the bundle's media.json there) or from the receipt's media_meta
+# (a reconversion). A failure is `convert` (or `invalid-utf8`), never retryable: the same bytes convert the same way.
+cap_convert_captions() {   # <vtt raw>
+  local report="$ATTEMPT_DIR/capture-text.json" m="$ATTEMPT_DIR/media.json" rc=0 method
+  local -a args
+  if [[ ! -s "$m" ]]; then
+    cap_receipt_get "$CAPTURE_ID" '.media_meta // empty' > "$m" 2>/dev/null || true
+    [[ -s "$m" ]] || rm -f "$m"
+  fi
+  args=("$1" --url "$URL" --out "$ATTEMPT_DIR/capture.md" --report "$report")
+  [[ -s "$m" ]] && args+=(--media "$m")
+  rm -f "$report" "$ATTEMPT_DIR/capture.md"
+  FAIL_RETRYABLE=""; FAIL_STAGE=""
+  python3 "$CAP_CAPTIONS_CMD" "${args[@]}" 2>>"$ATTEMPT_DIR/stderr.txt" || rc=$?
+  if [[ $rc -ne 0 || ! -s "$ATTEMPT_DIR/capture.md" ]]; then
+    [[ -f "$report" ]] && cap_receipt_report text "$report"
+    FAIL_CLASS="$(jq -r '.error_class // "convert"' "$report" 2>/dev/null || echo convert)"
+    [[ "$FAIL_CLASS" == "invalid-utf8" ]] || FAIL_CLASS=convert
+    FAIL_RETRYABLE=false; FAIL_STAGE=convert
+    FAIL_MSG="conversion of the caption raw $1 produced no text ($(jq -r '.error // ""' "$report" 2>/dev/null || true); the raw is retained)"
+    return 1
+  fi
+  cap_receipt_report text "$report"
+  cap_text_fields "$report"
+  CAPX_FETCH=browser
+  method="$(jq -r '.method // ""' "$m" 2>/dev/null || true)"
+  CAPTURE_METHOD="${method:-captions}"
+  FIDELITY=transcribed; CONTENT_FORMAT=transcript
+  return 0
+}
+
+# youtube through the browser lane: the bundle's caption file is the raw (its hash bound in the request as
+# input_sha256), the record is read first (media_meta in the receipt before the raw checkpoint, A6), then the
+# raw is staged, committed and converted. The producer's input must still be the recorded bytes.
+cap_acquire_youtube_bundle() {
+  local vtt="$MEDIA_BUNDLE_VTT"
+  [[ -n "$vtt" && -f "$vtt" ]] || { FAIL_CLASS=input-missing; FAIL_RETRYABLE=false; FAIL_MSG="the bundle's caption file is gone: ${vtt:-?} (re-run mnemon browser-lane, or --recapture with a new bundle)"; return 1; }
+  if [[ -n "${INPUT_SHA256:-}" && "$(cap_sha256 "$vtt")" != "$INPUT_SHA256" ]]; then
+    FAIL_CLASS=input-missing; FAIL_RETRYABLE=false; FAIL_MSG="the bundle's caption file $vtt changed since the request was recorded"; return 1
+  fi
+  if [[ -n "${MEDIA_BUNDLE_JSON:-}" && -f "$MEDIA_BUNDLE_JSON" ]]; then
+    cap_copy_text "$MEDIA_BUNDLE_JSON" "$ATTEMPT_DIR/media.json" || return 1
+  fi
+  cap_media_meta
+  cap_raw_prepare vtt
+  RAW_KIND=captions
+  cap_raw_record_intent
+  cap_copy_raw "$vtt" "$RAW_STAGED" || return 1
+  cap_raw_commit || return 1
+  cap_convert_captions "$RAW_PATH" || return 1
   return 0
 }
 
@@ -2167,7 +2266,7 @@ cap_acquire() {
       elif $RENDER; then cap_acquire_render || return 1
       else cap_acquire_url || return 1; fi ;;
     pdf)     cap_acquire_pdf || return 1 ;;
-    youtube) cap_acquire_youtube || return 1 ;;
+    youtube) if [[ -n "${MEDIA_BUNDLE_VTT:-}" ]]; then cap_acquire_youtube_bundle || return 1; else cap_acquire_youtube || return 1; fi ;;
     audio)   cap_acquire_audio || return 1 ;;
     file|book) cap_acquire_file || return 1 ;;
     *) FAIL_CLASS=unsupported; FAIL_MSG="origin '$ORIGIN' has no acquisition step"; return 1 ;;
@@ -2228,6 +2327,11 @@ cap_reconvert() {
         # the receipt's media_meta (authoritative, D12)
         if [[ "$RAW_KIND" == "file" ]]; then
           cap_transcribe_raw || return 1
+        elif [[ "$RAW_KIND" == "captions" || "$ext" == "vtt" ]]; then
+          # the browser lane (A13): the retained raw is the caption track; the conversion is re-run from it with
+          # the receipt's media_meta (chapters, title, channel) — the bundle is not needed any more
+          cap_media_meta
+          cap_convert_captions "$RAW_PATH" || return 1
         else
           cap_text_from_file "$RAW_PATH" || return 1
           cap_media_meta

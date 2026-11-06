@@ -30,10 +30,13 @@ Actions:
   status        Show pipeline status
 
 Options:
-  --origin <type>       url|text|youtube|audio|pdf|file|book|idea|ref:vault|batch
+  --origin <type>       url|text|youtube|audio|pdf|file|book|idea|ref:vault|batch (book takes --file <document>)
   --url <url>           Source URL (auto-detected: .pdf → pdf, youtube → youtube)
   --file <path>         Local file path (audio/pdf/file; auto-detected by extension)
   --file-text <path>    Text content from a file (batch internal; the bytes are the capture-text)
+  --media-bundle <dir>  With a YouTube --url: the browser lane's bundle (media.json + the caption track a
+                        producer acquired with its own browser cookies, `mnemon browser-lane youtube`); the
+                        track is the raw (raw_kind captions), no media tool runs, the fetch chain is not entered
   --title <title>       Source title (optional, acquired from the page/PDF/media if not given)
   --author <author>     Source author (optional)
   --source-type <type>  article|video|podcast|book|paper|idea|conversation
@@ -97,6 +100,9 @@ ORIGIN=""
 URL=""
 FILE_PATH=""
 FILE_TEXT=""
+MEDIA_BUNDLE=""
+MEDIA_BUNDLE_VTT=""
+MEDIA_BUNDLE_JSON=""
 TITLE=""
 AUTHOR=""
 SOURCE_TYPE=""
@@ -143,6 +149,7 @@ while [[ $# -gt 0 ]]; do
     --url)           _need "$@"; URL="$2"; BOUND_GIVEN=true; shift 2 ;;
     --file)          _need "$@"; FILE_PATH="$2"; BOUND_GIVEN=true; shift 2 ;;
     --file-text)     _need "$@"; FILE_TEXT="$2"; BOUND_GIVEN=true; shift 2 ;;
+    --media-bundle)  _need "$@"; MEDIA_BUNDLE="$2"; BOUND_GIVEN=true; shift 2 ;;
     --title)         _need "$@"; TITLE="$2"; shift 2 ;;
     --author)        _need "$@"; AUTHOR="$2"; shift 2 ;;
     --source-type)   _need "$@"; SOURCE_TYPE="$2"; BOUND_GIVEN=true; shift 2 ;;
@@ -302,11 +309,20 @@ cap_contract_checks() {
     cap_canonical_lookup "$CANONICAL_URL_GIVEN"    # exit 2 on an invalid URL, before any write
     URL="$CANONICAL_URL_GIVEN"                      # the literal goes to url:, the computed one to canonical_url:
   fi
+  # a book is a document file (an ebook, a PDF export, a .docx): --origin book without --file used to pass
+  # the dry-run and fail the run as input-missing (field test 2026-11-03) — the contract check now says so
+  # before anything runs, and the dry-run goes through the same check
+  if [[ "$ORIGIN" == "book" && -z "$FILE_PATH" ]]; then
+    cap_die2 "--origin book takes --file <document> (an ebook or a document file; source_type book). A page about a book is --url <url> --source-type book; notes on a book are --origin text --source-type book (text on stdin or --file-text)"
+  fi
   # the routing contract of §12 A12: an explicit --origin youtube needs a YouTube URL
   if [[ "$ORIGIN" == "youtube" && -n "$URL" ]]; then
     cap_canonical_lookup "$URL"
     [[ "$URL_KIND" == "youtube" ]] || cap_die2 "--origin youtube needs a YouTube URL (watch, youtu.be, shorts, embed, live); $URL is a $URL_KIND"
   fi
+  # the browser lane's bundle (capture layer A13): validated here, before any write, so the dry-run and the
+  # run refuse the same things; sets MEDIA_BUNDLE_JSON / MEDIA_BUNDLE_VTT
+  [[ -n "$MEDIA_BUNDLE" ]] && cap_media_bundle_check
   if [[ -n "$SITE_MODE" ]]; then
     [[ -n "$URL" && "$ORIGIN" == "url" ]] || cap_die2 "--site needs a --url landing (a site capture is an acquisition mode of the landing page)"
     if [[ "$SITE_MODE" == "file" ]]; then
@@ -380,7 +396,7 @@ cap_dry_run() {
   case "$ORIGIN" in
     url)     if [[ -n "$SITE_MODE" ]]; then raw_ext="site/"; else raw_ext=html; fi ;;
     pdf)     raw_ext=pdf ;;
-    youtube) raw_ext=txt ;;
+    youtube) if [[ -n "$MEDIA_BUNDLE" ]]; then raw_ext=vtt; else raw_ext=txt; fi ;;
     audio)   raw_ext="<audio ext>" ;;
     file|book) raw_ext="$(cap_ext_of "$FILE_PATH" bin)" ;;
   esac
@@ -406,6 +422,7 @@ cap_dry_run() {
   echo "Tier: $TIER"
   echo "Revision: $(cap_today)_<resource_id> (allocated under the vault lock at run time)"
   [[ -n "$FILE_PATH" ]] && echo "Origin path: $FILE_PATH"
+  [[ -n "$MEDIA_BUNDLE" ]] && echo "Media bundle: $MEDIA_BUNDLE — browser lane: $(basename "$MEDIA_BUNDLE_VTT") is the raw (raw_kind captions, method $(jq -r '.method // "captions"' "$MEDIA_BUNDLE_JSON" 2>/dev/null)); no media tool runs, the fetch chain is not entered"
   echo "Raw store: $raw_note"
   $RECAPTURE && echo "Recapture: yes (supersedes $(printf '%s' "${SUPERSEDES:-the latest revision}" | sed 's/,/, /g'))"
   if [[ "$SITE_MODE" == "file" ]]; then
@@ -413,7 +430,9 @@ cap_dry_run() {
   elif [[ "$SITE_MODE" == "auto" ]]; then
     echo "Site plan: generated at run time (capture-site.py map, at most ${SITE_MAX_PAGES:-40} pages); kept as attempt-1/plan.json"
   fi
-  if [[ "$kind" == "url" ]]; then
+  if [[ -n "$MEDIA_BUNDLE" ]]; then
+    echo "Fetch: none (the bundle is the acquisition; completeness is checked against the caption track)"
+  elif [[ "$kind" == "url" ]]; then
     echo "Fetch: render $( $RENDER && echo force || { $NO_RENDER && echo off || echo auto; } ), external $( { [[ "${EXTERNAL_FETCH:-off}" == auto ]] && ! $NO_EXTERNAL && ! $NO_RENDER; } && echo auto || echo off ), acquire timeout ${ACQUIRE_TIMEOUT:-300}s"
     # the depth mode the flag set (GH #12), through the same predicate the fold uses: the fold
     # itself is decided after acquisition, like the chunk plan
@@ -513,6 +532,13 @@ cap_restore_from_receipt() {   # globals from the receipt's request + metadata (
   esac
   CANONICAL_URL_GIVEN=""
   if [[ "$RESOURCE_KIND" == "url" && "$(cap_input_kind)" != "url" ]]; then CANONICAL_URL_GIVEN="$URL"; fi
+  # a youtube request with a recorded input hash came from the browser lane: the input locator is the
+  # bundle's caption file (a re-acquisition before the raw was published reads it again; after that the
+  # retained .vtt raw is reconverted and the bundle is not needed)
+  MEDIA_BUNDLE=""; MEDIA_BUNDLE_VTT=""; MEDIA_BUNDLE_JSON=""
+  if [[ "$ORIGIN" == "youtube" && -n "$INPUT_SHA256" && -n "$INPUT_PATH" ]]; then
+    MEDIA_BUNDLE_VTT="$INPUT_PATH"; MEDIA_BUNDLE="$(dirname "$INPUT_PATH")"; MEDIA_BUNDLE_JSON="$MEDIA_BUNDLE/media.json"
+  fi
   if [[ "$(cap_input_kind)" == "text" && -n "$INPUT_PATH" && "$INPUT_PATH" != "$RUNS_DIR/$CAPTURE_ID/attempt-1/capture.md" ]]; then FILE_TEXT="$INPUT_PATH"; fi
   # identity and the request schema come from the receipt, never recomputed (D5); the bound
   # flags of a /2 request are restored as flags so a re-acquisition runs the same chain
@@ -953,7 +979,8 @@ cap_fresh() {
       if [[ -n "$incoming" ]]; then mv "$incoming" "$ATTEMPT_DIR/capture.md"; TEXT_INPUT="$ATTEMPT_DIR/capture.md"; INPUT_PATH="$TEXT_INPUT"
       else INPUT_PATH="$FILE_TEXT"; fi ;;
     file) INPUT_PATH="$FILE_PATH" ;;
-    url)  [[ "$SITE_MODE" == "file" ]] && INPUT_PATH="$SITE_PLAN_FILE" ;;   # the plan is the input locator (D9)
+    url)  [[ "$SITE_MODE" == "file" ]] && INPUT_PATH="$SITE_PLAN_FILE"   # the plan is the input locator (D9)
+          [[ -n "$MEDIA_BUNDLE_VTT" ]] && INPUT_PATH="$MEDIA_BUNDLE_VTT" ;;   # the bundle's caption file (A13)
   esac
   [[ "$SITE_MODE" == "auto" ]] && KEEP_LOCATOR=true   # attempt-1/plan.json, kept with the receipt
   RAW_STORE=none; RAW_PATH=""; RAW_STAGED=""; RAW_KIND=none
@@ -962,7 +989,7 @@ cap_fresh() {
     case "$ORIGIN" in
       url)     if [[ -n "$SITE_MODE" ]]; then cap_raw_prepare site; RAW_KIND=site; else cap_raw_prepare html; fi ;;
       pdf)     cap_raw_prepare pdf ;;
-      youtube) cap_raw_prepare txt ;;
+      youtube) if [[ -n "$MEDIA_BUNDLE_VTT" ]]; then cap_raw_prepare vtt; else cap_raw_prepare txt; fi ;;
       audio)   if [[ -n "$FILE_PATH" ]]; then cap_raw_prepare "$(cap_ext_of "$FILE_PATH" audio)"; else cap_raw_prepare "$(cap_url_ext "$URL" bin)"; fi ;;
       file|book) cap_raw_prepare "$(cap_ext_of "$FILE_PATH" bin)" ;;
     esac

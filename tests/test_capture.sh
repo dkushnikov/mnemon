@@ -1403,5 +1403,76 @@ run_gw_stdin "$TEST_TMPDIR/sc3.txt" --origin text --capture-id sc-text
 assert_eq "$rc $(result status)" "0 extracted" "a text origin has no capture-layer report"
 assert_eq "$(rget sc-text '.report_state') $(printf '%s\n' "$out" | grep -c '^RESULT:report=')" "null 0" "...so no sidecar transaction and no RESULT:report line"
 
+# ---------------------------------------------------------------------------------------------
+echo "--- A13 the browser lane's bundle (--media-bundle): the track is the raw, converted and checked ---"
+# the real converter runs (capture-captions.py is pure python); the bundle is what mnemon browser-lane writes
+# the suite captured lane0000001 through the media stub above, so the lane's video here is its own id
+BL="$TEST_TMPDIR/bundle"; mkdir -p "$BL"
+cp "$FIX/media/captions-sample.en-orig.vtt" "$BL/lane0000001.en-orig.vtt"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["video_id"]="lane0000001"; d["captions_path"]="lane0000001.en-orig.vtt"; json.dump(d, open(sys.argv[2],"w"), ensure_ascii=False)' "$FIX/reports/media-bundle.json" "$BL/media.json"
+vtt_sha="$(shasum -a 256 "$BL/lane0000001.en-orig.vtt" | cut -c1-64)"
+stub_reset
+run_gw --url "https://www.youtube.com/watch?v=lane0000001" --media-bundle "$BL" --capture-id bl-1 --import-source browser-lane --producer-fidelity model-transcribed
+assert_eq "$rc $(result status) $(result completeness)" "0 extracted complete" "a bundle capture is extracted with completeness complete"
+revb="$(result revision)"; srcb="$VAULT/Sources/$revb/source.md"
+assert_eq "$(fm "$srcb" origin) $(fm "$srcb" source_type) $(fm "$srcb" content_format)" "youtube video transcript" "...origin youtube, source_type video, content_format transcript"
+assert_eq "$(capfm "$srcb" fetch) $(capfm "$srcb" converter) $(capfm "$srcb" raw_kind) $(capfm "$srcb" method)" 'browser vtt-text captions "captions:en:auto"' "...capture.fetch browser, converter vtt-text, raw_kind captions, the method from media.json"
+assert_eq "$(capfm "$srcb" fidelity) $(capfm "$srcb" producer_fidelity)" 'transcribed "model-transcribed"' "...fidelity transcribed, the producer's claim recorded"
+assert_eq "$(capfm "$srcb" reference_lines) $(capfm "$srcb" eligible_lines) $(capfm "$srcb" missing_lines) $(capfm "$srcb" headings_missing)" "9 8 0 0" "...the check's counts against the caption track"
+assert_eq "$(fm "$srcb" transcript_language) $(fm "$srcb" original_language) $(fm "$srcb" duration) $(fm "$srcb" upload_date) $(fm "$srcb" chapters)" '"en" "en-US" "0:01:40" "20260901" 3' "...transcript_language, original_language, duration, upload_date and the chapter count in the frontmatter"
+assert_eq "$(fm "$srcb" video_title) $(fm "$srcb" author) $(fm "$srcb" import_source)" '"An example talk about agents" "Example Channel" "browser-lane"' "...video_title, the channel as the author, the producer id"
+assert_eq "$(fm "$srcb" canonical_url)" '"https://www.youtube.com/watch?v=lane0000001"' "...the identity is the video's canonical URL"
+assert_file_exists "$ARCHIVE/$revb.vtt" "the caption track is the retained raw, <revision>.vtt"
+assert_eq "$(shasum -a 256 "$ARCHIVE/$revb.vtt" | cut -c1-64)" "$vtt_sha" "...byte for byte the bundle's file"
+assert_eq "$(fm "$srcb" archive) $(capfm "$srcb" raw_sha256)" "\"$revb.vtt\" \"$vtt_sha\"" "...named in archive:, hashed in capture.raw_sha256"
+assert_contains "$(sed -n '/^---$/,/^---$/!p' "$srcb")" "## Intro (0:00)" "the body carries the chapter headings"
+assert_contains "$(cat "$srcb")" "## Why personal agents took off (0:52)" "...in the video's order"
+assert_not_contains "$(cat "$srcb")" "<c>" "...and no caption markup"
+[[ -f "$STUB_DIR/media-calls" ]] && fail "no media tool runs for a bundle" "media-extract.py was called" || pass "no media tool runs for a bundle (media-extract.py never called)"
+assert_eq "$(fetch_calls)" "0" "...and the fetch chain is not entered (no capture-fetch.py fetch)"
+assert_eq "$(rget bl-1 '.raw_kind') $(rget bl-1 '.request.input_sha256') $(rget bl-1 '.input_path')" "captions $vtt_sha $BL/lane0000001.en-orig.vtt" "the receipt: raw_kind captions, the track's hash bound as the request's input, the bundle file as the input locator"
+assert_eq "$(rget bl-1 '.media_meta.method') $(rget bl-1 '.media_meta.chapters | length') $(rget bl-1 '.capture_report.text.converter')" "captions:en:auto 3 vtt-text" "...media_meta carries the method and the chapters, capture_report.text the conversion report"
+assert_eq "$(rget bl-1 '.capture_report.fetch')" "null" "...and no fetch report"
+assert_file_exists "$ARCHIVE/$revb.report.json" "...the sidecar is frozen beside the raw"
+# identity: the youtu.be form of the same video is the same resource; a second bundle is a --recapture
+run_gw --url "https://youtu.be/lane0000001?t=3" --media-bundle "$BL" --capture-id bl-dup
+assert_eq "$rc $(result status)" "0 skipped-duplicate" "the same video through another bundle is skipped-duplicate"
+# the request binding: a replay with another bundle is another request
+BL2="$TEST_TMPDIR/bundle2"; mkdir -p "$BL2"; cp "$BL/media.json" "$BL2/"; { cat "$BL/lane0000001.en-orig.vtt"; printf '\n00:01:50.000 --> 00:01:51.000\nan extra cue\n'; } > "$BL2/lane0000001.en-orig.vtt"
+run_gw --url "https://www.youtube.com/watch?v=lane0000001" --media-bundle "$BL2" --capture-id bl-1
+assert_eq "$rc" "2" "replaying bl-1 with a bundle whose track differs → exit 2 (capture-id reuse with a different request)"
+run_gw --url "https://www.youtube.com/watch?v=lane0000001" --media-bundle "$BL" --capture-id bl-1
+assert_eq "$rc $(result status)" "0 extracted" "...the same bundle replays"
+# a partial track: a cue the converter keeps but the renderer loses cannot happen; a missing heading can be shown
+# through the check itself (test_captions.py) — here the gateway's mapping of partial: a track whose chapters name
+# a heading the text never gets is impossible by construction, so the gateway half is the complete path above
+# crash after the raw was published → the replay reconverts the retained .vtt; the bundle is not needed any more
+stub_reset
+export MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-raw-published
+run_gw --url "https://www.youtube.com/watch?v=lane0000001" --media-bundle "$BL" --capture-id bl-3 --recapture
+unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT
+assert_eq "$(rget bl-3 '.state') $(rget bl-3 '.raw_published') $(rget bl-3 '.media_meta.title')" "started true An example talk about agents" "crash after-raw-published: the raw is published, media_meta already recorded (A6)"
+mv "$BL" "$TEST_TMPDIR/bundle-away"
+run_gw --capture-id bl-3
+assert_eq "$rc $(result status) $(result completeness)" "0 extracted complete" "the replay reconverts the retained track without the bundle"
+rev3="$(result revision)"; src3="$VAULT/Sources/$rev3/source.md"
+assert_eq "$(capfm "$src3" method) $(capfm "$src3" fetch) $(fm "$src3" chapters) $(fm "$src3" supersedes)" "\"captions:en:auto\" browser 3 \"$revb\"" "...with the method, fetch: browser and the chapters from the receipt's media_meta, superseding the first revision"
+[[ -f "$STUB_DIR/media-calls" ]] && fail "no media tool on the replay" "called" || pass "...and no media tool on the replay either"
+mv "$TEST_TMPDIR/bundle-away" "$BL"
+# a bundle whose file vanished before the raw was staged: input-missing, not retryable
+BL3="$TEST_TMPDIR/bundle3"; mkdir -p "$BL3"; cp "$BL/media.json" "$BL3/"; cp "$BL/lane0000001.en-orig.vtt" "$BL3/"
+export MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-source-staged
+run_gw --url "https://www.youtube.com/watch?v=lane0000001" --media-bundle "$BL3" --capture-id bl-4 --recapture
+unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT
+assert_eq "$(rget bl-4 '.raw_published')" "true" "(setup) a crash after the source was staged leaves the raw published"
+run_gw --capture-id bl-4
+assert_eq "$rc $(result status)" "0 extracted" "...and the replay finishes from the retained raw"
+# the --resume door on a bundle capture whose extract failed
+stub_reset
+STUB_MODE=fail run_gw --url "https://www.youtube.com/watch?v=lane0000001" --media-bundle "$BL" --capture-id bl-5 --recapture
+assert_eq "$rc $(result status)" "4 captured" "an extractor failure on a bundle capture publishes the source (exit 4)"
+run_gw --resume "$(result revision)"
+assert_eq "$rc $(result status)" "0 extracted" "...and --resume finishes it"
+
 cleanup_capture_test
 summary

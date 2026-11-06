@@ -14,7 +14,7 @@ Add a source to the knowledge library. The engine acquires the content itself, p
 /source-add --url https://youtube.com/watch?v=abc123
 /source-add --origin audio --url https://podcast.example.com/episode.mp3
 /source-add --origin idea --title "My insight about X"
-/source-add --origin book --title "Book Title" --author "Author Name"
+/source-add --origin book --file ~/Books/title.epub       # a book is a document file; a page about a book: --url <url> --source-type book
 /source-add --url https://spa-site.com/ --render     # JS-heavy SPA: pre-render via headless Chrome
 /source-add --file ~/Downloads/paper.pdf             # local PDF: auto-detected, text via pdftotext
 /source-add --url https://arxiv.org/pdf/2401.12345.pdf   # arXiv: resolved to the paper, full text of the pinned version
@@ -27,7 +27,7 @@ Add a source to the knowledge library. The engine acquires the content itself, p
 |-----------|----------|---------|-------------|
 | `--url <url>` | For URL sources | — | Source URL (YouTube / .pdf / arXiv auto-detected) |
 | `--file <path>` | For local files | — | Local file path (audio, PDF or a document, auto-detected by extension) |
-| `--origin <type>` | Auto-detected | From URL/file | `url`, `youtube`, `audio`, `pdf`, `file`, `text`, `book`, `idea` |
+| `--origin <type>` | Auto-detected | From URL/file | `url`, `youtube`, `audio`, `pdf`, `file`, `text`, `book` (a document file: needs `--file`; a page about a book is `--url … --source-type book`, notes are `--origin text --source-type book`), `idea` |
 | `--title <title>` | For text/book/idea | Acquired | Source title |
 | `--author <name>` | No | Acquired | Source author |
 | `--source-type <type>` | No | From origin | `article`, `video`, `podcast`, `book`, `paper`, `idea`, `conversation` |
@@ -55,6 +55,16 @@ A vault that should always capture into its own instance sets the variable in it
 Claude Code sessions started in that vault then never need `--instance`. Add it only when the user names another library explicitly.
 
 **Scripts, jobs and callers other than Claude Code** (a cron job, a producer, a shell alias, another agent runtime): the `.claude/settings.json` binding is read by Claude Code sessions only — nothing else sees it. Such a caller passes `--instance <name>` or `--config <path>` before the command on every invocation (`mnemon --instance work add --url …`), or exports `MNEMON_INSTANCE` itself; without a selector the engine falls back to `~/.config/mnemon/default`, which may be another library.
+
+## YouTube behind a bot wall — the browser lane
+
+When a YouTube capture answers `RESULT:status=failed`, `error_class=blocked`, `RESULT:acquisition=bot-wall` (`retryable=false`), the engine's host is one YouTube distrusts; a retry meets the same wall. The door is the browser lane — a producer that runs on the user's machine with the user's own browser cookies, outside the engine's fetch chain, and hands the engine a bundle (the caption track) to publish:
+
+```bash
+"${MNEMON_HOME:-$HOME/.local/share/mnemon/engine}/bin/mnemon" [--instance <name>] browser-lane youtube "<url>" ["<url>"…] [--browser safari] [--intent "<intent>"] [--context <label>] [--recapture]
+```
+
+It takes the videos one at a time (one caption track each, a pause between them), prints one line per video (`captured`, `skipped-duplicate`, `blocked`, `failed`, …) and the gateway's `RESULT:` lines, then a summary; the exit code is 0 only when every video was captured or was already in the library. Safari is the default browser and needs nothing further; Chrome asks the user for its keychain item on screen — say so before using `--browser chrome`. Never pass a cookie file or a cookie value: `--browser` takes a browser's name only. The result is a normal captured video (`source_type: video`, `completeness` checked against the caption track, chapters as headings), reported as in step 3. A video that was captured earlier through a text workaround (`--file-text` with `--canonical-url`) answers `skipped-duplicate`; add `--recapture` to replace it with the captioned revision.
 
 ## PDF capture
 
