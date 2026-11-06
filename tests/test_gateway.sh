@@ -483,6 +483,60 @@ assert_contains "$out" "single call:" "a small --file-text shows a single-call c
 run_gw --site "$FIX/reports/site-plan.json" --origin text --dry-run </dev/null
 assert_eq "$rc" "2" "--site without a --url landing → exit 2"
 
+echo "--- book is a document file (field test 2026-11-03, defect 3) ---"
+run_gw --origin book --url "https://example.com/dp/1250103509" --dry-run
+assert_eq "$rc" "2" "--origin book --url … --dry-run → exit 2 (the dry-run validates what the run requires)"
+assert_contains "$err" "--origin book takes --file <document>" "...and names the doors: a page about a book is --url … --source-type book, notes are --origin text --source-type book"
+run_gw --origin book --title "A Book" --author "Someone" --dry-run </dev/null
+assert_eq "$rc" "2" "--origin book with a title alone → exit 2 (no content to capture)"
+printf 'chapter one\n' > "$TEST_TMPDIR/book.txt"
+run_gw --origin book --file "$TEST_TMPDIR/book.txt" --dry-run
+assert_eq "$rc" "0" "--origin book --file <document> → the dry-run passes"
+assert_contains "$out" "Source type: book" "...as source_type book"
+run_gw --url "https://example.com/dp/1250103509" --source-type book --dry-run
+assert_eq "$rc" "0" "a page about a book: --url … --source-type book passes"
+assert_contains "$out" "Origin: url" "...as a url capture"
+assert_contains "$out" "Source type: book" "...with the book template"
+
+echo "--- the browser lane's bundle (A13): the dry-run validates the bundle ---"
+BL="$TEST_TMPDIR/bundle"; mkdir -p "$BL"
+cp "$FIX/media/captions-sample.en-orig.vtt" "$BL/abc123xyz00.en-orig.vtt"
+cp "$FIX/reports/media-bundle.json" "$BL/media.json"
+run_gw --url "https://www.youtube.com/watch?v=abc123xyz00" --media-bundle "$BL" --dry-run
+assert_eq "$rc" "0" "--media-bundle with its video's URL: the dry-run passes"
+assert_contains "$out" "Origin: youtube" "...origin youtube"
+assert_contains "$out" "Media bundle: $BL — browser lane: abc123xyz00.en-orig.vtt is the raw (raw_kind captions, method captions:en:auto); no media tool runs, the fetch chain is not entered" "...the plan names the bundle, the track file and the method"
+assert_contains "$out" "Fetch: none (the bundle is the acquisition; completeness is checked against the caption track)" "...and no fetch chain"
+assert_contains "$out" "_<resource_id>.vtt" "...the raw is a .vtt"
+assert_eq "$(fetch_calls)" "$f0" "...nothing fetched"
+run_gw --url "https://www.youtube.com/watch?v=zzz999zzz00" --media-bundle "$BL" --dry-run
+assert_eq "$rc" "2" "the bundle of another video → exit 2"
+assert_contains "$err" "is the acquisition of video 'abc123xyz00', but --url names 'zzz999zzz00'" "...named"
+run_gw --url "https://example.com/post" --media-bundle "$BL" --dry-run
+assert_eq "$rc" "2" "--media-bundle with a page URL → exit 2 (origin url has no bundle form)"
+run_gw --origin youtube --media-bundle "$BL" --dry-run </dev/null
+assert_eq "$rc" "2" "--media-bundle without --url → exit 2"
+run_gw --url "https://www.youtube.com/watch?v=abc123xyz00" --media-bundle "$BL" --tier bookmark --dry-run
+assert_eq "$rc" "2" "--media-bundle and --tier bookmark → exit 2"
+run_gw --url "https://www.youtube.com/watch?v=abc123xyz00" --media-bundle "$TEST_TMPDIR/no-such-dir" --dry-run
+assert_eq "$rc" "2" "a missing bundle directory → exit 2"
+mkdir -p "$TEST_TMPDIR/bundle-nojson"
+run_gw --url "https://www.youtube.com/watch?v=abc123xyz00" --media-bundle "$TEST_TMPDIR/bundle-nojson" --dry-run
+assert_eq "$rc" "2" "a bundle without media.json → exit 2"
+mkdir -p "$TEST_TMPDIR/bundle-escape"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["captions_path"]="../captions-sample.en-orig.vtt"; json.dump(d, open(sys.argv[2],"w"))' "$FIX/reports/media-bundle.json" "$TEST_TMPDIR/bundle-escape/media.json"
+run_gw --url "https://www.youtube.com/watch?v=abc123xyz00" --media-bundle "$TEST_TMPDIR/bundle-escape" --dry-run
+assert_eq "$rc" "2" "a captions_path that leaves the bundle → exit 2"
+assert_contains "$err" "captions_path must be a plain file name inside the bundle" "...named"
+mkdir -p "$TEST_TMPDIR/bundle-empty"
+cp "$FIX/reports/media-bundle.json" "$TEST_TMPDIR/bundle-empty/media.json"; : > "$TEST_TMPDIR/bundle-empty/abc123xyz00.en-orig.vtt"
+run_gw --url "https://www.youtube.com/watch?v=abc123xyz00" --media-bundle "$TEST_TMPDIR/bundle-empty" --dry-run
+assert_eq "$rc" "2" "an empty caption file → exit 2"
+mkdir -p "$TEST_TMPDIR/bundle-link"
+cp "$FIX/reports/media-bundle.json" "$TEST_TMPDIR/bundle-link/media.json"; ln -s "$BL/abc123xyz00.en-orig.vtt" "$TEST_TMPDIR/bundle-link/abc123xyz00.en-orig.vtt"
+run_gw --url "https://www.youtube.com/watch?v=abc123xyz00" --media-bundle "$TEST_TMPDIR/bundle-link" --dry-run
+assert_eq "$rc" "2" "a symlinked caption file → exit 2 (a regular file inside the bundle, nothing else)"
+
 echo "--- phase 2: status counts superseded and chunked (§3.9) ---"
 output=$("$GW" status --config "$CONFIG" 2>&1)
 s0="$(printf '%s\n' "$output" | sed -n 's/^Superseded: //p')"; c0="$(printf '%s\n' "$output" | sed -n 's/^Chunked: //p')"
