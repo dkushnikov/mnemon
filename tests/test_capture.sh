@@ -801,6 +801,7 @@ assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" '  method
 assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" '  raw_kind: transcript' "...captions: the transcript is the raw"
 assert_file_exists "$ARCHIVE/$(result revision).txt" "...published as <revision>.txt"
 assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" 'video_title: "Stub Video"' "...allowlisted metadata merged"
+assert_eq "$(result title) / $(_mnemon_yaml_literal title "$VAULT/Sources/$(result revision)/extract.md")" "Stub Video / Plain T" "...RESULT:title= is the video's title while extract.md keeps the extractor's (A15/A11)"
 assert_contains "$(cat "$VAULT/Sources/$(result revision)/source.md")" 'transcript line one' "...transcript is the body"
 stub_reset
 STUB_YT=whisper run_gw --url "https://youtube.com/watch?v=whisper00000" --capture-id yt-w
@@ -843,6 +844,19 @@ for t in '~' '~/Guide' 'a "quoted" \ title' 'close ]] me | pipe'; do
   assert_eq "$st" "$t" "...mnemon-search decodes it"
 done
 python3 "$MNEMON_ROOT/bin/knowledge-reindex.py" "$VAULT" >/dev/null
+# A11: the RESULT:title reader on its own files — video_title first, an empty value counts as absent,
+# the §4.4 escapes decoded and nothing else, no extract → source.md's title
+A11V="$TEST_TMPDIR/a11-vault"
+mkdir -p "$A11V/Sources/2026-01-01_a11a0001" "$A11V/Sources/2026-01-01_a11a0002" "$A11V/Sources/2026-01-01_a11a0003"
+printf -- '---\ntitle: "From the source"\nvideo_title: ""\n---\n\nbody\n' > "$A11V/Sources/2026-01-01_a11a0001/source.md"
+printf -- '---\ntitle: "The thesis"\n---\n\nbody\n' > "$A11V/Sources/2026-01-01_a11a0001/extract.md"
+printf -- '---\ntitle: "From the source"\nvideo_title: "a \\"quoted\\" \\\\ video ]] | here"\n---\n\nbody\n' > "$A11V/Sources/2026-01-01_a11a0002/source.md"
+cp "$A11V/Sources/2026-01-01_a11a0001/extract.md" "$A11V/Sources/2026-01-01_a11a0002/extract.md"
+printf -- '---\ntitle: "From the source"\n---\n\nbody\n' > "$A11V/Sources/2026-01-01_a11a0003/source.md"
+a11_title() { ( source "$MNEMON_ROOT/bin/lib-capture.sh"; VAULT_PATH="$A11V"; cap_title_from_files "$1" ); }
+assert_eq "$(a11_title 2026-01-01_a11a0001)" "The thesis" "cap_title_from_files: an empty video_title counts as absent — the extract's title (A11)"
+assert_eq "$(a11_title 2026-01-01_a11a0002)" 'a "quoted" \ video ]] | here' "...a video_title decodes the two §4.4 escapes and nothing else"
+assert_eq "$(a11_title 2026-01-01_a11a0003)" "From the source" "...no extract, no video: source.md's title"
 line="$(grep -F "Sources/$revt/extract|" "$VAULT/index.md")"
 assert_contains "$line" "[[Sources/$revt/extract|close ] ] me / pipe]]" "a title with ]] and | renders a safe index line"
 python3 - "$line" <<'PY' && pass "...the line stays one valid wikilink entry (no ]] and no | inside the display text)" || fail "valid index line" "$line"
@@ -1338,6 +1352,7 @@ assert_eq "$rc $(result status)" "0 extracted" "the whisper replay transcribes t
 srcw="$VAULT/Sources/$(result revision)/source.md"
 assert_eq "$(cat "$STUB_DIR/media-calls")" "audio url= file=$ARCHIVE/$(rget yt-w3 '.revision').wav timeout=3600" "...by a transcription-only run"
 assert_eq "$(fm "$srcw" video_title) $(fm "$srcw" upload_date) $(fm "$srcw" duration)" '"Stub Video" "20260101" "0:10:00"' "...video_title / upload_date / duration re-merged from the receipt, not the filename title of the transcription run"
+assert_eq "$(result title)" "Stub Video" "...and the replay's RESULT:title= names the video (A15/A11)"
 # the media helper's exit codes
 stub_reset
 STUB_MEDIA=timeout run_gw --url "https://youtube.com/watch?v=hangs000000" --capture-id yt-hang
@@ -1422,6 +1437,7 @@ assert_eq "$(capfm "$srcb" reference_lines) $(capfm "$srcb" eligible_lines) $(ca
 assert_eq "$(fm "$srcb" transcript_language) $(fm "$srcb" original_language) $(fm "$srcb" duration) $(fm "$srcb" upload_date) $(fm "$srcb" chapters)" '"en" "en-US" "0:01:40" "20260901" 3' "...transcript_language, original_language, duration, upload_date and the chapter count in the frontmatter"
 assert_eq "$(fm "$srcb" video_title) $(fm "$srcb" author) $(fm "$srcb" import_source)" '"An example talk about agents" "Example Channel" "browser-lane"' "...video_title, the channel as the author, the producer id"
 assert_contains "$(grep -F "Sources/$revb/extract|" "$VAULT/index.md")" "[[Sources/$revb/extract|An example talk about agents]]" "...the regenerated index row names the video by its title (A14)"
+assert_eq "$(result title)" "An example talk about agents" "...and RESULT:title= names it the same way (A15/A11)"
 assert_eq "$(fm "$VAULT/Sources/$revb/extract.md" title)" '"Plain T"' "...while the extractor's own title stays in extract.md"
 assert_eq "$(fm "$srcb" canonical_url)" '"https://www.youtube.com/watch?v=lane0000001"' "...the identity is the video's canonical URL"
 assert_file_exists "$ARCHIVE/$revb.vtt" "the caption track is the retained raw, <revision>.vtt"

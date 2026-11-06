@@ -106,8 +106,10 @@
 # ─── RESULT lines and exit codes (§3.6) ─────────────────────────────────────────────────────────
 #   RESULT:capture_id= revision= path= status= title= source_sha256= extract= error_class=
 #   retryable= [replayed=true] — values single-line, control characters removed, computed from the
-#   files. Exit 0 extracted / skipped-duplicate / replay of a complete capture · 1 failed or
-#   integrity-error · 2 usage/contract · 3 extractor environment missing before publication ·
+#   files; title= is video_title of source.md for a video, else extract.md's title, else source.md's,
+#   else empty (A11, cap_title_from_files). Exit 0 extracted / skipped-duplicate / replay of a
+#   complete capture · 1 failed or integrity-error · 2 usage/contract · 3 extractor environment
+#   missing before publication ·
 #   4 source published, extract not · 75 lock held. The VAULT lock case prints a RESULT block too
 #   (GH #30): capture_id as requested (or empty), status=locked, error_class=locked, retryable=true,
 #   extract=none, revision/path/title/hash empty — vault-lock.py prints it on its own refusal
@@ -2582,9 +2584,15 @@ cap_verify_folder_source() {
   return 0
 }
 
-cap_title_from_files() {   # <revision> → title of extract.md, else source.md, else empty
+# cap_title_from_files <revision> → the revision's title for RESULT:title= (§3.6, A11): video_title of
+# source.md when the source has one (a video is named by its title, not by the extractor's one-line
+# thesis — the index rule, capture layer A14/A15; an empty value counts as absent), else title of
+# extract.md, else of source.md, else empty. The same three reads whichever path prints the block
+# (a fresh capture, a replay, --resume, a duplicate).
+cap_title_from_files() {
   local d="$VAULT_PATH/Sources/$1" t=""
-  [[ -f "$d/extract.md" ]] && t="$(_mnemon_yaml_literal title "$d/extract.md")"
+  [[ -f "$d/source.md" ]] && t="$(_mnemon_yaml_literal video_title "$d/source.md")"
+  [[ -z "$t" && -f "$d/extract.md" ]] && t="$(_mnemon_yaml_literal title "$d/extract.md")"
   [[ -z "$t" && -f "$d/source.md" ]] && t="$(_mnemon_yaml_literal title "$d/source.md")"
   printf '%s' "$t"
 }
