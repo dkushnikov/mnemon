@@ -1421,6 +1421,8 @@ assert_eq "$(capfm "$srcb" fidelity) $(capfm "$srcb" producer_fidelity)" 'transc
 assert_eq "$(capfm "$srcb" reference_lines) $(capfm "$srcb" eligible_lines) $(capfm "$srcb" missing_lines) $(capfm "$srcb" headings_missing)" "9 8 0 0" "...the check's counts against the caption track"
 assert_eq "$(fm "$srcb" transcript_language) $(fm "$srcb" original_language) $(fm "$srcb" duration) $(fm "$srcb" upload_date) $(fm "$srcb" chapters)" '"en" "en-US" "0:01:40" "20260901" 3' "...transcript_language, original_language, duration, upload_date and the chapter count in the frontmatter"
 assert_eq "$(fm "$srcb" video_title) $(fm "$srcb" author) $(fm "$srcb" import_source)" '"An example talk about agents" "Example Channel" "browser-lane"' "...video_title, the channel as the author, the producer id"
+assert_contains "$(grep -F "Sources/$revb/extract|" "$VAULT/index.md")" "[[Sources/$revb/extract|An example talk about agents]]" "...the regenerated index row names the video by its title (A14)"
+assert_eq "$(fm "$VAULT/Sources/$revb/extract.md" title)" '"Plain T"' "...while the extractor's own title stays in extract.md"
 assert_eq "$(fm "$srcb" canonical_url)" '"https://www.youtube.com/watch?v=lane0000001"' "...the identity is the video's canonical URL"
 assert_file_exists "$ARCHIVE/$revb.vtt" "the caption track is the retained raw, <revision>.vtt"
 assert_eq "$(shasum -a 256 "$ARCHIVE/$revb.vtt" | cut -c1-64)" "$vtt_sha" "...byte for byte the bundle's file"
