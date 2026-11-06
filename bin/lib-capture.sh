@@ -87,7 +87,9 @@
 #   integrity-error (the published source.md is missing or was edited: error_class
 #   evidence-missing | evidence-mismatch, §12 A3; a replay re-verifies and goes on when the
 #   operator restored the file). retryable: true for fetch, convert, auth, transient, timeout,
-#   claude-exit, fence-unprobed, environment; false for the rest (--resume is always allowed).
+#   claude-exit, fence-unprobed, environment, invalid-output (the extractor is a model: the same
+#   input may validate on the next run — contracts A10); false for the rest (--resume is always
+#   allowed).
 #   Recorded raw evidence is never refetched: a recorded raw_sha256 whose file is gone is
 #   evidence-missing, a published raw that is missing or changed is evidence-mismatch (operator).
 #   Every write is tmp + fsync + rename; the receipt records the intent of a publication before
@@ -2647,8 +2649,10 @@ cap_extract_state_of() {   # <revision> → ok | missing
 }
 
 cap_retryable_of() {   # <class> → true|false
+  # invalid-output is retryable (contracts A10, 2026-11-06): the extractor is a model, and in the
+  # field the same source, template and reader context validated on the next run (--resume).
   case "$1" in
-    fetch|convert|auth|transient|timeout|claude-exit|fence-unprobed|environment|server-error|unavailable) printf 'true' ;;
+    fetch|convert|auth|transient|timeout|claude-exit|fence-unprobed|environment|server-error|unavailable|invalid-output) printf 'true' ;;
     *) printf 'false' ;;
   esac
 }

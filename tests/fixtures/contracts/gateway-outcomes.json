@@ -104,15 +104,37 @@
     "RESULT:status=captured",
     "RESULT:title=",
     "RESULT:source_sha256=35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
-    "RESULT:extract=invalid",
-    "RESULT:error_class=invalid-output",
+    "RESULT:extract=missing",
+    "RESULT:error_class=max-turns",
     "RESULT:retryable=false"
    ],
    "state": "failed",
-   "error_class": "invalid-output",
+   "error_class": "max-turns",
    "retryable": false,
    "revision": "2026-10-15_aaaaaaaa",
-   "attempt_consumed": true
+   "attempt_consumed": true,
+   "note": "the permanent exit-4 classes are budget, max-turns, unsupported-size: something the operator sets (A10)"
+  },
+  "exit4-invalid-output": {
+   "exit": 4,
+   "stdout": [
+    "RESULT:capture_id=<envelope_id>",
+    "RESULT:revision=2026-10-15_aaaaaaaa",
+    "RESULT:path=Sources/2026-10-15_aaaaaaaa/",
+    "RESULT:status=captured",
+    "RESULT:title=",
+    "RESULT:source_sha256=35523eb5be09c122fd11c762197353b24bf36a9871495bbef659e6e81a6981e7",
+    "RESULT:extract=invalid",
+    "RESULT:error_class=invalid-output",
+    "RESULT:retryable=true"
+   ],
+   "state": "failed",
+   "error_class": "invalid-output",
+   "retryable": true,
+   "revision": "2026-10-15_aaaaaaaa",
+   "next_attempt_at": "future",
+   "attempt_consumed": true,
+   "note": "two rejected answers of a model may be followed by a valid one on the next run (contracts A10)"
   },
   "exit4-malformed": {
    "exit": 4,
