@@ -16,6 +16,7 @@ This is a pointer, not a second guide. The full developer guide is [`CLAUDE.md`]
 |---|---|
 | How a capture works, flags, completeness, timeouts, site and arXiv captures, chunked extraction | [`docs/capture.md`](docs/capture.md) |
 | Feeding sources from a bot, a scanner or a script (envelopes, `mnemon ingest`) | [`docs/inbox.md`](docs/inbox.md) |
+| A YouTube video behind a bot wall (the browser lane: `mnemon browser-lane youtube`, `add --media-bundle`) | [`docs/capture.md` §7](docs/capture.md) and the capture layer spec §14 (A13) |
 | Persistence (receipts, identity, `RESULT:`, exit codes) and the extractor fence | [`docs/specs/2026-10-15-capture-contracts.md`](docs/specs/2026-10-15-capture-contracts.md) |
 | The capture layer (fetch chain, converters, the network policy) | [`docs/specs/2026-10-15-capture-layer.md`](docs/specs/2026-10-15-capture-layer.md) |
 | What a vault is as a data store — entities, ownership, states, the data doctor | [`docs/specs/2026-10-16-vault-store.md`](docs/specs/2026-10-16-vault-store.md) |
