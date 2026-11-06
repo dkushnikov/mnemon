@@ -114,6 +114,17 @@ out=$("$MNEMON" --instance searchtest search --query everywhere --include-source
 assert_eq "$(printf '%s' "$out" | jget 'd["results"][0]["result_type"] + " " + d["results"][0]["title"]')" "source An example talk about agents" "...a source result too"
 out=$("$MNEMON" --instance searchtest search --query agents --human)
 assert_contains "$out" "1. An example talk about agents" "...and the human list"
+# the default scan finds the video by the words of its title (A16): `example` is in no extract.md
+out=$("$MNEMON" --instance searchtest search --query "example talk")
+assert_eq "$(printf '%s' "$out" | jget 'str(d["count"]) + " " + str(d["fallback_applied"])')" "1 False" "a video is found by its title without --include-source (A16)"
+assert_eq "$(printf '%s' "$out" | jget 'd["results"][0]["result_type"] + " " + d["results"][0]["file"] + " " + d["results"][0]["title"]')" "extract extract.md An example talk about agents" "...as its extract, named by the title"
+assert_eq "$(printf '%s' "$out" | jget 'd["results"][0]["snippet"]')" "An example talk about agents" "...the snippet is the title when no line of the extract holds the word"
+out=$("$MNEMON" --instance searchtest search --query "example personal")
+assert_eq "$(printf '%s' "$out" | jget 'str(d["count"]) + " " + str(d["fallback_applied"])')" "1 False" "...one word from the title, one from the extract"
+out=$("$MNEMON" --instance searchtest search --query everywhere)
+assert_eq "$(printf '%s' "$out" | jget 'd["count"]')" "0" "...the transcript stays behind --include-source: only video_title is scanned"
+out=$("$MNEMON" --instance searchtest search --query youtube)
+assert_eq "$(printf '%s' "$out" | jget 'd["count"]')" "0" "...and so do the other header fields of source.md"
 
 rc=0; out=$(MNEMON_INSTANCE=nosuch "$MNEMON" search --query karpathy --vault "$VAULT" 2>&1) || rc=$?
 assert_eq "$rc" "0" "--vault override needs no config"

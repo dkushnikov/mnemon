@@ -15,6 +15,9 @@ Test classes
 - FallbackStrategyTests   — REGRESSION: most-specific existing token, not the longest
 - JsonOutputTests         — REGRESSION: `created:` dates serialize as "YYYY-MM-DD"
 - ConfigResolutionTests   — MNEMON_INSTANCE / --vault override / missing instance
+- SourcesTitleTests       — a Sources result is named by the index rule (a video by its title, A15)
+- VideoTitleScanTests     — the default scan finds a video by its title: one field of source.md,
+                            read from the header, decoded as the title shown (A16)
 - EndToEndTests           — full script via subprocess against a fixture vault
 
 Every subprocess runs with a scrubbed environment (no inherited
@@ -384,6 +387,36 @@ class ScanFileTests(unittest.TestCase):
         self.assertEqual(matched, set())
         self.assertIsNone(snippet)
 
+    # the line searched beside the file: the video's title of an extract's revision (A16)
+    def test_beside_line_matches_what_the_file_lacks(self):
+        matched, snippet = search.scan_file(self.path, ["keynote", "nonexistent"], "The 2026 keynote, uncut")
+        self.assertEqual(matched, {"keynote"})
+        self.assertEqual(snippet, "The 2026 keynote, uncut")     # no line of the file holds the token
+
+    def test_tokens_split_between_the_file_and_the_beside_line(self):
+        matched, snippet = search.scan_file(self.path, ["karpathy", "keynote"], "The 2026 keynote, uncut")
+        self.assertEqual(matched, {"karpathy", "keynote"})
+        self.assertEqual(snippet, "title: Karpathy LLM Knowledge Bases")   # the longest token is the file's
+
+    def test_snippet_stays_the_files_line_when_both_hold_the_token(self):
+        _, snippet = search.scan_file(self.path, ["knowledge"], "Knowledge keynote")
+        self.assertIn("Body mentioning knowledge", snippet)
+
+    def test_beside_line_is_matched_case_insensitively_and_cut_like_any_snippet(self):
+        long_title = "KEYNOTE " + "x" * 300
+        matched, snippet = search.scan_file(self.path, ["keynote"], long_title)
+        self.assertEqual(matched, {"keynote"})
+        self.assertEqual(snippet, long_title[:200] + "…")
+
+    def test_no_beside_line_is_the_scan_as_before(self):
+        for beside in (None, ""):
+            matched, snippet = search.scan_file(self.path, ["keynote"], beside)
+            self.assertEqual((matched, snippet), (set(), None))
+
+    def test_unreadable_file_is_no_hit_whatever_stands_beside_it(self):
+        matched, snippet = search.scan_file(Path(self.tmpdir) / "no-such-file.md", ["keynote"], "A keynote")
+        self.assertEqual((matched, snippet), (set(), None))
+
 
 # ---------------------------------------------------------------------------
 # RankResultsTests
@@ -715,6 +748,212 @@ class SourcesTitleTests(TempVaultMixin, unittest.TestCase):
         self.assertEqual(human.returncode, 0, human.stderr)
         self.assertIn(f"2. {self.VIDEO}", human.stdout)
         self.assertNotIn(self.THESIS, human.stdout)
+
+
+# ---------------------------------------------------------------------------
+# VideoTitleScanTests — the default scan finds a video by the words of its title (capture layer A16):
+# an extract is scanned together with source.md's `video_title` — that field alone, read from the
+# header of source.md, decoded as the result's `title` is.
+# ---------------------------------------------------------------------------
+
+class _CountingHandle:
+    """A text file handle that counts the lines it hands out (the header reader's price)."""
+
+    def __init__(self, handle, counter: list):
+        self._handle = handle
+        self._counter = counter
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._handle.close()
+        return False
+
+    def readline(self):
+        line = self._handle.readline()
+        if line:
+            self._counter.append(line)
+        return line
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        line = self._handle.readline()
+        if not line:
+            raise StopIteration
+        self._counter.append(line)
+        return line
+
+    def read(self, *args):
+        raise AssertionError("the header reader must not read source.md whole")
+
+
+class VideoTitleScanTests(TempVaultMixin, unittest.TestCase):
+    VIDEO = "Keynote on durable harnesses"
+    THESIS = "What the talk is really about"
+
+    def _video(self, name: str, *source_fields: str, body: str = "The transcript body: orchestration everywhere.",
+               extract_body: str = "The extract of a captioned talk: agents, memory, tools.") -> Path:
+        folder = self.vault / "Sources" / name
+        write_extract(folder, title=self.THESIS, rating=7, domains=["learning"], created="2026-05-05",
+                      body=extract_body)
+        write_source(folder, body, "origin: youtube", *source_fields)
+        return folder
+
+    def test_default_scan_finds_a_video_by_its_title(self):
+        self._video("2026-05-05_aaa", f'video_title: "{self.VIDEO}"')
+        out = self._run("--query", "keynote durable harnesses")       # no word of it is in extract.md
+        self.assertEqual(out["count"], 1)
+        self.assertFalse(out["fallback_applied"])
+        hit = out["results"][0]
+        self.assertEqual((hit["result_type"], hit["file"], hit["path"]), ("extract", "extract.md", "Sources/2026-05-05_aaa/"))
+        self.assertEqual(hit["title"], self.VIDEO)
+        self.assertEqual(hit["snippet"], self.VIDEO)                    # no line of the extract can give one
+        self.assertEqual((hit["rating"], hit["domains"], hit["tier"]), (7, ["learning"], "full"))
+
+    def test_a_query_takes_words_from_the_title_and_from_the_extract(self):
+        self._video("2026-05-05_aaa", f'video_title: "{self.VIDEO}"')
+        out = self._run("--query", "harnesses memory")                 # the title's word, the extract's word
+        self.assertEqual((out["count"], out["fallback_applied"]), (1, False))
+        self.assertEqual(out["results"][0]["title"], self.VIDEO)
+
+    def test_only_the_title_field_of_source_md_is_scanned(self):
+        # the body and the other header fields of source.md stay behind --include-source
+        self._video("2026-05-05_aaa", f'video_title: "{self.VIDEO}"', 'uploader: "Somebody Unusualname"')
+        for word in ("orchestration", "unusualname", "youtube"):
+            self.assertEqual(self._run("--query", word)["count"], 0, word)
+            with_source = self._run("--query", word, "--include-source")
+            self.assertEqual((with_source["count"], with_source["results"][0]["result_type"]), (1, "source"), word)
+
+    def test_a_revision_without_an_extract_is_not_scanned_by_default(self):
+        # a video whose extraction is pending is found like every pending revision: with --include-source
+        write_source(self.vault / "Sources" / "2026-05-06_bbb", "A transcript.", "origin: youtube",
+                     f'video_title: "{self.VIDEO}"')
+        self.assertEqual(self._run("--query", "keynote")["count"], 0)
+        out = self._run("--query", "keynote", "--include-source")
+        self.assertEqual((out["count"], out["results"][0]["result_type"], out["results"][0]["title"]),
+                         (1, "source", self.VIDEO))
+
+    def test_the_scanned_title_is_the_title_shown(self):
+        # decoded by search's own parser, as the result's `title` is (A15): a trailing comment is not the
+        # title, `null` and an empty value are no title, a single-quoted value is unquoted
+        self._video("2026-05-05_aaa", "video_title: Plain keynote # hidden remark")
+        self.assertEqual(self._run("--query", "keynote")["results"][0]["title"], "Plain keynote")
+        self.assertEqual(self._run("--query", "remark")["count"], 0)
+        self._video("2026-05-06_bbb", "video_title: null")
+        self.assertEqual(self._run("--query", "null")["count"], 0)
+        self._video("2026-05-07_ccc", 'video_title: ""')
+        self._video("2026-05-08_ddd", "video_title: 'It''s a singular lecture'")
+        out = self._run("--query", "singular lecture")
+        self.assertEqual((out["count"], out["results"][0]["title"]), (1, "It's a singular lecture"))
+        self._video("2026-05-09_eee", 'video_title: "a \\"quoted\\" colloquium"')
+        self.assertEqual(self._run("--query", "quoted colloquium")["results"][0]["snippet"], 'a "quoted" colloquium')
+
+    def test_fallback_counts_the_title_too(self):
+        # the most specific token is counted over the same text the scan matched
+        self._video("2026-05-05_aaa", f'video_title: "{self.VIDEO}"')
+        self._video("2026-05-06_bbb", 'video_title: "Another talk"')
+        out = self._run("--query", "harnesses zzzznotaword")
+        self.assertEqual((out["fallback_applied"], out["fallback_token"], out["count"]), (True, "harnesses", 1))
+        self.assertEqual(out["results"][0]["title"], self.VIDEO)
+
+    def test_the_other_targets_are_scanned_as_before(self):
+        # a synthesis note beside nothing; a source target reads source.md whole, its own text only
+        self._video("2026-05-05_aaa", f'video_title: "{self.VIDEO}"', extract_body="Nothing of the kind.")
+        (self.vault / "Synthesis" / "note.md").write_text("---\ntype: synthesis\n---\n\nA note.\n", encoding="utf-8")
+        out = self._run("--query", "keynote", "--include-source", "--include-synthesis")
+        self.assertEqual([(r["result_type"], r["title"]) for r in out["results"]], [("extract", self.VIDEO)])
+
+    def test_header_reader_agrees_with_the_title_parser(self):
+        # one decoding for the scan and for the name: video_title() on the header equals _title_field()
+        # on the whole text as the index rule reads it (undecodable bytes dropped), for every shape of
+        # a file — and, where the source has a title, equals the `title` the result carries
+        shapes = {
+            "plain": '---\ntype: source\nvideo_title: "A talk"\n---\n\nbody\n',
+            "no-header": "A talk without a header\nvideo_title: nope\n",
+            "unclosed": '---\ntype: source\nvideo_title: "Never closed"\n\nbody\n',
+            "empty-file": "",
+            "only-a-fence": "---",
+            "fence-at-eof": '---\nvideo_title: "At the end"\n---',
+            "title-in-the-body": "---\ntype: source\n---\n\nvideo_title: in the body\n",
+            "second-fence-in-the-body": '---\ntype: source\n---\n\n---\nvideo_title: "Second block"\n---\n',
+            "nested": "---\ncapture:\n  video_title: nested\n---\n",
+            "duplicate": '---\nvideo_title: "First"\nvideo_title: "Second"\n---\n',
+            "empty": '---\nvideo_title: ""\n---\n',
+            "null": "---\nvideo_title: ~\n---\n",
+            "list": "---\nvideo_title: [a, b]\n---\n",
+            "block": "---\nvideo_title:\n  - a\n---\n",
+            "commented": "---\nvideo_title: A talk # note\n---\n",
+            "single-quoted": "---\nvideo_title: 'It''s a talk'\n---\n",
+            "escapes": '---\nvideo_title: "a \\"q\\" \\\\ b"\n---\n',
+            "spaces-around-the-fence": '---  \nvideo_title: "Padded"\n  ---  \n\nbody\n',
+            "crlf": '---\r\ntype: source\r\nvideo_title: "Windows"\r\n---\r\n\r\nbody\r\n',
+            "late": "---\n" + "".join(f"k{i}: v\n" for i in range(300)) + 'video_title: "Late"\n---\n',
+            "unicode": '---\nvideo_title: "Доклад про агентов — 講演"\n---\n',
+            "word-in-a-value": '---\nnote: "video_title is elsewhere"\n---\n',
+        }
+        shapes = {name: text.encode("utf-8") for name, text in shapes.items()}
+        shapes["not-utf-8"] = b'---\nvideo_title: "ab\xffcd talk"\n---\n'
+        shapes["not-utf-8-at-a-line-end"] = b'---\nvideo_title: "abcd talk\xe2\x82"\n---\n\nbody\n'
+        folder = self.vault / "Sources" / "2026-05-05_aaa"
+        write_extract(folder, title=self.THESIS, rating=7, body="An extract.")
+        path = folder / "source.md"
+        titled = 0
+        for name, data in shapes.items():
+            path.write_bytes(data)
+            whole = search._title_field(path.read_text(encoding="utf-8", errors="ignore"), "video_title")
+            self.assertEqual(search.video_title(path), whole, name)
+            if whole is not None:        # the matched string is the string shown
+                titled += 1
+                shown = search.assemble_result(folder / "extract.md", "extract", None, self.vault)["title"]
+                self.assertEqual(search.video_title(path), shown, name)
+        self.assertEqual(titled, 12)     # the shapes that carry a title: the branch above ran for each
+        self.assertEqual(search.video_title(path.with_name("absent.md")), None)
+        self.assertEqual(search.video_title(self.vault / "Sources"), None)   # a directory: unreadable, no title
+
+    def test_a_title_with_undecodable_bytes_is_found_by_what_is_shown(self):
+        # the index rule drops undecodable bytes from the title it shows; the scan matches that string
+        folder = self.vault / "Sources" / "2026-05-05_aaa"
+        write_extract(folder, title=self.THESIS, rating=7, body="An extract.")
+        (folder / "source.md").write_bytes(b'---\ntype: source\nvideo_title: "ab\xffcd colloquium"\n---\n\nbody\n')
+        out = self._run("--query", "abcd")
+        self.assertEqual(out["count"], 1)
+        self.assertEqual((out["results"][0]["title"], out["results"][0]["snippet"]), ("abcd colloquium", "abcd colloquium"))
+
+    def test_header_reader_stops_at_the_closing_fence(self):
+        # the price of the default scan is the header, never the transcript
+        folder = self.vault / "Sources" / "2026-05-05_aaa"
+        path = write_source(folder, "\n".join(f"transcript line {i}" for i in range(5000)), "origin: youtube",
+                            f'video_title: "{self.VIDEO}"')
+        handed: list = []
+        real_open = open
+        search.open = lambda *a, **kw: _CountingHandle(real_open(*a, **kw), handed)
+        try:
+            self.assertEqual(search.video_title(path), self.VIDEO)
+        finally:
+            del search.open
+        self.assertEqual(handed, ["---\n", "type: source\n", "origin: youtube\n", f'video_title: "{self.VIDEO}"\n', "---\n"])
+
+    def test_the_scan_reads_one_header_per_extract(self):
+        # in process: every extract target asks for its sibling's title once; no other target does
+        self._video("2026-05-05_aaa", f'video_title: "{self.VIDEO}"')
+        self._video("2026-05-06_bbb", 'upload_date: "20260101"')
+        write_source(self.vault / "Sources" / "2026-05-07_ccc", "A transcript.", f'video_title: "{self.VIDEO}"')
+        asked: list = []
+        real = search.video_title
+        search.video_title = lambda p: (asked.append(p.parent.name + "/" + p.name), real(p))[1]
+        argv, stdout = sys.argv, sys.stdout
+        sys.argv = [str(SCRIPT), "--vault", str(self.vault), "--query", "keynote", "--include-source"]
+        sys.stdout = open(os.devnull, "w")
+        try:
+            self.assertEqual(search.main(), 0)
+        finally:
+            sys.stdout.close()
+            sys.argv, sys.stdout = argv, stdout
+            search.video_title = real
+        self.assertEqual(sorted(asked), ["2026-05-05_aaa/source.md", "2026-05-06_bbb/source.md"])
 
 
 class EndToEndTests(TempVaultMixin, unittest.TestCase):

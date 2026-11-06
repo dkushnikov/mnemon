@@ -4,8 +4,9 @@
 Run as `mnemon search --query "<q>" [...]` (or directly). Resolves the vault
 through the engine's config loader (bin/mnemon-config.sh, honouring
 MNEMON_INSTANCE / MNEMON_CONFIG), or takes `--vault <path>` as an explicit
-override, then searches Sources/*/extract.md (and optionally source.md,
-Synthesis/ and Collections/) for files matching the query. Results are ranked by
+override, then searches Sources/*/extract.md — each together with the title of
+its video, source.md's `video_title` (and optionally the whole source.md,
+Synthesis/ and Collections/) — for files matching the query. Results are ranked by
 rating DESC, then date DESC, then title. The JSON is `mnemon-search/2`
 (docs/specs/2026-10-27-research-interface.md §7): every result carries
 `result_type` (extract · source · synthesis · collection · wiki) apart from
@@ -43,6 +44,13 @@ Design notes
   own frontmatter parser, so a legacy single-quoted or `#`-commented title
   decodes as before. Not display-escaped. The gateway's `RESULT:title=` follows
   the same rule (contracts A11).
+- A video is found by its title (capture layer A16): an extract is scanned
+  together with source.md's `video_title` — that one field, read from the
+  header of source.md (the lines up to the closing `---`), never its body, and
+  decoded as the result's `title` is. A token is matched by the extract or by
+  the title; a snippet that no line of the extract can give is the title. A
+  revision without extract.md is not scanned by default, a video included:
+  `--include-source` reads source.md whole.
 - Output: JSON to stdout by default (consumed by the plugin skill); `--human`
   prints a readable list for ad-hoc CLI use.
 - Provider: this script always performs the grep-style scan above — there is
@@ -259,6 +267,32 @@ def _title_field(text: str, key: str) -> str | None:
     return value or None
 
 
+def video_title(source: Path) -> str | None:
+    """`video_title` of a source.md, read from the file's header alone — the lines up to the closing
+    `---`, never the body (capture layer A16: the default scan covers this one field of source.md; a
+    transcript can run to megabytes, its header is a few kilobytes). The value is the one the result
+    is named by (A15): the bytes decoded as `knowledge-reindex.folder_title` decodes them
+    (undecodable ones dropped), the scalar read by this script's own frontmatter parser
+    (`_title_field`) — the string the scan matches is the string shown. None when the file is missing
+    or unreadable, has no closed header (such a file is read to its end), or carries no `video_title`
+    (an empty one counts as absent)."""
+    try:
+        with open(source, encoding="utf-8", errors="ignore") as handle:
+            first = handle.readline()
+            if not first.startswith("---"):
+                return None
+            head = [first]
+            for line in handle:
+                head.append(line)
+                if line.strip() == "---":
+                    header = "".join(head)
+                    # the parse is the price of a header; most sources are not videos
+                    return _title_field(header, "video_title") if "video_title" in header else None
+    except OSError:
+        return None
+    return None
+
+
 def _as_list(value) -> list:
     if isinstance(value, list):
         return [str(v) for v in value if v not in (None, "")]
@@ -311,23 +345,33 @@ def collect_targets(
     return targets
 
 
-def scan_file(path: Path, tokens: list[str]) -> tuple[set[str], str | None]:
+def scan_file(path: Path, tokens: list[str], beside: str | None = None) -> tuple[set[str], str | None]:
     """Scan a file and return (set of matched tokens, snippet).
 
     Returns the *subset* of query tokens that appear in the file, not just a
     boolean verdict, so the caller can (1) keep files matching ALL tokens and
     (2) fall back to the most specific token using per-token counts from the
     same pass. Returns (empty set, None) if unreadable or nothing matches.
+
+    `beside` is a line searched together with the file — the video's title of
+    an extract's revision (capture layer A16): a token is matched by the file
+    or by the line, so a query may take one word from the title and another
+    from the extract. The snippet is the file's line when the file holds the
+    snippet's token, else the line itself.
     """
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return set(), None
     text_lower = text.lower()
-    matched = {t for t in tokens if t in text_lower}
+    beside_lower = beside.lower() if beside else ""
+    matched = {t for t in tokens if t in text_lower or t in beside_lower}
     if not matched:
         return set(), None
-    return matched, _extract_snippet(text, list(matched))
+    snippet = _extract_snippet(text, list(matched))
+    if snippet is None and beside:
+        snippet = _extract_snippet(beside, list(matched))
+    return matched, snippet
 
 
 def _extract_snippet(text: str, tokens: list[str], width: int = 200) -> str | None:
@@ -653,7 +697,8 @@ def main() -> int:
                              "are found with --include-source")
     parser.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
     parser.add_argument("--include-source", action="store_true",
-                        help="Also search raw source.md (default: only extract.md)")
+                        help="Also search raw source.md (default: extract.md and, beside it, the title "
+                             "of its video — source.md's video_title)")
     parser.add_argument("--include-synthesis", action="store_true",
                         help="Also search Synthesis/ directory")
     parser.add_argument("--include-collections", action="store_true",
@@ -704,9 +749,13 @@ def main() -> int:
 
     # Single pass: every file matching at least one token, with the set of
     # tokens it matched. Primary results: matched == all tokens (AND).
+    # An extract is scanned together with the title of its video (source.md's
+    # `video_title`, read from the header alone — A16): the one field of
+    # source.md the default scan covers.
     all_hits: list[tuple[Path, str, set, str | None]] = []
     for path, result_type in targets:
-        matched, snippet = scan_file(path, tokens)
+        beside = video_title(path.with_name("source.md")) if result_type == "extract" else None
+        matched, snippet = scan_file(path, tokens, beside)
         if matched:
             all_hits.append((path, result_type, matched, snippet))
 
