@@ -3,7 +3,8 @@
 `Policy.get(url)` is the only way the capture layer talks HTTP: `http`/`https` only, no userinfo, every
 hop's host resolved and **every** returned address checked (private, loopback, link-local, reserved,
 multicast, unspecified, and anything else that is not globally reachable — the RFC 6598 shared space of a
-tailnet or a carrier NAT included → `ssrf-blocked` on the first hop, `ssrf-redirect` after a redirect), the connection
+tailnet or a carrier NAT included → `ssrf-blocked` on the first hop, `ssrf-redirect` after a redirect; an address of the
+NAT64 well-known prefix `64:ff9b::/96` is judged by the IPv4 address it carries, spec §20, A19), the connection
 pinned to the checked address (the socket is opened on the resolved sockaddr — never a second lookup — and
 TLS is verified against the host name with SNI = host; the `Host` header is the host name), at most
 `max_redirects` redirects each re-checked before it is followed, a byte cap measured on the decoded body
