@@ -126,7 +126,7 @@ class AddressChecks(PolicyBase):
 
 
 class Nat64(PolicyBase):
-    """A18 (D3 amended): an address of the NAT64 well-known prefix `64:ff9b::/96` — what a DNS64 network
+    """A19 (D3 amended): an address of the NAT64 well-known prefix `64:ff9b::/96` — what a DNS64 network
     answers for a host without native IPv6 — is judged by its embedded IPv4 address alone; every other check
     stays: all answers of a resolution, every redirect hop, the pinned connection."""
 

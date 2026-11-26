@@ -162,7 +162,7 @@ _NON_GLOBAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
     "203.0.113.0/24", "240.0.0.0/4", "100::/64", "2001:db8::/32", "2001:10::/28", "2001:2::/48"))
 # The NAT64 well-known prefix (RFC 6052 §2.1): on a DNS64 network a host without native IPv6 resolves to
 # `64:ff9b::<its IPv4 address>`, and the translator forwards to that IPv4 address. Only this /96 — not the
-# local-use `64:ff9b:1::/48` (RFC 8215), not a network-specific prefix — is unwrapped (D3, A18).
+# local-use `64:ff9b:1::/48` (RFC 8215), not a network-specific prefix — is unwrapped (D3, A19).
 _NAT64_WKP = ipaddress.ip_network("64:ff9b::/96")
 
 
@@ -170,7 +170,7 @@ def address_problem(address: str, loopback_ok: bool = False) -> Optional[str]:
     """Why an address is refused (private, loopback, link-local, reserved, multicast, unspecified, or any
     address that is not globally reachable — RFC 6598 shared space included), or None. An IPv6 address that
     embeds an IPv4 one (mapped, 6to4, Teredo) is judged by the embedded address too. An address of the NAT64
-    well-known prefix `64:ff9b::/96` is judged by its embedded IPv4 address alone (A18): the wrapper is the
+    well-known prefix `64:ff9b::/96` is judged by its embedded IPv4 address alone (A19): the wrapper is the
     translator's, not the destination — `ipaddress` calls the prefix reserved, and a DNS64 network returns
     it for every IPv4-only host — while the embedded address goes through every check, a loopback one
     refused even under the loopback test hook (it is the translator's loopback, never the test server)."""

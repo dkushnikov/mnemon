@@ -500,6 +500,51 @@ run env PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
 assert_contains "$out" "warn capture-deps — defuddle missing (pandoc and the DOM text remain as converters) · pandoc missing (html conversion falls back to the DOM text)" "doctor: capture-deps names missing converters"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^fail capture-deps' || true)" "0" "doctor: capture-deps never fails (every tool is optional)"
 
+# --- doctor: media-tools (capture layer A18) — yt-dlp's own report: its version and age, the JS runtimes it can use ---
+echo "--- doctor: media-tools ---"
+cat > "$CSTUB/yt-dlp" <<'STUB'
+#!/bin/sh
+# yt-dlp stub for the doctor's probe: records argv; prints a debug header per STUB_YTV (ok · noruntime · predates ·
+# undated · unknown) with the version STUB_YTV_DATE, then the usage error yt-dlp gives without a URL (exit 2)
+printf '%s\n' "$*" >> "$STUB_YTV_CALLS"
+case "${STUB_YTV:-ok}" in
+  ok)        printf '[debug] yt-dlp version stable@%s from yt-dlp/yt-dlp [c0ffee000] (pip)\n[debug] Optional libraries: certifi-2026.1.1, yt_dlp_ejs-0.8.0\n[debug] JS runtimes: deno-2.9.8\n' "$STUB_YTV_DATE" >&2 ;;
+  noruntime) printf '[debug] yt-dlp version stable@%s from yt-dlp/yt-dlp [c0ffee000] (pip)\n[debug] Optional libraries: certifi-2026.1.1\n[debug] JS runtimes: none\n' "$STUB_YTV_DATE" >&2 ;;
+  predates)  printf '[debug] yt-dlp version %s from yt-dlp/yt-dlp [c0ffee000] (pip)\n' "$STUB_YTV_DATE" >&2 ;;
+  undated)   printf '[debug] yt-dlp version local-build from a fork\n[debug] JS runtimes: deno-2.9.8\n' >&2 ;;
+  unknown)   printf 'something else entirely\n' >&2 ;;
+esac
+echo "yt-dlp: error: You must provide at least one URL." >&2
+exit 2
+STUB
+chmod +x "$CSTUB/yt-dlp"
+export STUB_YTV_CALLS="$TEST_TMPDIR/ytv-calls"
+d_recent="$(python3 -c 'import datetime as d; print((d.date.today() - d.timedelta(days=10)).strftime("%Y.%m.%d"))')"
+d_old="$(python3 -c 'import datetime as d; print((d.date.today() - d.timedelta(days=200)).strftime("%Y.%m.%d"))')"
+d_edge="$(python3 -c 'import datetime as d; print((d.date.today() - d.timedelta(days=90)).strftime("%Y.%m.%d") + ".232754")')"
+: > "$STUB_YTV_CALLS"
+run env STUB_YTV=ok STUB_YTV_DATE="$d_recent" PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" "ok media-tools — yt-dlp $d_recent (10 days old) · JS runtimes: deno-2.9.8 · challenge solver: yt_dlp_ejs-0.8.0" "doctor: media-tools ok — the version, its age in days, the runtimes yt-dlp reports, the challenge solver"
+assert_eq "$(cat "$STUB_YTV_CALLS")" "-v --ignore-config" "...one probe: yt-dlp -v --ignore-config, no URL, no cookies, the config files ignored"
+run env STUB_YTV=ok STUB_YTV_DATE="$d_edge" PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" "ok media-tools — yt-dlp $d_edge (90 days old)" "...a nightly's dated version; 90 days is still ok (yt-dlp itself warns past 90)"
+run env STUB_YTV=ok STUB_YTV_DATE="$d_old" PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" "warn media-tools — yt-dlp $d_old (200 days old, > 90: brew upgrade yt-dlp)" "doctor: media-tools warns on a yt-dlp older than 90 days"
+run env STUB_YTV=noruntime STUB_YTV_DATE="$d_recent" PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" "warn media-tools — yt-dlp $d_recent (10 days old) · JS runtimes: none (YouTube's challenges need one" "doctor: media-tools warns when yt-dlp reports no JS runtime — a node on PATH proves nothing"
+assert_contains "$out" "· challenge solver: yt_dlp_ejs not installed" "...and names a missing challenge solver"
+run env STUB_YTV=predates STUB_YTV_DATE="$d_recent" PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" "warn media-tools — yt-dlp $d_recent (10 days old) · JS runtimes: not reported (this yt-dlp predates the report" "doctor: media-tools warns on a yt-dlp without the runtime report"
+run env STUB_YTV=undated PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" "warn media-tools — yt-dlp local-build (not a dated version: age unknown) · JS runtimes: deno-2.9.8" "doctor: an undated version warns, age unknown"
+run env STUB_YTV=unknown PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" "warn media-tools — yt-dlp version unknown (no version in its debug header)" "doctor: no version at all warns"
+rm -f "$CSTUB/yt-dlp"
+run env PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" "warn media-tools — yt-dlp missing (YouTube captures and the browser lane need it: brew install yt-dlp)" "doctor: a missing yt-dlp warns"
+assert_eq "$(printf '%s\n' "$out" | grep -c '^fail media-tools' || true)" "0" "doctor: media-tools never fails (every media tool is optional)"
+unset STUB_YTV_CALLS
+
 run "$MNEMON" doctor
 assert_contains "$out" "ok egress — external_fetch off (never past the local chain); firecrawl: FIRECRAWL_API_KEY not set · jina: JINA_API_KEY not set" "doctor: egress off by default, every fetcher's key reported as not set"
 run env FIRECRAWL_API_KEY=secret-firecrawl-key-123 "$MNEMON" doctor
@@ -526,7 +571,7 @@ else
 fi
 run "$MNEMON" doctor --json
 names=$(printf '%s' "$out" | jget '" ".join(c["name"] for c in d["checks"])')
-assert_contains "$names" "deps-python capture-deps egress canonical" "doctor --json lists the three phase-2 checks after deps-python"
+assert_contains "$names" "deps-python capture-deps media-tools egress canonical" "doctor --json lists the phase-2 checks after deps-python, media-tools beside capture-deps"
 run "$MNEMON" help
 assert_contains "$out" "audit --canonical" "help lists audit --canonical"
 assert_contains "$out" "reindex [--no-hand-edit-report]" "help lists reindex --no-hand-edit-report"
