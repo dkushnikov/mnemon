@@ -23,6 +23,15 @@ The bundle, `<out>/<video_id>/<UTC timestamp>/`:
                           acquired_at}
   <video_id>.<code>.vtt   the track as yt-dlp wrote it (SRT when the video offers no VTT; the converter reads both)
 
+The directory is allocated before the first yt-dlp call (capture layer A17), so every attempt that ran a tool has a
+place: `media.json`, written last, is the one mark of a complete bundle. An attempt that ends blocked, failed or past
+its --timeout keeps its diagnostics there instead — `error.json` (`mnemon-media-error/1`, the shape media-extract.py
+writes: error_class blocked | failed | timeout, stage download | captions, kind, error, retryable) and, when the tool
+printed anything, `stderr.txt`: yt-dlp's `ERROR:` and `WARNING:` lines only, absolute paths and anything shaped like a
+session value (`cookie=…`, `authorization: …`) redacted, at most 200 lines — every other line (debug output, traffic
+dumps, the cookie-store messages) is counted, never kept, so a retained file names the browser at most, as every
+printed line does. The video's line names the directory.
+
 Per video: (1) `yt-dlp --dump-single-json` — the metadata and the caption listing; a wall in its output is
 `blocked` (media-extract.classify_wall) and the lane moves on to the next video — cookies YouTube does not accept
 are not a thing to retry in a loop; (2) the track by the engine's own rule (media-extract.choose_track: the
@@ -34,7 +43,10 @@ unless --no-add; (6) --pause seconds before the next video. Every tool runs unde
 Output: one line per video, `<outcome> <video_id> — <detail>` — outcomes `captured` · `skipped-duplicate` ·
 `captured-pending-extract` (exit 4 of the gateway: the source is published, `mnemon add --resume` finishes it) ·
 `bundled` (--no-add) · `blocked` · `failed` · `invalid` (not a YouTube URL) · `add-failed` (the gateway refused
-or failed; the bundle stays, the argv is printed) · `locked` (exit 75; the bundle stays) — then one summary line.
+or failed; the bundle stays, the argv is printed) · `locked` (exit 75; the bundle stays) — then one summary line,
+which names every video not captured with its reason (`not captured: <id> (bot-wall)`), so a reader of the last
+line alone still sees why. A blocked or failed line carries the tool's line that the wall classifier matched
+(media-extract.error_line), redacted like stderr.txt, and ` · diagnostics: <dir>`.
 --json prints one `mnemon-browser-lane/1` document instead. Exit 0 when every video was captured, bundled or a
 duplicate; 1 when any was blocked, failed, invalid or refused; 2 usage. Stdlib only, python 3.9; external tools:
 yt-dlp (`brew install yt-dlp`) and the browser whose cookie store it reads (Safari needs nothing; Chrome asks
@@ -234,6 +246,80 @@ def add_argv(mnemon: str, canonical: str, bundle: str, track: dict, args) -> lis
     return argv
 
 
+# Retained and printed tool output (capture layer A17, A13's disclosure rule): only yt-dlp's ERROR / WARNING lines are
+# kept; an absolute path or a home-relative one becomes <path>; a session value becomes <redacted>.
+_KEEP_PREFIXES = ("ERROR", "WARNING")
+_PATH_RE = re.compile(r"(?<![A-Za-z0-9_:/.~-])(?:~/|/)[^\s'\"]*")
+_SECRET_RE = re.compile(r"(?i)\b(set-cookie|cookie|authorization|x-goog-authuser|x-youtube-identity-token|[a-z0-9_-]*sapisid|"
+                        r"__secure-[a-z0-9_-]+|sid|hsid|ssid|apisid|login_info)(\s*[:=]\s*)[^\s;,'\"]+")
+STDERR_MAX_LINES = 200
+STDERR_MAX_CHARS = 2000
+
+
+def redact(line: str) -> str:
+    """One line made safe to print or retain: session values, then paths."""
+    return _PATH_RE.sub("<path>", _SECRET_RE.sub(lambda m: m.group(1) + m.group(2) + "<redacted>", line))
+
+
+def retained_stderr(err) -> str:
+    """yt-dlp's stderr as `stderr.txt` keeps it: the ERROR / WARNING lines, redacted, capped; a closing note counts
+    what was not kept."""
+    text = err.decode("utf-8", "replace") if isinstance(err, bytes) else (err or "")
+    kept, dropped = [], 0
+    for ln in text.splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        if s.split(":", 1)[0].upper() in _KEEP_PREFIXES and len(kept) < STDERR_MAX_LINES:
+            kept.append(redact(s)[:STDERR_MAX_CHARS])
+        else:
+            dropped += 1
+    if dropped:
+        kept.append("(%d other line(s) not kept: only ERROR and WARNING lines are, paths and session values redacted)" % dropped)
+    return "\n".join(kept) + ("\n" if kept else "")
+
+
+def keep_diagnostics(o, stage, elapsed, error_class, kind, error, retryable, err=None):
+    """The attempt's diagnostics in its directory: error.json, and stderr.txt when the tool printed anything. Never
+    raises: a diagnostics file that cannot be written is named on stderr and the outcome stands."""
+    if not o.bundle:
+        return
+    ME.write_error_json(o.bundle, stage, elapsed, error_class=error_class, kind=kind, error=error, retryable=retryable)
+    if err:
+        try:
+            body = retained_stderr(err)
+            tmp = os.path.join(o.bundle, ".stderr.txt.tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            os.replace(tmp, os.path.join(o.bundle, "stderr.txt"))
+        except OSError as exc:
+            print("WARNING: could not write stderr.txt under %s: %s" % (o.bundle, exc), file=sys.stderr)
+    o.diagnostics = o.bundle
+    o.detail = "%s · diagnostics: %s" % (o.detail, o.bundle)
+
+
+def tool_failed(o, sup, stage, rc, err, what):
+    """A yt-dlp call that exited non-zero: `blocked` with the wall's kind when the classifier names one, else
+    `failed`; the detail is the classifier's line (media-extract.error_line), redacted; diagnostics kept."""
+    kind = ME.classify_wall(err)
+    line = redact(ME.error_line(err))
+    if kind:
+        o.wall = kind
+        o.done("blocked", "%s: %s" % (kind, line))
+        keep_diagnostics(o, stage, sup.elapsed(), "blocked", kind, line, kind == "rate-limit", err)
+    else:
+        o.done("failed", "%s: %s" % (what, line or "exit %d" % rc))
+        keep_diagnostics(o, stage, sup.elapsed(), "failed", None, line or "exit %d" % rc, None, err)
+    return o
+
+
+def content_failed(o, sup, stage, detail, err=None):
+    """A failure after a call that succeeded (the answer is not what the lane needs): `failed`, diagnostics kept."""
+    o.done("failed", detail)
+    keep_diagnostics(o, stage, sup.elapsed(), "failed", None, detail, None, err)
+    return o
+
+
 def tool_version(sup):
     rc, out, err = sup.run(["yt-dlp", "--version"], "probe")
     return out.decode("utf-8", "replace").strip().splitlines()[0] if rc == 0 and out.strip() else None
@@ -251,6 +337,7 @@ class Outcome:
         self.add_exit = None
         self.add_result = {}
         self.wall = None
+        self.diagnostics = None
 
     def done(self, outcome, detail=""):
         self.outcome = outcome
@@ -259,7 +346,7 @@ class Outcome:
 
     def as_json(self):
         return {"url": self.url, "video_id": self.video_id, "canonical_url": self.canonical, "outcome": self.outcome,
-                "detail": self.detail, "bundle": self.bundle, "track": self.track, "wall": self.wall,
+                "detail": self.detail, "bundle": self.bundle, "diagnostics": self.diagnostics, "track": self.track, "wall": self.wall,
                 "add": {"exit": self.add_exit, "result": self.add_result} if self.add_exit is not None else None}
 
 
@@ -279,7 +366,9 @@ def one_video(url: str, args, mnemon: str, emit) -> Outcome:
     try:
         return _one_video(o, url, args, mnemon, emit)
     except ME.Timeout as t:
-        return o.done("failed", "timeout after %.1fs in stage %s (budget %gs); the yt-dlp process group was terminated" % (t.elapsed, t.stage, args.timeout))
+        o.done("failed", "timeout after %.1fs in stage %s (budget %gs); the yt-dlp process group was terminated" % (t.elapsed, t.stage, args.timeout))
+        keep_diagnostics(o, t.stage, t.elapsed, "timeout", None, o.detail, True)
+        return o
 
 
 def _one_video(o: Outcome, url: str, args, mnemon: str, emit) -> Outcome:
@@ -297,49 +386,43 @@ def _one_video(o: Outcome, url: str, args, mnemon: str, emit) -> Outcome:
         return o.done("planned", "nothing ran (--dry-run)")
 
     sup = ME.Supervisor(args.timeout)
+    # 0. the attempt's directory, before any tool runs (A17): an early failure keeps its diagnostics here; media.json,
+    # written last, stays the one mark of a complete bundle
+    bundle = os.path.join(args.out, vid, stamp())
+    os.makedirs(bundle, mode=0o700, exist_ok=True)
+    o.bundle = bundle
     # 1. metadata and the caption listing — one call, the reader's cookies
     rc, out, err = sup.run(ytdlp_base(args.browser) + ["--skip-download", "--dump-single-json", canonical], "download")
     if rc != 0:
-        kind = ME.classify_wall(err)
-        if kind:
-            o.wall = kind
-            return o.done("blocked", "%s: %s" % (kind, ME._wall_line(err)))
-        return o.done("failed", "yt-dlp metadata failed: %s" % (ME._tail(err) or "exit %d" % rc))
+        return tool_failed(o, sup, "download", rc, err, "yt-dlp metadata failed")
     try:
         info = json.loads(out.decode("utf-8", "replace"))
     except ValueError:
-        return o.done("failed", "yt-dlp metadata is not JSON")
+        return content_failed(o, sup, "download", "yt-dlp metadata is not JSON", err)
     if not isinstance(info, dict):
-        return o.done("failed", "yt-dlp metadata is not an object")
+        return content_failed(o, sup, "download", "yt-dlp metadata is not an object", err)
     if info.get("id") and info.get("id") != vid:
-        return o.done("failed", "yt-dlp answered for video %r, not %r" % (info.get("id"), vid))
+        return content_failed(o, sup, "download", "yt-dlp answered for video %r, not %r" % (info.get("id"), vid), err)
     # 2. one track, by the engine's rule
     tracks = tracks_from_info(info)
     track = ME.choose_track(tracks, _language_of(info))
     if track is None:
-        return o.done("failed", "no caption track (%d listed); the engine's whisper path is the alternative" % len(tracks))
+        return content_failed(o, sup, "captions", "no caption track (%d listed); the engine's whisper path is the alternative" % len(tracks), err)
     o.track = {"lang": track["lang"], "kind": track["kind"], "orig": bool(track.get("orig")), "code": track["code"]}
     # 3. the track — one call, one language, nothing downloaded but the captions
-    bundle = os.path.join(args.out, vid, stamp())
-    os.makedirs(bundle, mode=0o700, exist_ok=True)
-    o.bundle = bundle
     before = set(os.listdir(bundle))
     flag = "--write-subs" if track["kind"] == "manual" else "--write-auto-subs"
     rc, out, err = sup.run(ytdlp_base(args.browser) + ["--skip-download", flag, "--sub-langs", track["code"],
                                                         "--sub-format", "vtt/srt/best",
                                                         "-o", os.path.join(bundle, vid + ".%(ext)s"), canonical], "captions")
     if rc != 0:
-        kind = ME.classify_wall(err)
-        if kind:
-            o.wall = kind
-            return o.done("blocked", "%s: %s" % (kind, ME._wall_line(err)))
-        return o.done("failed", "yt-dlp caption download failed: %s" % (ME._tail(err) or "exit %d" % rc))
+        return tool_failed(o, sup, "captions", rc, err, "yt-dlp caption download failed")
     new = sorted(f for f in os.listdir(bundle) if f not in before and f.lower().endswith(_CAPTION_EXTS))
     if len(new) != 1:
-        return o.done("failed", "expected one caption file in the bundle, found %d (%s)" % (len(new), ", ".join(new) or "none"))
+        return content_failed(o, sup, "captions", "expected one caption file in the bundle, found %d (%s)" % (len(new), ", ".join(new) or "none"), err)
     captions_name = new[0]
     if os.path.getsize(os.path.join(bundle, captions_name)) == 0:
-        return o.done("failed", "the caption file %s is empty" % captions_name)
+        return content_failed(o, sup, "captions", "the caption file %s is empty" % captions_name, err)
     # 4. the record — written after the track, so a bundle with media.json is a complete bundle
     rec = media_record(info, vid, track, captions_name, args.browser, tool_version(sup))
     tmp = os.path.join(bundle, ".media.json.tmp")
@@ -439,6 +522,12 @@ def main() -> int:
     ok = {"captured", "skipped-duplicate", "bundled", "planned", "captured-pending-extract"}
     rc = 0 if all(o.outcome in ok for o in outcomes) else EXIT_FAILED
     summary = "browser-lane: %d video(s) · %s" % (len(outcomes), " · ".join("%s %d" % (k, counts[k]) for k in sorted(counts)))
+    # the last line alone says why (A17): every video not captured, with its wall kind or its outcome, five at most
+    missed = [o for o in outcomes if o.outcome not in ok]
+    if missed:
+        named = ["%s (%s)" % (o.video_id or o.url, o.wall or ("timeout" if o.detail.startswith("timeout") else o.outcome))
+                 for o in missed[:5]]
+        summary += " — not captured: " + ", ".join(named) + (" +%d more" % (len(missed) - 5) if len(missed) > 5 else "")
     if args.json:
         print(json.dumps({"schema": SCHEMA, "browser": args.browser, "out": args.out, "dry_run": bool(args.dry_run),
                           "videos": [o.as_json() for o in outcomes], "counts": counts, "lines": lines, "summary": summary,

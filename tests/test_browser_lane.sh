@@ -27,7 +27,8 @@ cat > "$STUBS/yt-dlp" <<'STUB'
 # yt-dlp stub for the browser lane. Every argv is appended to $STUB_DIR/ytdlp-calls (one line per call).
 # `--version` → a version; `--dump-single-json` → the recorded info fixture (STUB_YTDLP_MANUAL=1 adds a manual
 # `en` track; STUB_YTDLP: ok (default) · wall (the bot wall at the metadata call) · nosubs (no caption listing)
-# · fail); a caption download (`--write-subs|--write-auto-subs`) writes <template>.<lang>.vtt from the fixture
+# · fail · two-errors (two ERROR lines and a WARNING after them) · leaky (the wall behind a debug run's lines: a home
+# path, cookie-store messages, a traffic dump with session values)); a caption download (`--write-subs|--write-auto-subs`) writes <template>.<lang>.vtt from the fixture
 # track (STUB_YTDLP=wall-subs: the wall here; two-files: a second file beside it). Any audio download flag
 # (-x, -f, --audio-format) is a defect the lane must never produce: the stub refuses it.
 printf '%s\n' "$*" >> "$STUB_DIR/ytdlp-calls"
@@ -41,6 +42,19 @@ if [[ " $* " == *" --dump-single-json "* ]]; then
   case "${STUB_YTDLP:-ok}" in
     wall) cat "$MEDIA_FIX/ytdlp-bot-wall.stderr.txt" >&2; exit 1 ;;
     fail) echo "ERROR: [youtube] $id: Video unavailable. This video is private" >&2; exit 1 ;;
+    two-errors) printf 'ERROR: [youtube] %s: Requested format is not available\nERROR: [youtube] %s: a consequence of the first\nWARNING: [youtube] a note printed last\n' "$id" "$id" >&2; exit 1 ;;
+    leaky)
+      {
+        echo "[debug] Command-line config: ['--cookies-from-browser', 'safari', '--verbose']"
+        echo "[debug] Extracting cookies from: \"/Users/reader/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies\""
+        echo "Extracted 42 cookies from safari"
+        echo "send: b'GET /watch?v=$id HTTP/1.1\\r\\nCookie: SID=sekret-sid-value; HSID=sekret-hsid\\r\\n'"
+        echo "header: Set-Cookie: YSC=sekret-ysc; path=/"
+        echo "WARNING: [youtube] $id: cookies file /Users/reader/.config/yt-dlp/cookies.txt is not used; Cookie: SAPISID=sekret-sapisid"
+        echo "Traceback (most recent call last):"
+        echo "  File \"/Users/reader/lib/yt_dlp/YoutubeDL.py\", line 1, in <module>"
+        cat "$MEDIA_FIX/ytdlp-bot-wall.stderr.txt"
+      } >&2; exit 1 ;;
   esac
   python3 - "$MEDIA_FIX/ytdlp-info-captions.json" "$id" "${STUB_YTDLP:-ok}" "${STUB_YTDLP_MANUAL:-}" <<'PY'
 import json, sys
@@ -179,21 +193,48 @@ assert_eq "$rc" "1" "a wall at the metadata call: exit 1"
 assert_contains "$out" "blocked abc123xyz00 — bot-wall: ERROR: [youtube] abc123xyz00: Sign in to confirm you’re not a bot" "...the video's line names the wall and yt-dlp's own line"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^blocked ')" "2" "...the next video is still tried (and walled too)"
 assert_eq "$(ncalls mnemon-calls)" "0" "...no gateway call"
-[[ -e "$OUT/abc123xyz00" ]] && fail "no bundle before the metadata" "a bundle dir exists" || pass "no bundle directory for a video walled at the metadata call"
+# the attempt's directory exists before the metadata call (capture layer A17): the wall keeps its diagnostics there
+B="$(bundle_of abc123xyz00)"
+[[ -n "$B" && -d "$B" && ! -f "$B/media.json" ]] && pass "a video walled at the metadata call keeps an attempt directory, without media.json (never a bundle)" || fail "attempt directory before the metadata" "${B:-none}"
+assert_eq "$(jget "$B/error.json" 'd["schema"]') $(jget "$B/error.json" 'd["error_class"]') $(jget "$B/error.json" 'd["stage"]') $(jget "$B/error.json" 'd["kind"]') $(jget "$B/error.json" 'd["retryable"]')" "mnemon-media-error/1 blocked download bot-wall false" "...error.json: the mnemon-media-error/1 shape, blocked at the metadata stage, the wall's kind, not retryable"
+assert_eq "$(python3 -c 'import json,sys; print(sorted(json.load(open(sys.argv[1]))) == sorted(json.load(open(sys.argv[2]))))' "$B/error.json" "$FIX/reports/media-error.json")" "True" "...with the frozen key set of reports/media-error.json"
+assert_contains "$(cat "$B/stderr.txt")" "ERROR: [youtube] abc123xyz00: Sign in to confirm you’re not a bot" "...stderr.txt keeps yt-dlp's ERROR line"
+assert_contains "$(cat "$B/stderr.txt")" "WARNING: [youtube] abc123xyz00: Your yt-dlp version" "...and its WARNING line"
+assert_contains "$out" "· diagnostics: $B" "...the video's line names the directory"
+assert_contains "$out" "browser-lane: 2 video(s) · blocked 2 — not captured: abc123xyz00 (bot-wall), def456uvw00 (bot-wall)" "...and the summary alone names every video not captured, with the wall"
 stub_reset
 STUB_YTDLP=wall-subs run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
 assert_eq "$rc" "1" "a wall at the caption download: exit 1"
 assert_contains "$out" "blocked abc123xyz00 — bot-wall:" "...reported as blocked"
 B="$(bundle_of abc123xyz00)"
 [[ -n "$B" && ! -f "$B/media.json" ]] && pass "...the bundle directory exists without media.json (an incomplete bundle, never offered to the gateway)" || fail "incomplete bundle" "media.json present or no dir"
+assert_eq "$(jget "$B/error.json" 'd["error_class"]') $(jget "$B/error.json" 'd["stage"]')" "blocked captions" "...error.json names the caption stage"
 assert_eq "$(ncalls mnemon-calls)" "0" "...no gateway call"
 stub_reset
 STUB_YTDLP=nosubs run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
 assert_eq "$rc" "1" "no caption track: exit 1"
 assert_contains "$out" "failed abc123xyz00 — no caption track (0 listed); the engine's whisper path is the alternative" "...named, with the alternative"
+B="$(bundle_of abc123xyz00)"
+assert_eq "$(jget "$B/error.json" 'd["error_class"]') $(jget "$B/error.json" 'd["stage"]') $(jget "$B/error.json" 'd["error"]')" "failed captions no caption track (0 listed); the engine's whisper path is the alternative" "...error.json carries the same cause"
 stub_reset
 STUB_YTDLP=fail run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
 assert_contains "$out" "failed abc123xyz00 — yt-dlp metadata failed: ERROR: [youtube] abc123xyz00: Video unavailable" "another yt-dlp refusal is failed with its cause (not a wall)"
+stub_reset
+STUB_YTDLP=two-errors run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
+assert_contains "$out" "failed abc123xyz00 — yt-dlp metadata failed: ERROR: [youtube] abc123xyz00: Requested format is not available · diagnostics:" "two ERROR lines and a WARNING after them: the line is the first ERROR (media-extract.error_line), not the last lines"
+assert_not_contains "$out" "a note printed last" "...the trailing WARNING is not the cause"
+stub_reset
+STUB_YTDLP=leaky run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
+B="$(bundle_of abc123xyz00)"
+assert_contains "$out" "blocked abc123xyz00 — bot-wall: ERROR: [youtube] abc123xyz00: Sign in to confirm you’re not a bot" "a wall behind a debug run's lines: blocked, the classifier's line"
+assert_contains "$(cat "$B/stderr.txt")" "Sign in to confirm you’re not a bot" "...stderr.txt keeps the wall's line"
+assert_contains "$(cat "$B/stderr.txt")" "WARNING: [youtube] abc123xyz00: cookies file <path> is not used; Cookie: <redacted>" "...a kept WARNING loses its path and its session value"
+assert_contains "$(cat "$B/stderr.txt")" "7 other line(s) not kept" "...the debug, cookie-store, traffic and traceback lines are counted, not kept"
+leak="$(cat "$B/stderr.txt" "$B/error.json"; printf '%s
+' "$out$err")"
+for needle in sekret /Users/reader "Extracting cookies" "Extracted 42" "[debug]" "Set-Cookie" Traceback; do
+  assert_not_contains "$leak" "$needle" "...no '$needle' in stderr.txt, error.json or any printed line"
+done
 stub_reset
 STUB_YTDLP=two-files run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
 assert_eq "$rc" "1" "two caption files in the bundle: exit 1"
@@ -237,7 +278,9 @@ STUB_YTDLP=hang run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" -
 assert_eq "$rc" "1" "a yt-dlp call past --timeout: exit 1"
 assert_contains "$out" "failed abc123xyz00 — timeout after 1." "...the video's line says timeout, stage and budget"
 assert_contains "$out" "in stage download (budget 1s); the yt-dlp process group was terminated" "...with the stage"
-assert_contains "$out" "browser-lane: 1 video(s) · failed 1" "...and the summary is still printed"
+assert_contains "$out" "browser-lane: 1 video(s) · failed 1 — not captured: abc123xyz00 (timeout)" "...and the summary is still printed, naming the timeout"
+B="$(bundle_of abc123xyz00)"
+assert_eq "$(jget "$B/error.json" 'd["error_class"]') $(jget "$B/error.json" 'd["stage"]') $(jget "$B/error.json" 'd["retryable"]')" "timeout download true" "...error.json: a timeout at the metadata stage, retryable"
 for f in ytdlp.pid ytdlp-child.pid; do
   pid="$(cat "$STUB_DIR/$f" 2>/dev/null || true)"
   if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then fail "stub process $f terminated" "pid $pid alive"; kill -9 "$pid" 2>/dev/null; else pass "stub process $f terminated with its group"; fi
