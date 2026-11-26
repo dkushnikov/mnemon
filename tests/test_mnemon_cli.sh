@@ -1320,12 +1320,20 @@ sed -e 's|^  doctor)   cmd_doctor .*$|  doctor)   echo "doctor: simulated crash"
 mv "$REPO/bin/mnemon.new" "$REPO/bin/mnemon"
 chmod +x "$REPO/bin/mnemon"
 assert_eq "$(grep -c 'simulated crash' "$REPO/bin/mnemon" || true)" "1" "fixture: the doctor dispatch line was replaced"
+# The smoke is the real one; only the config suite of this commit is a sentinel that passes (the
+# first release ran the real tests/test_config.sh). A green step prints only the log's last line, a
+# failing one the whole log, so the sentinel's first line shows which branch the smoke took.
+printf '#!/usr/bin/env bash\necho "config-test sentinel: started"\necho "config-test sentinel: green"\n' > "$REPO/tests/test_config.sh"
 g "$REPO" commit -q -am "doctor crashes"
 CRASH_MAIN=$(git -C "$REPO" rev-parse --short main)
 THIRD_REL=$(git -C "$RWT" rev-parse --short HEAD)
 BEFORE_CRASH=$(git -C "$ORIGIN" rev-parse release)
 run hooked env PATH="$STUBBIN:$PATH" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
 assert_eq "$rc" "1" "a crashing doctor (exit 9) fails the smoke"
+assert_not_contains "$out" "MNEMON_SMOKE_CMD" "the crashing-doctor release runs the real smoke, not the seam"
+assert_contains "$out" "release: smoke — bash $RWT/tests/test_config.sh" "...with its config-suite step"
+assert_contains "$out" "  config-test sentinel: green" "...which ran the sentinel of the released commit"
+assert_not_contains "$out" "config-test sentinel: started" "...and passed (only the doctor rule fails this smoke)"
 assert_contains "$out" "doctor: simulated crash" "the smoke shows doctor's output"
 assert_contains "$out" "doctor exited 9" "...and names the unexpected exit code"
 assert_contains "$out" "smoke failed on $RWT @ $CRASH_MAIN. Nothing was pushed" "a crashing doctor publishes nothing"
