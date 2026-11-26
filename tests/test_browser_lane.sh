@@ -37,7 +37,9 @@ cat > "$STUBS/yt-dlp" <<'STUB'
 printf '%s\n' "$*" >> "$STUB_DIR/ytdlp-calls"
 for a in "$@"; do case "$a" in -x|-f|--audio-format|--extract-audio) echo "stub yt-dlp: audio download flag $a" >&2; exit 99 ;; esac; done
 case " $* " in *" --version "*) echo "2026.10.26"; exit 0 ;; esac
-# STUB_YTDLP=hang: the metadata call never answers (a child sleep of its own, both pids recorded for the teardown check)
+# STUB_YTDLP=hang: the metadata call never answers (a child sleep of its own, both pids recorded for the teardown check);
+# hang-noisy prints a WARNING with a cookie value first, then hangs the same way
+if [[ "${STUB_YTDLP:-ok}" == hang-noisy && " $* " == *" --dump-single-json "* ]]; then u="${@: -1}"; echo "WARNING: [youtube] ${u##*v=}: Cookie: SID=synthetic-hang-sid; HSID=synthetic-hang-hsid" >&2; STUB_YTDLP=hang; fi
 if [[ "${STUB_YTDLP:-ok}" == hang && " $* " == *" --dump-single-json "* ]]; then echo $$ > "$STUB_DIR/ytdlp.pid"; sleep 30 & echo $! > "$STUB_DIR/ytdlp-child.pid"; wait; exit 0; fi
 url="${@: -1}"
 id="${url##*v=}"
@@ -317,6 +319,19 @@ assert_eq "$(jget "$B/error.json" 'd["error_class"]') $(jget "$B/error.json" 'd[
 for f in ytdlp.pid ytdlp-child.pid; do
   pid="$(cat "$STUB_DIR/$f" 2>/dev/null || true)"
   if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then fail "stub process $f terminated" "pid $pid alive"; kill -9 "$pid" 2>/dev/null; else pass "stub process $f terminated with its group"; fi
+done
+# a tool that prints before it hangs (the second reader, integrated review): the timeout keeps what it wrote, redacted
+stub_reset
+STUB_YTDLP=hang-noisy run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0 --timeout 1
+B="$(bundle_of abc123xyz00)"
+assert_eq "$rc $(jget "$B/error.json" 'd["error_class"]')" "1 timeout" "a tool that prints a WARNING and then hangs: a timeout"
+assert_file_exists "$B/stderr.txt" "...stderr.txt keeps what the tool wrote before the teardown"
+assert_contains "$(cat "$B/stderr.txt" 2>/dev/null)" "WARNING: [youtube] " "...the WARNING line is there"
+assert_contains "$(cat "$B/stderr.txt" 2>/dev/null)" ": Cookie: <redacted>" "...with its cookie value redacted"
+assert_not_contains "$(cat "$B/stderr.txt" "$B/error.json" 2>/dev/null; printf '%s\n' "$out$err")" "synthetic" "...no cookie value in stderr.txt, error.json or a printed line"
+for f in ytdlp.pid ytdlp-child.pid; do
+  pid="$(cat "$STUB_DIR/$f" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then fail "noisy stub process $f terminated" "pid $pid alive"; kill -9 "$pid" 2>/dev/null; else pass "...and the noisy stub's process $f terminated with its group"; fi
 done
 stub_reset
 STUB_YTDLP=hang run_lane youtube "$URL1" "$URL2" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0 --timeout 1 --json

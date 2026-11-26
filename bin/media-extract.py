@@ -192,10 +192,14 @@ def choose_track(tracks, original_language):
 # ---------------------------------------------------------------------------------------------
 
 class Timeout(Exception):
-    def __init__(self, stage, elapsed):
+    """A run past its budget. `stderr` is what the timed-out tool wrote before its process group was torn down
+    (bytes; empty when no tool was running) — the supervisor reads it before its temporary file closes, so a caller
+    that keeps diagnostics has the tool's last words (capture layer A20)."""
+    def __init__(self, stage, elapsed, stderr=b""):
         super().__init__(f"timeout in stage {stage} after {elapsed:.1f}s")
         self.stage = stage
         self.elapsed = elapsed
+        self.stderr = stderr or b""
 
 
 class Failed(Exception):
@@ -386,7 +390,9 @@ class Supervisor:
                 proc.wait(timeout=self.remaining())
             except subprocess.TimeoutExpired:
                 self.teardown()
-                raise Timeout(stage, self.elapsed())
+                # what the tool wrote before the teardown, read while the temporary file is still open
+                err.seek(0)
+                raise Timeout(stage, self.elapsed(), stderr=err.read())
             finally:
                 self.children.pop(proc.pid, None)
             out.seek(0)

@@ -397,7 +397,8 @@ def one_video(url: str, args, mnemon: str, emit) -> Outcome:
         return _one_video(o, url, args, mnemon, emit)
     except ME.Timeout as t:
         o.done("failed", "timeout after %.1fs in stage %s (budget %gs); the yt-dlp process group was terminated" % (t.elapsed, t.stage, args.timeout))
-        keep_diagnostics(o, t.stage, t.elapsed, "timeout", None, o.detail, True)
+        # the tool's stderr up to the teardown (Supervisor keeps it on the Timeout): stderr.txt through redact()
+        keep_diagnostics(o, t.stage, t.elapsed, "timeout", None, o.detail, True, getattr(t, "stderr", b""))
         return o
 
 
