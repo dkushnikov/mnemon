@@ -28,7 +28,10 @@ cat > "$STUBS/yt-dlp" <<'STUB'
 # `--version` → a version; `--dump-single-json` → the recorded info fixture (STUB_YTDLP_MANUAL=1 adds a manual
 # `en` track; STUB_YTDLP: ok (default) · wall (the bot wall at the metadata call) · nosubs (no caption listing)
 # · fail · two-errors (two ERROR lines and a WARNING after them) · leaky (the wall behind a debug run's lines: a home
-# path, cookie-store messages, a traffic dump with session values)); a caption download (`--write-subs|--write-auto-subs`) writes <template>.<lang>.vtt from the fixture
+# path, cookie-store messages, a traffic dump with session values) · creds (the wall behind WARNING lines that carry
+# credentials: an Authorization header, quoted cookie values, a Cookie header with several pairs, an --add-header echo,
+# a URL with sig= and token=, a token-shaped string) · creds-error (a plain failure whose ERROR line holds credentials));
+# a caption download (`--write-subs|--write-auto-subs`) writes <template>.<lang>.vtt from the fixture
 # track (STUB_YTDLP=wall-subs: the wall here; two-files: a second file beside it). Any audio download flag
 # (-x, -f, --audio-format) is a defect the lane must never produce: the stub refuses it.
 printf '%s\n' "$*" >> "$STUB_DIR/ytdlp-calls"
@@ -55,6 +58,17 @@ if [[ " $* " == *" --dump-single-json "* ]]; then
         echo "  File \"/Users/reader/lib/yt_dlp/YoutubeDL.py\", line 1, in <module>"
         cat "$MEDIA_FIX/ytdlp-bot-wall.stderr.txt"
       } >&2; exit 1 ;;
+    creds)
+      {
+        echo "WARNING: Authorization: Bearer synthetic-bearer-value"
+        echo "WARNING: [youtube] $id: SID=\"synthetic quoted sid\"; HSID='synthetic-quoted-hsid'"
+        echo "WARNING: [youtube] $id: Cookie: SID=synthetic-a; HSID=synthetic-b; __Secure-3PSID=synthetic-c"
+        echo "WARNING: [youtube] $id: extra headers --add-header 'X-Goog-AuthUser:synthetic-user' --add-header Cookie:synthetic-d"
+        echo "WARNING: [youtube] $id: unable to download https://rr1.googlevideo.com/videoplayback?v=$id&sig=synthetic-sig&token=synthetic-tok#t=1 (retrying)"
+        echo "WARNING: [youtube] $id: po_token 1700000000synthetic0123456789abcdef was rejected"
+        cat "$MEDIA_FIX/ytdlp-bot-wall.stderr.txt"
+      } >&2; exit 1 ;;
+    creds-error) echo "ERROR: [youtube] $id: HTTP Error 403 on https://rr1.googlevideo.com/videoplayback?v=$id&sig=synthetic-sig-9; Authorization: Bearer synthetic-err-token" >&2; exit 1 ;;
   esac
   python3 - "$MEDIA_FIX/ytdlp-info-captions.json" "$id" "${STUB_YTDLP:-ok}" "${STUB_YTDLP_MANUAL:-}" <<'PY'
 import json, sys
@@ -230,11 +244,30 @@ assert_contains "$out" "blocked abc123xyz00 — bot-wall: ERROR: [youtube] abc12
 assert_contains "$(cat "$B/stderr.txt")" "Sign in to confirm you’re not a bot" "...stderr.txt keeps the wall's line"
 assert_contains "$(cat "$B/stderr.txt")" "WARNING: [youtube] abc123xyz00: cookies file <path> is not used; Cookie: <redacted>" "...a kept WARNING loses its path and its session value"
 assert_contains "$(cat "$B/stderr.txt")" "7 other line(s) not kept" "...the debug, cookie-store, traffic and traceback lines are counted, not kept"
-leak="$(cat "$B/stderr.txt" "$B/error.json"; printf '%s
-' "$out$err")"
+leak="$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")"
 for needle in sekret /Users/reader "Extracting cookies" "Extracted 42" "[debug]" "Set-Cookie" Traceback; do
   assert_not_contains "$leak" "$needle" "...no '$needle' in stderr.txt, error.json or any printed line"
 done
+# credentials inside the kept ERROR / WARNING lines (the second reader's P1): at a credential key the rest of the line
+# goes, a URL keeps only its video id, a token-shaped string goes — never a header value, a cookie value or a token
+stub_reset
+STUB_YTDLP=creds run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
+B="$(bundle_of abc123xyz00)"
+kept="$(cat "$B/stderr.txt")"
+assert_contains "$kept" "WARNING: Authorization: <redacted>" "an Authorization header: the whole value goes (Bearer and its token)"
+assert_contains "$kept" "WARNING: [youtube] abc123xyz00: SID=<redacted>" "...a quoted cookie value: the rest of the line after the key goes"
+assert_contains "$kept" "WARNING: [youtube] abc123xyz00: Cookie: <redacted>" "...a Cookie header with several pairs: every pair goes"
+assert_contains "$kept" "WARNING: [youtube] abc123xyz00: extra headers --add-header <redacted>" "...an --add-header echo: the header and what follows go"
+assert_contains "$kept" "videoplayback?v=abc123xyz00&sig=<redacted>&token=<redacted>#t=1 (retrying)" "...a URL keeps the video id; sig= and token= lose their values"
+assert_contains "$kept" "WARNING: [youtube] abc123xyz00: po_token <redacted> was rejected" "...a token-shaped string goes"
+assert_contains "$kept" "ERROR: [youtube] abc123xyz00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication." "...and the wall's own line survives whole"
+assert_not_contains "$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")" "synthetic" "...no credential value in stderr.txt, error.json or any printed line"
+stub_reset
+STUB_YTDLP=creds-error run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
+B="$(bundle_of abc123xyz00)"
+assert_contains "$out" "failed abc123xyz00 — yt-dlp metadata failed: ERROR: [youtube] abc123xyz00: HTTP Error 403 on https://rr1.googlevideo.com/videoplayback?v=abc123xyz00&sig=<redacted> Authorization: <redacted> · diagnostics:" "a printed cause that holds credentials is redacted on the terminal too"
+assert_eq "$(jget "$B/error.json" 'd["error"]')" "ERROR: [youtube] abc123xyz00: HTTP Error 403 on https://rr1.googlevideo.com/videoplayback?v=abc123xyz00&sig=<redacted> Authorization: <redacted>" "...and in error.json"
+assert_not_contains "$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")" "synthetic" "...no credential value anywhere"
 stub_reset
 STUB_YTDLP=two-files run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
 assert_eq "$rc" "1" "two caption files in the bundle: exit 1"

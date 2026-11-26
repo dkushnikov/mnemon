@@ -27,8 +27,8 @@ The directory is allocated before the first yt-dlp call (capture layer A17), so 
 place: `media.json`, written last, is the one mark of a complete bundle. An attempt that ends blocked, failed or past
 its --timeout keeps its diagnostics there instead — `error.json` (`mnemon-media-error/1`, the shape media-extract.py
 writes: error_class blocked | failed | timeout, stage download | captions, kind, error, retryable) and, when the tool
-printed anything, `stderr.txt`: yt-dlp's `ERROR:` and `WARNING:` lines only, absolute paths and anything shaped like a
-session value (`cookie=…`, `authorization: …`) redacted, at most 200 lines — every other line (debug output, traffic
+printed anything, `stderr.txt`: yt-dlp's `ERROR:` and `WARNING:` lines only, at most 200, each redacted (a kept or
+printed line never holds a header value, a cookie value or a token-shaped string: see redact()) — every other line (debug output, traffic
 dumps, the cookie-store messages) is counted, never kept, so a retained file names the browser at most, as every
 printed line does. The video's line names the directory.
 
@@ -247,18 +247,48 @@ def add_argv(mnemon: str, canonical: str, bundle: str, track: dict, args) -> lis
 
 
 # Retained and printed tool output (capture layer A17, A13's disclosure rule): only yt-dlp's ERROR / WARNING lines are
-# kept; an absolute path or a home-relative one becomes <path>; a session value becomes <redacted>.
+# kept, and every kept or printed line goes through redact(). The rule: a line never holds a header value, a cookie
+# value or a token-shaped string — at a credential key the rest of the line is dropped, since a value may be quoted,
+# hold spaces (`Bearer <token>`) or run on as `a=1; b=2`.
 _KEEP_PREFIXES = ("ERROR", "WARNING")
-_PATH_RE = re.compile(r"(?<![A-Za-z0-9_:/.~-])(?:~/|/)[^\s'\"]*")
-_SECRET_RE = re.compile(r"(?i)\b(set-cookie|cookie|authorization|x-goog-authuser|x-youtube-identity-token|[a-z0-9_-]*sapisid|"
-                        r"__secure-[a-z0-9_-]+|sid|hsid|ssid|apisid|login_info)(\s*[:=]\s*)[^\s;,'\"]+")
+# a credential key: a header or cookie name, a token or secret field, written `key:` or `key=` (the key may be quoted)
+_CRED_KEY_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])(?P<key>set-cookie|cookies?|proxy-authorization|authorization|x-goog-authuser|x-goog-visitor-id|"
+    r"x-youtube-identity-token|x-origin|[a-z0-9_-]*sapisid(?:hash)?|apisid|hsid|ssid|sid|__secure-[a-z0-9_-]*|__host-[a-z0-9_-]*|"
+    r"login_info|visitor_info1_live|pref|ysc|access_token|refresh_token|id_token|[a-z0-9_-]*token|api[_-]?key|"
+    r"password|passwd|secret|session(?:id|_token)?)(?P<q>[\"']?)(?P<sep>\s*[:=])(?!\s*<redacted>)")
+# a header echoed through yt-dlp's own option, and a bare `Bearer <token>` (`--cookies <file>` names a path only)
+_ADD_HEADER_RE = re.compile(r"(?i)(--add-header)(?:[\s=]+).*$")
+_BEARER_RE = re.compile(r"(?i)\b(bearer|basic)\s+\S.*$")
+# a URL's query: every value but the video id `v` is dropped (`sig=`, `token=`, `pot=`, `n=` … carry credentials)
+_QUERY_RE = re.compile(r"(?i)(https?://[^\s'\"?#<>]+)\?([^\s'\"#<>]*)")
+_PATH_RE = re.compile(r"(?<![A-Za-z0-9_:/.~-])(?:~/|/)[^\s'\"]+")
+# token-shaped: 24 or more characters of a token alphabet with at least one digit and one letter
+_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_+=-])(?=[A-Za-z0-9_+=-]*[0-9])(?=[A-Za-z0-9_+=-]*[A-Za-z])[A-Za-z0-9_+=-]{24,}")
 STDERR_MAX_LINES = 200
 STDERR_MAX_CHARS = 2000
 
 
+def _redact_query(m) -> str:
+    pairs = []
+    for pair in m.group(2).split("&"):
+        key, sep, _ = pair.partition("=")
+        pairs.append(pair if (sep and key == "v") else (key + "=<redacted>" if sep else "<redacted>"))
+    return m.group(1) + "?" + "&".join(pairs)
+
+
 def redact(line: str) -> str:
-    """One line made safe to print or retain: session values, then paths."""
-    return _PATH_RE.sub("<path>", _SECRET_RE.sub(lambda m: m.group(1) + m.group(2) + "<redacted>", line))
+    """One line made safe to print or retain: URL query values first (the video id aside); then, at the first
+    credential key (or `--add-header`, `Bearer`), the rest of the line becomes <redacted>; then absolute and
+    home-relative paths, and token-shaped strings."""
+    line = _QUERY_RE.sub(_redact_query, line)
+    m = _CRED_KEY_RE.search(line)
+    if m:
+        line = line[:m.end("sep")] + ("<redacted>" if m.group("sep").endswith("=") else " <redacted>")
+    line = _ADD_HEADER_RE.sub(lambda m: m.group(1) + " <redacted>", line)
+    line = _BEARER_RE.sub(lambda m: m.group(1) + " <redacted>", line)
+    line = _PATH_RE.sub("<path>", line)
+    return _TOKEN_RE.sub("<redacted>", line)
 
 
 def retained_stderr(err) -> str:
