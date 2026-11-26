@@ -95,6 +95,15 @@ assert_eq "$(rget pt-1 '.request.origin') $(rget pt-1 '.request.resource_kind') 
 assert_eq "$(rget pt-1 '.input_path')" "$TEST_TMPDIR/notes.txt" "...the file is the input locator"
 assert_eq "$(capfm "$src_pt" method) $(capfm "$src_pt" fidelity) $(capfm "$src_pt" raw_store)" '"file-text" exact none' "...capture.method file-text, fidelity exact, no raw (the text is the raw)"
 assert_eq "$(fm "$src_pt" origin)" "text" "...origin: text in source.md"
+# the raw guard of capture contracts A12 runs on every path that reports a published revision; a plain-text --file
+# has no raw to guard (raw_store: none), so the capture above, its replay and its duplicate all pass it
+assert_eq "$(rget pt-1 '.raw_store') $(rget pt-1 '.raw_path') $(rget pt-1 '.state')" "none null extracted" "...the receipt records no raw (raw_store none), and the guard let it end extracted"
+n_arch="$(ls -A "$ARCHIVE" | wc -l | tr -d ' ')"
+run_gw --file "$TEST_TMPDIR/notes.txt" --capture-id pt-1
+assert_eq "$rc $(result status) $(result revision) $(result error_class)" "0 extracted $rev_pt " "...its replay (--capture-id pt-1) passes the raw guard without a raw"
+run_gw --file "$TEST_TMPDIR/notes.txt"
+assert_eq "$rc $(result status) $(result revision) $(result error_class)" "0 skipped-duplicate $rev_pt " "...and so does its duplicate (the same bytes, no capture id)"
+assert_eq "$(ls -A "$ARCHIVE" | wc -l | tr -d ' ') $(rget pt-1 '.state')" "$n_arch extracted" "...the archive gains nothing, and the receipt stays extracted"
 
 printf 'UPPER CASE EXTENSION\n' > "$TEST_TMPDIR/SHOUT.TXT"
 run_gw --file "$TEST_TMPDIR/SHOUT.TXT" --capture-id pt-upper
