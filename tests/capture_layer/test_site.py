@@ -756,6 +756,69 @@ class BundleLoop(unittest.TestCase):
             self.assertTrue(wait_gone(pid, 5), "pid %d survived the site timeout" % pid)
 
 
+class Pacing(unittest.TestCase):
+    """§3.6: fetch-bundle keeps ≥ 1 s (site.PACE_S) between two requests to one host, and the mapper paces its
+    requests the same way (capture-site.py `common_policy`) — with the production interval, no test control.
+    The local server stamps every request on arrival; the checks are lower bounds only, so a loaded machine
+    cannot break them: load makes a gap longer, and the one way a gap seen by the server is shorter than the
+    client's interval is the latency between the client's pacing stamp and the server's arrival stamp of the
+    earlier request (SKEW_S). Without pacing these local gaps are milliseconds."""
+
+    SKEW_S = 0.25
+
+    def setUp(self):
+        self.server = LocalServer()
+        self.work = tmpdir("mnemon-pace-")
+        self.env = clean_env()
+        self.env["RENDER_URL_CMD"] = write_stub(self.work, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
+        self.server.add("/", page("Landing", '<a href="/a">a</a>'))
+        self.server.add("/a", page("A"))
+        self.server.add("/robots.txt", "User-agent: *\nAllow: /\n", content_type="text/plain")
+
+    def tearDown(self):
+        self.server.close()
+        shutil.rmtree(self.work, ignore_errors=True)
+
+    def assert_paced(self, what: str, at_least: int):
+        reqs = self.server.requests()
+        self.assertGreaterEqual(len(reqs), at_least, "%s: %s" % (what, [r[1] for r in reqs]))
+        stamps = [r[3] for r in reqs]
+        gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+        for (a, b), gap in zip(zip(reqs, reqs[1:]), gaps):
+            self.assertGreaterEqual(gap, site.PACE_S - self.SKEW_S, "%s: %s then %s, one host, %.3f s apart (PACE_S %g)"
+                                    % (what, a[1], b[1], gap, site.PACE_S))
+        self.assertGreaterEqual(stamps[-1] - stamps[0], len(gaps) * site.PACE_S - self.SKEW_S,
+                                "%s: %d requests to one host span %.3f s" % (what, len(reqs), stamps[-1] - stamps[0]))
+
+    def test_fetch_bundle_paces_requests_to_one_host(self):
+        url = self.server.base
+        plan = {"schema": "mnemon-site-plan/1", "landing": url + "/", "created": "2026-10-15T12:00:00Z",
+                "discovery": {"sources": [], "robots": {"fetched": False, "status": None, "groups": [], "rules_applied": []}},
+                "hosts": ["127.0.0.1"], "caps": {"max_pages": 40},
+                "pages": [{"n": n, "url": url + p, "canonical_url": url + p, "role": role, "include": True, "reason": role,
+                           "title": None, "discovered_by": "landing", "render": None}
+                          for n, p, role in ((1, "/", "landing"), (2, "/a", "product"))]}
+        plan_path = os.path.join(self.work, "plan.json")
+        with open(plan_path, "w") as fh:
+            json.dump(plan, fh)
+        out = os.path.join(self.work, "bundle")
+        rc, so, se = run_cli([CS, "fetch-bundle", plan_path, "--out", out, "--report", os.path.join(self.work, "b.json")],
+                             env=self.env, timeout=120)
+        self.assertEqual(rc, 0, se)
+        self.assertEqual([r[1] for r in self.server.requests()], ["/", "/robots.txt", "/a"],
+                         "the landing, the robots of the next page's origin, the page")
+        self.assert_paced("fetch-bundle", 3)
+
+    def test_map_paces_requests_to_one_host(self):
+        plan_path = os.path.join(self.work, "plan.json")
+        rc, so, se = run_cli([CS, "map", self.server.base + "/", "--out", plan_path], env=self.env, timeout=120)
+        self.assertEqual(rc, 0, se)
+        with open(plan_path, encoding="utf-8") as fh:
+            plan = json.load(fh)
+        self.assertEqual([p["url"] for p in plan["pages"] if p["include"]], [self.server.base + "/", self.server.base + "/a"])
+        self.assert_paced("map", 4)
+
+
 class SectionAndSitemaps(unittest.TestCase):
     """G22 on a docs landing: sitemap indexes two levels deep under one budget, the landing's section's
     sub-sitemaps first; the cap keeps the landing's section first."""

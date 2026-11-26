@@ -126,7 +126,8 @@ class Route:
 
 
 class LocalServer:
-    """A threaded HTTP server with a routes dict and a request log (method, path, headers)."""
+    """A threaded HTTP server with a routes dict and a request log (method, path, headers, arrival): the
+    arrival is `time.monotonic()` when the handler starts, the clock of a pacing check."""
 
     def __init__(self):
         self.routes = {}
@@ -141,8 +142,9 @@ class LocalServer:
                 pass
 
             def _serve(self):
+                arrival = time.monotonic()
                 with server.lock:
-                    server.log.append((self.command, self.path, {k.lower(): v for k, v in self.headers.items()}))
+                    server.log.append((self.command, self.path, {k.lower(): v for k, v in self.headers.items()}, arrival))
                 route = server.routes.get(self.path)
                 if route is None:
                     base = self.path.split("?", 1)[0]
