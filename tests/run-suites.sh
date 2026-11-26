@@ -29,9 +29,10 @@
 # suite puts in the system temp directory is never seen by another, so a check like "no
 # `mnemon-map-*` directory is left behind" holds while other suites run.
 #
-# --jobs N starts up to N suites at once — the rows of both toolchains form one queue, in table
-# order — and still prints one table, the rows in that order: a row waits for the rows before it,
-# so it may appear late, never out of order or twice. Without -k, the first failure starts no new
+# --jobs N starts up to N suites at once — the runs of both toolchains form one queue, the longest
+# suites (START_FIRST) first, the rest in table order — and still prints one table, the rows in the
+# table's order: a row waits for the rows before it, so it may appear late, never out of order or
+# twice. Without -k, the first failure starts no new
 # suite; the suites already running finish and keep their rows, the rest are "not run". With N > 1
 # the header names the jobs and a line before the summary gives the wall-clock time and the
 # longest suite; with N = 1 the output is the sequential runner's, byte for byte.
@@ -292,6 +293,28 @@ done
 NJ=${#J_TC[@]}
 N_TOTAL=$NJ
 
+# the start order. With one job it is the table's order. With more, the suites that run longest
+# start first (both toolchains' runs of each), the rest follow in table order: a pool that started
+# test_capture.sh late would end on it alone. Only the start order changes, never the table's; a
+# name that is not among the suites is skipped. Measured on a 6-job pass: test_capture.sh ≈ 680 s,
+# test_mnemon_cli.sh ≈ 410 s, test_capture_layer.sh ≈ 300 s, every other suite under 200 s.
+START_FIRST="test_capture.sh test_mnemon_cli.sh test_capture_layer.sh"
+J_ORDER=(); J_PICKED=()
+if [[ $JOBS -gt 1 ]]; then
+  for n in $START_FIRST; do
+    k=0
+    while [[ $k -lt $NJ ]]; do
+      if [[ "${J_NAME[$k]}" == "$n" ]]; then J_ORDER+=("$k"); J_PICKED[$k]=1; fi
+      k=$((k + 1))
+    done
+  done
+fi
+k=0
+while [[ $k -lt $NJ ]]; do
+  [[ -n "${J_PICKED[$k]:-}" ]] || J_ORDER+=("$k")
+  k=$((k + 1))
+done
+
 job_file() { printf '%s/.%s.%s.%s' "$LOG_DIR" "$1" "${J_TC[$2]}" "${J_NAME[$2]}"; }   # <kind> <job>
 
 # start_job <k>: with one job, run the suite in the foreground (the sequential runner, stdin and
@@ -388,7 +411,7 @@ row ' ' toolchain suite result passed failed time
 n_pass=0; n_fail=0; n_skip=0
 STOP=false
 RUNNING=0
-NEXT_START=0      # the next job to start
+NEXT_START=0      # the next position in J_ORDER to start
 NEXT_PRINT=0      # the next row to print
 HEADER_TC=""      # the toolchain whose line is printed
 LONGEST=0; LONGEST_NAME=""
@@ -421,14 +444,14 @@ while [[ $NEXT_PRINT -lt $NJ ]]; do
   done
   # start jobs while there is room
   while ! $STOP && [[ $NEXT_START -lt $NJ && $RUNNING -lt $JOBS ]]; do
-    start_job "$NEXT_START"
+    start_job "${J_ORDER[$NEXT_START]}"
     NEXT_START=$((NEXT_START + 1))
     PROGRESS=true
     [[ $JOBS -eq 1 ]] && break
   done
   if [[ $JOBS -eq 1 ]]; then
     # the sequential runner: the job just run is printed next; a failure stops it without -k
-    [[ $NEXT_START -gt 0 && "${J_RC[$((NEXT_START - 1))]}" == 1 ]] && ! $KEEP_GOING && STOP=true
+    [[ $NEXT_START -gt 0 && "${J_RC[${J_ORDER[$((NEXT_START - 1))]}]}" == 1 ]] && ! $KEEP_GOING && STOP=true
   fi
   $PROGRESS || sleep 0.2
 done

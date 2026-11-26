@@ -213,6 +213,34 @@ assert_contains "$(row_of current test_c.sh)" "not run" "...test_c.sh is not run
 assert_eq "$(printf '%s\n' "$out" | head -n 1)" "run-suites: 3 suite(s) × current" "...the header names no jobs with one"
 assert_not_contains "$out" "wall clock" "...and no wall-clock line is printed"
 
+echo "--- --jobs: the longest suites start first, the table keeps its order ---"
+ORD="$TEST_TMPDIR/order"; mkdir -p "$ORD"
+# every suite appends its name to one file when it starts; test_capture.sh and test_mnemon_cli.sh
+# are on the runner's start-first list. They hold their slot until SYNC_N names are in the file (at
+# most 10 s): with as many jobs as start-first runs, no other suite can start before all of them did
+for s in test_a.sh test_m.sh test_z.sh; do
+  printf '#!/usr/bin/env bash\necho "%s" >> "$SYNC_DIR/started"\necho "Results: 1 passed, 0 failed"\n' "$s" > "$ORD/$s"
+done
+for s in test_capture.sh test_mnemon_cli.sh; do
+  printf '#!/usr/bin/env bash\necho "%s" >> "$SYNC_DIR/started"\ni=0; while [ "$(wc -l < "$SYNC_DIR/started")" -lt "$SYNC_N" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i + 1)); done\necho "Results: 1 passed, 0 failed"\n' "$s" > "$ORD/$s"
+done
+rm -f "$SYNC"/*
+run env SYNC_DIR="$SYNC" SYNC_N=2 "$RUNNER" --suites-dir "$ORD" --jobs 2
+assert_eq "$rc" "0" "--jobs 2 over suites with start-first names: exit 0"
+assert_eq "$(head -n 2 "$SYNC/started" | sort | tr '\n' ' ' | sed 's/ $//')" "test_capture.sh test_mnemon_cli.sh" "...the two start-first suites start before the others"
+assert_eq "$(rows_of)" "test_a.sh test_capture.sh test_m.sh test_mnemon_cli.sh test_z.sh" "...and the table keeps the suites' order"
+rm -f "$SYNC"/*
+run env SYNC_DIR="$SYNC" SYNC_N=0 "$RUNNER" --suites-dir "$ORD" --jobs 1
+assert_eq "$(cat "$SYNC/started" | tr '\n' ' ' | sed 's/ $//')" "test_a.sh test_capture.sh test_m.sh test_mnemon_cli.sh test_z.sh" "--jobs 1 starts the suites in the table's order"
+rm -f "$SYNC"/*
+run env SYNC_DIR="$SYNC" SYNC_N=4 "$RUNNER" --suites-dir "$ORD" --jobs 4 --both
+if [[ "$rc" == 2 ]]; then
+  pass "--both --jobs: no legacy toolchain on this host (checked above)"
+else
+  assert_eq "$(head -n 4 "$SYNC/started" | sort | tr '\n' ' ' | sed 's/ $//')" "test_capture.sh test_capture.sh test_mnemon_cli.sh test_mnemon_cli.sh" "--both --jobs 4: both toolchains' runs of the start-first suites start first"
+  assert_eq "$(rows_of)" "test_a.sh test_capture.sh test_m.sh test_mnemon_cli.sh test_z.sh test_a.sh test_capture.sh test_m.sh test_mnemon_cli.sh test_z.sh" "...the table: the current rows, then the legacy ones, each in order"
+fi
+
 echo "--- --jobs 1 is the sequential runner ---"
 run "$RUNNER" --suites-dir "$MID" -k --logs "$TEST_TMPDIR/logs-seq"
 seq_out="$out"; seq_rc="$rc"
