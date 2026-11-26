@@ -14,7 +14,8 @@ folder exists is not an orphan; a bundle is one archive entry like a file.
 Read-only. Usage: archive-audit.py [--config PATH] [--cutoff YYYY-MM-DD]
 The config is read through the engine's loader (bin/mnemon-config.sh via
 lib_config): with --config that file, otherwise the resolved instance
-(MNEMON_INSTANCE / MNEMON_CONFIG); `mnemon audit` passes it explicitly. No
+(MNEMON_INSTANCE / MNEMON_CONFIG) — under `mnemon audit` the resolution the
+dispatcher exported, reused without a second load (MNEMON_RESOLVED). No
 second yaml parser lives here.
 """
 import os

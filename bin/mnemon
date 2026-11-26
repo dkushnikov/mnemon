@@ -110,7 +110,9 @@ Config resolution — explicit beats inherited: --config → --instance → $MNE
 $MNEMON_INSTANCE → ./mnemon.yaml → $MNEMON_CONFIG_DIR/default → legacy mnemon.yaml (warns).
 $MNEMON_CONFIG and $MNEMON_INSTANCE both set must agree (same file, or the file declares
 that instance), otherwise exit 2. The dispatcher resolves once and exports the pair to the
-command. MNEMON_CONFIG_DIR defaults to ${XDG_CONFIG_HOME:-~/.config}/mnemon; instances live
+command with the MNEMON_RESOLVED stamp: the gateway and the Python tools reuse that resolution
+while nothing it depends on changed (a flag, an edited config, another instance load again).
+MNEMON_CONFIG_DIR defaults to ${XDG_CONFIG_HOME:-~/.config}/mnemon; instances live
 in its instances/ folder.
 USAGE
 }
@@ -160,7 +162,8 @@ _apply_selectors() {
     unset MNEMON_CONFIG MNEMON_CONFIG_SOURCE
   fi
 }
-# Resolve once; the exported MNEMON_CONFIG + MNEMON_INSTANCE pair is what children see.
+# Resolve once; the exported MNEMON_CONFIG + MNEMON_INSTANCE pair is what children see, and the
+# MNEMON_RESOLVED stamp lets them reuse the whole resolution without loading the file again (B7).
 _resolve_or_die() { load_config || exit $?; }
 # Selectors are global options; a child must never re-decide (`mnemon add --instance x` is refused).
 _reject_post_command_selectors() {
@@ -1835,7 +1838,8 @@ case "$cmd" in
               for _aa in "$@"; do [[ "$_aa" == --canonical ]] || _audit_args+=("$_aa"); done
               exec python3 "$BIN_DIR/canonical-audit.py" --vault "$VAULT_PATH" ${_audit_args[@]+"${_audit_args[@]}"}
             fi
-            exec python3 "$BIN_DIR/archive-audit.py" --config "$MNEMON_CONFIG_FILE" "$@" ;;
+            # the resolution the dispatcher exported is handed down (MNEMON_RESOLVED): no --config, no second load
+            exec python3 "$BIN_DIR/archive-audit.py" "$@" ;;
   init)     cmd_init "$@" ;;
   doctor)   cmd_doctor "$@" ;;
   config)   cmd_config "$@" ;;
