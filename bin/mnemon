@@ -60,6 +60,12 @@ Commands:
   research apply <id> --by <who> | delete <page> | ask --task-id <id> --question <q> | synthesize … | triage --propose
   audit [--cutoff DATE]      Archive consistency audit
   audit --canonical          Folders whose URLs coincide under the current canonicalization (v2; read-only)
+  audit text-mismatch [--all-url] [--cited] [--json] [--timeout <s>]
+                             Text mismatch candidates: revisions whose source.md text does not occur in
+                             the text their retained raw converts to now (pre-contract url revisions;
+                             --all-url every url revision with a raw; --cited only cited ones). Read-only,
+                             no fetch; a mismatch is a candidate — converter drift and old selection
+                             rules produce one too (docs/capture.md §16)
   init <name> --vault <path> [--archive <dir>] [--collection <name>]
        [--search-provider grep|qmd] [--reader-context <path> | --reader-context-path <path>]
        [--charter <path>] [--writer-host <host>] [--default] [--force] [--non-interactive]
@@ -1826,7 +1832,17 @@ case "$cmd" in
                 exec python3 "$BIN_DIR/mnemon-research.py" --help ;;
               *) usage_error "research: expected update | apply <id> | delete <page> | ask | synthesize | triage --propose (docs/research.md)" ;;
             esac ;;
-  audit)    _resolve_or_die
+  audit)    # text-mismatch (capture layer §18, A17): revisions whose source.md text is not found in the text
+            # their retained raw converts to now — candidates, read-only, no fetch; its own flags, so it is a
+            # subcommand word rather than a flag beside --canonical and --cutoff. --help needs no instance
+            if [[ "${1:-}" == text-mismatch ]]; then
+              shift
+              _reject_post_command_selectors "$@"
+              case "${1:-}" in -h|--help) exec python3 "$BIN_DIR/text-mismatch-audit.py" --help ;; esac
+              _resolve_or_die
+              exec python3 "$BIN_DIR/text-mismatch-audit.py" --config "$MNEMON_CONFIG_FILE" "$@"
+            fi
+            _resolve_or_die
             # --canonical (capture layer §3.10, D5): groups Sources/*/source.md by the v1 canonical form of
             # their URLs and prints the groups of ≥ 2; never writes, never merges
             if _has_flag --canonical "$@"; then
