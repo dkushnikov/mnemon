@@ -32,6 +32,7 @@ Add a source to the knowledge library. The engine acquires the content itself, p
 | `--author <name>` | No | Acquired | Source author |
 | `--source-type <type>` | No | From origin | `article`, `video`, `podcast`, `book`, `paper`, `idea`, `conversation` |
 | `--intent <text>` | No | none | Why the reader is capturing this |
+| `--session <title>` | Yes, from a session | `$MNEMON_SESSION`, else empty | The session the capture is made in — a short title of this conversation. The engine records it in the receipt and in `extract.md` (`capture_context.session`); a replay or `--resume` keeps the session recorded the first time, whatever the retrying call passes. Pass it on every `add` and `browser-lane` command; a caller whose environment sets `MNEMON_SESSION` may leave it out |
 | `--context <label>` | No | the charter's default | Capture context — one of the contexts the instance charter declares (`_meta/charter.md`, section `## Contexts`); an undeclared value is refused (exit 2). The default is `personal` when the charter declares it, else the first declared context; a vault without a charter accepts `personal` only. Never invent a context — pass one only when the user names it |
 | `--depth <mode>` | No | `auto` | Depth-aware capture — fold in the richer same-entity artifact a URL fronts (e.g. the repository a post links to): `auto`, `off`, `force` |
 | `--render` | No | off | Force the rendered stage (headless Chrome) for SPAs / client-side-rendered pages. Requires Google Chrome or Chromium |
@@ -61,7 +62,7 @@ Claude Code sessions started in that vault then never need `--instance`. Add it 
 When a YouTube capture answers `RESULT:status=failed`, `error_class=blocked`, `RESULT:acquisition=bot-wall` (`retryable=false`), the engine's host is one YouTube distrusts; a retry meets the same wall. The door is the browser lane — a producer that runs on the user's machine with the user's own browser cookies, outside the engine's fetch chain, and hands the engine a bundle (the caption track) to publish:
 
 ```bash
-"${MNEMON_HOME:-$HOME/.local/share/mnemon/engine}/bin/mnemon" [--instance <name>] browser-lane youtube "<url>" ["<url>"…] [--browser safari] [--intent "<intent>"] [--context <label>] [--recapture]
+"${MNEMON_HOME:-$HOME/.local/share/mnemon/engine}/bin/mnemon" [--instance <name>] browser-lane youtube "<url>" ["<url>"…] --session "<session title>" [--browser safari] [--intent "<intent>"] [--context <label>] [--recapture]
 ```
 
 It takes the videos one at a time (one caption track each, a pause between them), prints one line per video (`captured`, `skipped-duplicate`, `blocked`, `failed`, …) and the gateway's `RESULT:` lines, then a summary; the exit code is 0 only when every video was captured or was already in the library. Safari is the default browser and needs nothing further; Chrome asks the user for its keychain item on screen — say so before using `--browser chrome`. Never pass a cookie file or a cookie value: `--browser` takes a browser's name only. The result is a normal captured video (`source_type: video`, `completeness` checked against the caption track, chapters as headings), reported as in step 3. A video that was captured earlier through a text workaround (`--file-text` with `--canonical-url`) answers `skipped-duplicate`; add `--recapture` to replace it with the captioned revision.
@@ -91,8 +92,10 @@ Do NOT use `--render` reflexively — the default fast path is fine for 90% of w
 2. Run the dispatcher via the Bash tool. This is the only path form to use — never a dev checkout, never a script bundled with this plugin:
 
 ```bash
-"${MNEMON_HOME:-$HOME/.local/share/mnemon/engine}/bin/mnemon" [--instance <name>] add --url "<url>" [--origin <origin>] [--title "<title>"] [--author "<author>"] [--intent "<intent>"] [--depth <mode>] [--render] [--recapture]
+"${MNEMON_HOME:-$HOME/.local/share/mnemon/engine}/bin/mnemon" [--instance <name>] add --url "<url>" --session "<session title>" [--origin <origin>] [--title "<title>"] [--author "<author>"] [--intent "<intent>"] [--depth <mode>] [--render] [--recapture]
 ```
+
+   `--session` names this conversation (see Parameters); the lane's command above passes it the same way.
 
 3. Read the `RESULT:` lines and the exit code. The engine computes both from the files it published — **never report a full capture from exit 0 alone**: exit 0 also means `skipped-duplicate`, and `RESULT:status` is the fact.
 
@@ -132,7 +135,7 @@ Next: <only when the status calls for one — the --resume command, fence-probe,
 If the user wants to capture text or an idea, they need to provide the content. Ask them to paste it, then feed it to the dispatcher on stdin:
 
 ```bash
-printf '%s\n' "<pasted content>" | "${MNEMON_HOME:-$HOME/.local/share/mnemon/engine}/bin/mnemon" add --origin text --title "<title>"
+printf '%s\n' "<pasted content>" | "${MNEMON_HOME:-$HOME/.local/share/mnemon/engine}/bin/mnemon" add --origin text --title "<title>" --session "<session title>"
 ```
 
 For long texts write the content to a temporary file and `cat` it into the pipe. Never paraphrase or shorten it — the engine stores the text verbatim as `source.md`; only `extract.md` is generated.

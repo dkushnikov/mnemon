@@ -32,8 +32,11 @@ Actions:
 Options:
   --origin <type>       url|text|youtube|audio|pdf|file|book|idea|ref:vault|batch (book takes --file <document>)
   --url <url>           Source URL (auto-detected: .pdf → pdf, youtube → youtube)
-  --file <path>         Local file path (audio/pdf/file; auto-detected by extension)
-  --file-text <path>    Text content from a file (batch internal; the bytes are the capture-text)
+  --file <path>         Local file path (audio/pdf/file; auto-detected by extension). A plain-text file
+                        (.txt/.text in any case, or no extension and typed text/plain) takes the --file-text
+                        route: origin text, its bytes the capture-text; --origin file keeps the file route
+  --file-text <path>    A text file captured as its bytes, exactly (origin text, capture.method file-text,
+                        fidelity exact; invalid UTF-8 → failed/invalid-utf8); the path is the input locator
   --media-bundle <dir>  With a YouTube --url: the browser lane's bundle (media.json + the caption track a
                         producer acquired with its own browser cookies, `mnemon browser-lane youtube`); the
                         track is the raw (raw_kind captions), no media tool runs, the fetch chain is not entered
@@ -42,7 +45,8 @@ Options:
   --source-type <type>  article|video|podcast|book|paper|idea|conversation
   --context <ctx>       Capture context; must be declared in the instance charter (## Contexts);
                         default: personal when declared, else the first declared context
-  --session <name>      Session title (optional)
+  --session <name>      Session title (optional; without the flag $MNEMON_SESSION, else empty). A replay
+                        or --resume keeps the session its receipt recorded, never the caller's
   --intent <text>       Why this was captured (optional)
   --ref-path <path>     Vault note path (for origin=ref:vault)
   --capture-id <id>     Idempotent capture operation id from a feeder (--ref-id is an alias): a known
@@ -109,6 +113,7 @@ SOURCE_TYPE=""
 CONTEXT=""
 CONTEXT_GIVEN=false
 SESSION=""
+SESSION_GIVEN=false
 INTENT=""
 REF_PATH=""
 REF_SOURCE=""
@@ -140,6 +145,7 @@ SITE_PLAN_FILE=""
 ASSUME_COST=""
 DEPTH="auto"
 BOUND_GIVEN=false
+PLAIN_TEXT_FILE=false
 
 _need() { [[ $# -ge 2 ]] || { echo "ERROR: $1 requires a value" >&2; exit 2; }; }
 
@@ -154,7 +160,7 @@ while [[ $# -gt 0 ]]; do
     --author)        _need "$@"; AUTHOR="$2"; shift 2 ;;
     --source-type)   _need "$@"; SOURCE_TYPE="$2"; BOUND_GIVEN=true; shift 2 ;;
     --context)       _need "$@"; CONTEXT="$2"; CONTEXT_GIVEN=true; BOUND_GIVEN=true; shift 2 ;;
-    --session)       _need "$@"; SESSION="$2"; shift 2 ;;
+    --session)       _need "$@"; SESSION="$2"; SESSION_GIVEN=true; shift 2 ;;
     --intent)        _need "$@"; INTENT="$2"; shift 2 ;;
     --ref-path)      _need "$@"; REF_PATH="$2"; BOUND_GIVEN=true; shift 2 ;;
     --ref-source)    _need "$@"; REF_SOURCE="$2"; shift 2 ;;
@@ -189,6 +195,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$DEPTH" in auto|off|force) ;; *) echo "ERROR: --depth takes auto|off|force" >&2; exit 2 ;; esac
+# the session of the capture (capture contracts A13): an explicit --session (even an empty one) →
+# the caller's MNEMON_SESSION → empty. It is unbound metadata of the receipt; a replay and --resume
+# restore the receipt's value (cap_restore_from_receipt), never the retrying caller's.
+$SESSION_GIVEN || SESSION="${MNEMON_SESSION:-}"
 case "$TIER" in full|bookmark) ;; *) echo "ERROR: --tier takes full|bookmark" >&2; exit 2 ;; esac
 CANONICAL_URL_GIVEN="$(printf '%s' "$CANONICAL_URL_GIVEN" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
 if [[ -n "$CANONICAL_URL_GIVEN" && -n "$URL" ]]; then
@@ -250,6 +260,11 @@ if [[ -z "$ORIGIN" && "$AUTO_DETECT_ORIGIN" == "true" ]]; then
   elif [[ -n "$FILE_PATH" ]]; then
     if [[ "$FILE_PATH" =~ \.pdf$ ]]; then
       ORIGIN="pdf"
+    elif cap_plain_text_file "$FILE_PATH"; then
+      # capture contracts A14: a plain-text file is captured as its bytes on the exact-text route of
+      # --file-text (pandoc read .txt as Markdown and the text no longer matched the input); an explicit
+      # --origin file keeps the file route, and a known capture id replays as its receipt recorded it
+      ORIGIN="text"; FILE_TEXT="$FILE_PATH"; FILE_PATH=""; PLAIN_TEXT_FILE=true
     elif command -v ffprobe >/dev/null 2>&1 && \
        ffprobe -v quiet -show_entries format=format_name -of csv=p=0 "$FILE_PATH" 2>/dev/null | \
        grep -qiE 'mp3|wav|flac|ogg|aac|m4a|opus'; then
@@ -674,9 +689,18 @@ cap_replay() {
       # (an integrity-error receipt is re-verified: when the operator restored the file the
       # capture goes on from the files as they are, §12 A3)
       cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+      # the raw it names too (contracts A12): an extracted receipt whose raw is gone is an integrity error,
+      # and an integrity-error receipt whose raw was restored goes on
+      cap_raw_guard "$(cap_extract_state_of "$REVISION")"
       cap_sidecar_recover
       if [[ ! -f "$VAULT_PATH/Sources/$REVISION/extract.md" ]]; then
         cap_run_extract_step true "$KEEP_LOCATOR"
+      fi
+      # an integrity error found at the finalization (contracts A12) left this capture's extract
+      # published and the capture unfinalized: once the raw is back it is finalized now — receipt
+      # extracted with finalized_at, the reindex hook, the attempt cleanup — not only relabelled
+      if [[ "$RECEIPT_STATE" == "integrity-error" && -z "$(cap_receipt_get "$CAPTURE_ID" '.finalized_at // ""')" ]] && cap_extract_belongs; then
+        cap_reconcile_extracted "$KEEP_LOCATOR"
       fi
       if [[ "$RECEIPT_STATE" == "integrity-error" ]]; then
         cap_receipt_update "$CAPTURE_ID" '.state="extracted" | .error_class=null | .error=null | .retryable=null'
@@ -691,6 +715,7 @@ cap_replay() {
       exit 0 ;;
     source-published|extract-failed)
       cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+      cap_raw_guard "$(cap_extract_state_of "$REVISION")"
       cap_sidecar_recover
       if cap_extract_belongs; then cap_reconcile_extracted "$KEEP_LOCATOR"; fi
       cap_run_extract_step true "$KEEP_LOCATOR" ;;
@@ -699,6 +724,7 @@ cap_replay() {
         # crash after the directory rename, before the receipt: a source.md at the reserved name
         # is verified (§12 A3 — verification applies once a source.md with this id exists)
         cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+        cap_raw_guard "$(cap_extract_state_of "$REVISION")"
         cap_receipt_update "$CAPTURE_ID" '.state="source-published" | .source_published=true | .error_class=null | .error=null | .retryable=null'
         cap_sidecar_recover
         if cap_extract_belongs; then cap_reconcile_extracted "$KEEP_LOCATOR"; fi
@@ -741,6 +767,13 @@ cap_alias_replay() {
     cap_verify_folder_source "$REVISION" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
   else
     cap_verify_source "$REVISION" "$owner" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+  fi
+  # the target's raw (contracts A12): the owner receipt's record when it was restored, else the
+  # folder's claim — present with its size for a duplicate alias (an answer that writes nothing)
+  if [[ ( "$alias_state" == "extracted" || "$alias_state" == "bookmarked" ) && "$alias_attempts" -eq 0 ]]; then
+    cap_raw_guard "$(cap_extract_state_of "$REVISION")" presence
+  else
+    cap_raw_guard "$(cap_extract_state_of "$REVISION")"
   fi
   if [[ -n "$ALIAS_ID" && ( "$RECEIPT_STATE" == "started" || "$RECEIPT_STATE" == "failed" ) ]]; then
     # the owner's receipt lagged behind its published folder (crash after the rename)
@@ -852,7 +885,8 @@ cap_raw_matches() {   # <path> <sha256>
   if [[ -d "$1" ]]; then cap_bundle_verify "$1" "$2"; else [[ -f "$1" && "$(cap_sha256 "$1")" == "$2" ]]; fi
 }
 
-cap_raw_rename_into_place() {   # <staged> <final>
+cap_raw_rename_into_place() {   # <staged> <final>: a fresh copy renamed at once (contracts A12), else the staged copy itself
+  if cap_py fresh-rename "$1" "$1-r" "$2"; then rm -rf "$1"; return 0; fi
   if [[ -d "$1" ]]; then cap_py publish-dir "$1" "$2"; else cap_py fsync-rename "$1" "$2"; fi
 }
 
@@ -915,6 +949,9 @@ cap_fresh() {
       # an edited body is integrity-error/evidence-mismatch (exit 1), never skipped-duplicate;
       # a legacy source without the field is verified by existence only
       cap_verify_folder_source "$folder" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+      # and the raw the folder claims (contracts A12): a duplicate of a revision without its raw is an
+      # integrity error, never skipped-duplicate (present with its recorded size: nothing is written)
+      cap_raw_guard "$(cap_extract_state_of "$folder")" presence
       if [[ -n "$SITE_MODE" ]]; then
         echo "WARNING: the landing is already captured at Sources/$folder/ — skipping; a site capture of a captured landing needs --recapture (the site revision supersedes it)" >&2
       elif [[ "${URL_KIND:-}" == "arxiv" && -n "${REQUESTED_VERSION:-}" ]]; then
@@ -953,6 +990,7 @@ cap_fresh() {
       cap_restore_from_receipt
       REPLAYED=true
       cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+      cap_raw_guard "$(cap_extract_state_of "$REVISION")"
       if [[ "$(cap_effective_tier "$folder")" == "bookmark" ]]; then cap_finish_bookmarked true "$KEEP_LOCATOR"; fi
       if cap_extract_belongs; then cap_reconcile_extracted "$KEEP_LOCATOR"; fi
       cap_run_extract_step true "$KEEP_LOCATOR"
@@ -1127,7 +1165,7 @@ run_batch() {
     fi
 
     $CONTEXT_GIVEN             && item_args+=(--context "$CONTEXT")
-    [[ -n "$SESSION" ]]        && item_args+=(--session "$SESSION")
+    if $SESSION_GIVEN || [[ -n "$SESSION" ]]; then item_args+=(--session "$SESSION"); fi
     [[ -n "$INTENT" ]]         && item_args+=(--intent "$INTENT")
     [[ -n "$IMPORT_SOURCE" ]]  && item_args+=(--import-source "$IMPORT_SOURCE")
     [[ -n "$IMPORT_BATCH" ]]   && item_args+=(--import-batch "$IMPORT_BATCH")
@@ -1168,6 +1206,16 @@ run_batch() {
   echo "RESULT:batch_failed=$failed"
 
   [[ $failed -gt 0 ]] && return 1
+  return 0
+}
+
+# A plain-text --file auto-routed to the text origin (A14) that names a known capture id: the receipt is
+# authoritative. A receipt recorded before the rule (origin file) is bound and replayed as a --file of
+# origin file, the route the old auto-detection chose for every input the rule takes — never reinterpreted.
+cap_plain_text_receipt_route() {
+  $PLAIN_TEXT_FILE || return 0
+  [[ "$(cap_receipt_get "$CAPTURE_ID" '.request.origin // ""')" == "text" ]] && return 0
+  ORIGIN=file; FILE_PATH="$FILE_TEXT"; FILE_TEXT=""; PLAIN_TEXT_FILE=false
   return 0
 }
 
@@ -1215,6 +1263,7 @@ cap_main() {
 
   if $CAPTURE_ID_GIVEN && cap_receipt_exists "$CAPTURE_ID"; then
     cap_receipt_case_check "$CAPTURE_ID"
+    cap_plain_text_receipt_route
     cap_replay
   fi
   if [[ -z "$ORIGIN" ]]; then
