@@ -167,20 +167,45 @@ _mnemon_check_config_value() {   # <key> <value> <type> <file>
   esac
 }
 
-# Parse, validate and assign every table key from the config file (defaults applied).
-# Returns 2 on the first refused value — load_config fails closed on it.
-_mnemon_load_table_keys() {   # <file>
+# Validate and assign every table key of the scanned config file (defaults applied); call it
+# after _mnemon_config_scan <file>, which read the values. Returns 2 on the first refused value —
+# load_config fails closed on it.
+_mnemon_load_table_keys() {   # <file> (named in the error message)
   local file="$1" key var type def val
   while IFS='|' read -r key var type def; do
     [[ -n "$key" ]] || continue
-    val="$(_parse_yaml_value "$key" "$file")"
+    _mnemon_config_value "$key"; val="$_MNEMON_SCALAR"
     if [[ -z "$val" ]]; then val="$def"; fi
     if [[ -n "$val" ]]; then
       _mnemon_check_config_value "$key" "$val" "$type" "$file" || return 2
     fi
     printf -v "$var" '%s' "$val"
   done <<< "$MNEMON_CONFIG_KEYS"
-  # the fetch_timeout split (§3.2): connect = min(15, T/4), read = T - connect
+  _mnemon_fetch_split
+  return 0
+}
+
+# The fetch_timeout split (§3.2): connect = min(15, T/4), read = T - connect, both as awk's
+# printf "%g" prints them. When both parts are integers below 10^6 — an integer T of up to seven
+# digits that is 60 or more, or a multiple of 4 below 60 — %g prints them as plain integers in
+# every locale, and the split is computed here without a process. Every other T (a fraction, a
+# quarter, a long integer) goes through the awk that defines the split: its %g writes the
+# locale's decimal separator and, from 10^6 on, an exponent.
+_mnemon_fetch_split() {
+  local t="$FETCH_TIMEOUT" n=""
+  case "$t" in
+    ""|*[!0123456789]*) ;;
+    *) if [[ ${#t} -le 7 ]]; then n=$((10#$t)); fi ;;
+  esac
+  if [[ -n "$n" ]]; then
+    if [[ $n -ge 60 && $((n - 15)) -lt 1000000 ]]; then
+      FETCH_CONNECT_TIMEOUT=15; FETCH_READ_TIMEOUT=$((n - 15))
+      return 0
+    elif [[ $n -lt 60 && $((n % 4)) -eq 0 ]]; then
+      FETCH_CONNECT_TIMEOUT=$((n / 4)); FETCH_READ_TIMEOUT=$((n - n / 4))
+      return 0
+    fi
+  fi
   FETCH_CONNECT_TIMEOUT="$(awk -v t="$FETCH_TIMEOUT" 'BEGIN { c = t / 4; if (c > 15) c = 15; printf "%g", c }')"
   FETCH_READ_TIMEOUT="$(awk -v t="$FETCH_TIMEOUT" -v c="$FETCH_CONNECT_TIMEOUT" 'BEGIN { printf "%g", t - c }')"
   return 0
@@ -282,25 +307,145 @@ _mnemon_unquote_dq() {
       printf "%s", out }'
 }
 
-# Parse a single flat YAML key: `key: value`. A double-quoted value is taken up
-# to the closing quote (a `#` inside stays, text after the quote is ignored) with
-# \" and \\ decoded — the form `mnemon init` writes; a single-quoted value is
-# taken verbatim up to the closing quote; an unquoted value loses a trailing
-# ` # comment` and surrounding whitespace. A leading tilde is resolved against $HOME.
-_parse_yaml_value() {
-  local key="$1" file="$2"
+# --- The configuration reader: one pass over the file, in this shell ---------
+# A key of a flat YAML file is the first line that starts with `key: ` (exact,
+# case-sensitive; a later line with the same key is ignored, an indented one
+# never matches); its value is the rest of that line, read by _mnemon_scalar
+# and then tilde-expanded. load_config reads every key it needs in one pass
+# (_mnemon_config_scan); _parse_yaml_value reads one key. Neither starts a
+# process for a value of up to 1024 characters: the reading is bash's own, the
+# same in bash 3.2 and later (a longer value: _mnemon_scalar_long).
+# tests/test_config_reader.sh holds the earlier reader (one awk and two sed per
+# key) as its reference and checks both forms against it, key by key.
+
+# The keys load_config reads besides the table (MNEMON_CONFIG_KEYS).
+MNEMON_BASE_KEYS="vault_path reader_context_path search_provider qmd_collection default_model default_language
+whisper_model auto_detect_origin archive_dir state_dir charter_path writer_host instance"
+
+# The value of one raw scalar (the text after `key: `) in _MNEMON_SCALAR. Leading
+# whitespace is dropped. A double-quoted value is taken up to its first unescaped
+# `"` (a `#` inside stays, text after the quote is ignored) with \" → " and \\ → \
+# — the form `mnemon init` writes; any other backslash sequence is kept as it is.
+# A single-quoted value is taken verbatim up to its closing quote. A value that
+# starts with `#` is empty. An unquoted value loses a trailing ` # comment` (a `#`
+# after whitespace) and trailing whitespace. No tilde expansion here. A raw value
+# longer than 1024 characters goes through _mnemon_scalar_long instead.
+_mnemon_scalar() {   # <raw>
+  local v="$1" ws
+  if [[ ${#v} -gt 1024 ]]; then _mnemon_scalar_long "$v"; return 0; fi
+  ws=${v%%[![:space:]]*}; v=${v#"$ws"}
+  case "$v" in
+    \"*) _mnemon_dq_body "${v#\"}"; return 0 ;;
+    \'*) v=${v#\'}; v=${v%%\'*} ;;
+    \#*) v="" ;;
+    *)   v=${v%%[[:space:]]#*}; ws=${v##*[![:space:]]}; v=${v%"$ws"} ;;
+  esac
+  _MNEMON_SCALAR="$v"
+}
+
+# The same reading for a raw value longer than 1024 characters, with the sed and
+# awk of the reader before the one-pass loader: they stay linear in the length of
+# a line, while bash's pattern operators in a multibyte locale grow with its
+# square. A config line that long is no real configuration; the bound keeps one
+# from costing seconds. A failing tool leaves the value empty, as it did then.
+_mnemon_scalar_long() {   # <raw>
   local val
-  # Use awk with exact string match (not regex) to avoid BRE metacharacter issues
-  val=$(awk -v k="$key" 'BEGIN { prefix = k ": " } substr($0, 1, length(prefix)) == prefix { print substr($0, length(prefix) + 1); exit }' "$file" 2>/dev/null)
-  val=$(printf '%s' "$val" | sed 's/^[[:space:]]*//')
+  val=$(printf '%s' "$1" | sed 's/^[[:space:]]*//') || true
   case "$val" in
-    \"*) val="$(_mnemon_unquote_dq "${val#\"}")" ;;
+    \"*) val="$(_mnemon_unquote_dq "${val#\"}")" || true ;;
     \'*) val="${val#\'}"; val="${val%%\'*}" ;;
     \#*) val="" ;;
-    *)   val=$(printf '%s' "$val" | sed 's/[[:space:]]#.*$//; s/[[:space:]]*$//') ;;
+    *)   val=$(printf '%s' "$val" | sed 's/[[:space:]]#.*$//; s/[[:space:]]*$//') || true ;;
   esac
-  val="$(_mnemon_expand_tilde "$val")"
-  printf '%s\n' "$val"
+  _MNEMON_SCALAR="$val"
+}
+
+# The body of a double-quoted scalar ($1 = the text after the opening quote) in
+# _MNEMON_SCALAR: the reading of _mnemon_unquote_dq, chunk by chunk — the text up
+# to the next `\`, cut at a `"` inside it (a `"` ends the value); `\\` and `\"`
+# decode to their second character; any other backslash pair stays as it is; a
+# lone trailing backslash stays. Byte by byte (LC_ALL=C for this function only):
+# the bytes that matter are ASCII, and in a multibyte locale each operation would
+# convert the whole remainder again — quadratic in a value full of escapes.
+_mnemon_dq_body() {   # <text after the opening quote>
+  local LC_ALL=C s="$1" out="" a
+  while [[ -n "$s" ]]; do
+    a=${s%%\\*}
+    case "$a" in *\"*) out="$out${a%%\"*}"; break ;; esac
+    out="$out$a"; s=${s:${#a}}
+    case "$s" in
+      "")            break ;;
+      \\\\*|\\\"*)   out="$out${s:1:1}"; s=${s:2} ;;
+      \\?*)          out="$out${s:0:2}"; s=${s:2} ;;
+      *)             out="$out$s"; break ;;
+    esac
+  done
+  _MNEMON_SCALAR="$out"
+}
+
+# A leading `~` or `~/` of _MNEMON_SCALAR resolved against $HOME (the reading of
+# _mnemon_expand_tilde; `~user/...` is left alone). With HOME unset the subshell of
+# _mnemon_expand_tilde answers, as it did for every value before the one-pass reader:
+# under `set -u` it reports the unbound HOME and the value is empty, the load goes on.
+_mnemon_scalar_tilde() {
+  case "$_MNEMON_SCALAR" in
+    "~"|"~/"*)
+      if [[ -n "${HOME+set}" ]]; then
+        _MNEMON_SCALAR="$HOME${_MNEMON_SCALAR#\~}"
+      else
+        _MNEMON_SCALAR="$(_mnemon_expand_tilde "$_MNEMON_SCALAR")" || true
+      fi ;;
+  esac
+  return 0
+}
+
+# Every key the loader reads, space-delimited with a space at each end (built once).
+_mnemon_scan_keys() {
+  [[ -z "${_MNEMON_SCAN_KEYS:-}" ]] || return 0
+  local key rest keys=" " IFS=$' \t\n'
+  for key in $MNEMON_BASE_KEYS; do keys="$keys$key "; done
+  while IFS='|' read -r key rest; do
+    if [[ -n "$key" ]]; then keys="$keys$key "; fi
+  done <<< "$MNEMON_CONFIG_KEYS"
+  _MNEMON_SCAN_KEYS="$keys"
+}
+
+# One pass over the config file: for every key the loader reads, the raw text
+# after `key: ` on the first line that starts with it, in _mnemon_raw_<key>; a key
+# no line names stays unset. An unreadable file reads as an empty one.
+_mnemon_config_scan() {   # <file>
+  local line="" key seen=" " IFS=$' \t\n'
+  _mnemon_scan_keys
+  for key in $_MNEMON_SCAN_KEYS; do unset "_mnemon_raw_$key"; done
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in *": "*) ;; *) continue ;; esac
+    key=${line%%: *}
+    case "$key" in ""|*" "*) continue ;; esac
+    case "$_MNEMON_SCAN_KEYS" in *" $key "*) ;; *) continue ;; esac
+    case "$seen" in *" $key "*) continue ;; esac
+    seen="$seen$key "
+    printf -v "_mnemon_raw_$key" '%s' "${line#*: }"
+  done 2>/dev/null < "$1" || true
+  return 0
+}
+
+# The value of a scanned key in _MNEMON_SCALAR (empty when no line names it), `~` expanded.
+_mnemon_config_value() {   # <key>
+  local raw="_mnemon_raw_$1"
+  _mnemon_scalar "${!raw-}"
+  _mnemon_scalar_tilde
+}
+
+# Parse a single flat YAML key: `key: value` — the reading above, for one key
+# (`mnemon config list`, the doctor). Prints the value and a newline.
+_parse_yaml_value() {
+  local key="$1" file="$2" line="" raw=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in "$key: "*) raw=${line#"$key: "}; break ;; esac
+  done 2>/dev/null < "$file" || true
+  _mnemon_scalar "$raw"
+  _mnemon_scalar_tilde
+  printf '%s\n' "$_MNEMON_SCALAR"
 }
 
 # Expand a leading `~` or `~/` to $HOME; `~user/...` is left alone.
@@ -530,26 +675,29 @@ load_config() {
   MNEMON_CONFIG_FILE="$(_mnemon_abs_file "$config_file")"
   MNEMON_CONFIG_SOURCE="$source"
 
-  # Parse values
-  VAULT_PATH="$(_parse_yaml_value vault_path "$config_file")"
-  READER_CONTEXT_PATH="$(_parse_yaml_value reader_context_path "$config_file")"
-  SEARCH_PROVIDER="$(_parse_yaml_value search_provider "$config_file")"
-  QMD_COLLECTION="$(_parse_yaml_value qmd_collection "$config_file")"
-  DEFAULT_MODEL="$(_parse_yaml_value default_model "$config_file")"
-  DEFAULT_LANGUAGE="$(_parse_yaml_value default_language "$config_file")"
-  WHISPER_MODEL="$(_parse_yaml_value whisper_model "$config_file")"
-  AUTO_DETECT_ORIGIN="$(_parse_yaml_value auto_detect_origin "$config_file")"
-  ARCHIVE_DIR="$(_parse_yaml_value archive_dir "$config_file")"
-  MNEMON_STATE_DIR="$(_parse_yaml_value state_dir "$config_file")"
-  CHARTER_PATH="$(_parse_yaml_value charter_path "$config_file")"
-  WRITER_HOST="$(_parse_yaml_value writer_host "$config_file")"
+  # Parse values: one pass over the file reads every key (_mnemon_config_scan)
+  _mnemon_config_scan "$config_file"
+  _mnemon_config_value vault_path;          VAULT_PATH="$_MNEMON_SCALAR"
+  _mnemon_config_value reader_context_path; READER_CONTEXT_PATH="$_MNEMON_SCALAR"
+  _mnemon_config_value search_provider;     SEARCH_PROVIDER="$_MNEMON_SCALAR"
+  _mnemon_config_value qmd_collection;      QMD_COLLECTION="$_MNEMON_SCALAR"
+  _mnemon_config_value default_model;       DEFAULT_MODEL="$_MNEMON_SCALAR"
+  _mnemon_config_value default_language;    DEFAULT_LANGUAGE="$_MNEMON_SCALAR"
+  _mnemon_config_value whisper_model;       WHISPER_MODEL="$_MNEMON_SCALAR"
+  _mnemon_config_value auto_detect_origin;  AUTO_DETECT_ORIGIN="$_MNEMON_SCALAR"
+  _mnemon_config_value archive_dir;         ARCHIVE_DIR="$_MNEMON_SCALAR"
+  _mnemon_config_value state_dir;           MNEMON_STATE_DIR="$_MNEMON_SCALAR"
+  _mnemon_config_value charter_path;        CHARTER_PATH="$_MNEMON_SCALAR"
+  _mnemon_config_value writer_host;         WRITER_HOST="$_MNEMON_SCALAR"
   # the scalar keys of MNEMON_CONFIG_KEYS: parsed, validated (exit 2 on a refused value), defaulted
   _mnemon_load_table_keys "$config_file" || return 2
 
   # Instance name: the name that selected the file wins; otherwise the yaml's
-  # `instance:` key; otherwise adhoc.
+  # `instance:` key (an unrendered {{instance}} placeholder counts as unset, as in
+  # _mnemon_declared_instance); otherwise adhoc.
   local instance_key
-  instance_key="$(_mnemon_declared_instance "$config_file")"
+  _mnemon_config_value instance; instance_key="$_MNEMON_SCALAR"
+  case "$instance_key" in *"{{"*) instance_key="" ;; esac
   if [[ -n "$resolved_instance" ]]; then
     MNEMON_INSTANCE="$resolved_instance"
   elif [[ -n "$instance_key" ]]; then
