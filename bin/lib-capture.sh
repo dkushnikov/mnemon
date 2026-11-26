@@ -1118,14 +1118,81 @@ cap_lookup_head() {   # uses RESOURCE_SHA256, CANONICAL_URL (empty for non-url k
 # (cap_lookup_head is called in the gateway's own shell, never inside $(…): its integrity exit
 # must end the run, not a subshell)
 
-# Revision names reserved by non-final receipts of the ledger (one line each).
-cap_reserved_revisions() {
+# ---------------------------------------------------------------------------------------------
+# Ledger scans: one jq over the receipts, not one per receipt
+# ---------------------------------------------------------------------------------------------
+# cap_receipts_jq <filter> prints what `jq -r <filter> <receipt> 2>/dev/null || true` printed for
+# each receipt of the ledger in glob order — byte for byte — from one jq per batch of receipts
+# (CAP_SCAN_BATCH_BYTES of arguments: one batch until the ledger holds several hundred receipts).
+# jq reads a batch as one input stream, each receipt behind the separator file CAP_SCAN_SEP, whose
+# bytes are "\n0\n": the newline ends a token the previous receipt left open, the 0 on line 2 is
+# the separator's sentinel. The batch's answer counts only when that stream parsed as the receipts
+# parse one by one: jq exited 0 (no parse error, every file opened), and the values read from the
+# separator are exactly its sentinels, one per separator, each on its line 2. A receipt that does
+# not parse, a token or a structure that runs across a separator, a leading byte-order mark (jq
+# strips one only at the start of its input), a file jq cannot open, an output string with a NUL
+# (the $(…) that holds the batch's answer would drop it): each breaks a condition, and that batch
+# is split in two and tried again, until a batch of four or fewer receipts runs as before, one jq
+# per receipt. A batch of one receipt is that one jq. A path that is not a readable regular file
+# is skipped first (the jq of that receipt printed nothing). No receipt is written here.
+CAP_SCAN_SEP="$_LIB_CAPTURE_DIR/lib-capture.sep"
+CAP_SCAN_BATCH_BYTES=131072
+CAP_SCAN_OK="mnemon-receipt-scan/1 ok"
+
+cap_receipts_jq() {   # <jq filter> (run it inside $(…): it sets nullglob)
+  local filter="$1" f cost bytes=0
+  local -a batch
+  batch=()
   shopt -s nullglob
-  local f
   for f in "$CAPTURES_DIR"/*.json; do
-    jq -r 'select(.state != "extracted" and .state != "bookmarked" and (.revision // "") != "" and (.resolved_to_revision // "") == "") | .revision' "$f" 2>/dev/null || true
+    [[ -f "$f" && -r "$f" ]] || continue
+    cost=$(( ${#f} + ${#CAP_SCAN_SEP} + 18 ))   # two strings, their NULs, two argv pointers
+    if [[ ${#batch[@]} -gt 0 && $((bytes + cost)) -gt $CAP_SCAN_BATCH_BYTES ]]; then
+      cap_receipts_jq_batch "$filter" "${batch[@]}"
+      batch=(); bytes=0
+    fi
+    batch+=("$f"); bytes=$((bytes + cost))
   done
   shopt -u nullglob
+  [[ ${#batch[@]} -gt 0 ]] && cap_receipts_jq_batch "$filter" "${batch[@]}"
+  return 0
+}
+
+cap_receipts_jq_batch() {   # <jq filter> <receipt>…
+  local filter="$1" f out rc=0 half
+  local -a args
+  shift
+  if [[ $# -gt 1 && -f "$CAP_SCAN_SEP" ]]; then
+    args=()
+    for f in "$@"; do args+=("$CAP_SCAN_SEP" "$f"); done
+    args+=("$CAP_SCAN_SEP")
+    out="$(jq -n -r --arg sep "$CAP_SCAN_SEP" --arg ok "$CAP_SCAN_OK" --argjson want $(($# + 1)) '
+      reduce (inputs | [., input_filename, input_line_number]) as [$v, $f, $l] ({out: [], seps: 0, bad: false};
+        if $f == $sep then (if $l == 2 and $v == 0 then .seps += 1 else .bad = true end)
+        else .out += [$v | try ('"$filter"') catch empty] end)
+      | if .bad or .seps != $want or any(.out[]; type == "string" and (explode | any(. == 0))) then empty
+        else (.out[], $ok) end' "${args[@]}" 2>/dev/null)" || rc=$?
+    if [[ $rc -eq 0 && ( "$out" == "$CAP_SCAN_OK" || "$out" == *$'\n'"$CAP_SCAN_OK" ) ]]; then
+      printf '%s' "${out%"$CAP_SCAN_OK"}"
+      return 0
+    fi
+    # a batch that did not pass runs as its two halves, in order, down to four receipts: one
+    # receipt that does not parse costs a few jq per halving, not one per receipt of the ledger
+    if [[ $# -gt 4 ]]; then
+      half=$(($# / 2))
+      cap_receipts_jq_batch "$filter" "${@:1:$half}"
+      cap_receipts_jq_batch "$filter" "${@:$((half + 1))}"
+      return 0
+    fi
+  fi
+  for f in "$@"; do
+    jq -r "$filter" "$f" 2>/dev/null || true
+  done
+}
+
+# Revision names reserved by non-final receipts of the ledger (one line each).
+cap_reserved_revisions() {
+  cap_receipts_jq 'select(.state != "extracted" and .state != "bookmarked" and (.revision // "") != "" and (.resolved_to_revision // "") == "") | .revision'
 }
 
 cap_revision_taken() {   # <name> (CAP_RESERVED holds cap_reserved_revisions output)
@@ -1301,11 +1368,11 @@ cap_cleanup_staging() {
   staged=("${ARCHIVE_DIR:-/nonexistent}"/.*.staging-* "$STATE_RAW_DIR"/.*.staging-*)
   shopt -u nullglob
   [[ ${#staged[@]} -gt 0 ]] || return 0
-  # one jq per receipt: the staged path a non-final receipt owns (O), every recorded raw (R)
-  map="$(shopt -s nullglob; for rev in "$CAPTURES_DIR"/*.json; do jq -r '
+  # one scan of the ledger: the staged path a non-final receipt owns (O), every recorded raw (R)
+  map="$(cap_receipts_jq '
       (select(.state != "extracted" and .state != "bookmarked") | "O\t" + ((.raw_staged_path // "") | rtrimstr("/"))),
       (select((.raw_path | type) == "string" and (.raw_sha256 | type) == "string")
-        | "R\t" + (.raw_path | rtrimstr("/")) + "\t" + .raw_sha256 + "\t" + (.capture_id // ""))' "$rev" 2>/dev/null; done)"
+        | "R\t" + (.raw_path | rtrimstr("/")) + "\t" + .raw_sha256 + "\t" + (.capture_id // ""))')"
   for f in "${staged[@]}"; do
     [[ -e "$f" ]] || continue
     f="${f%/}"
