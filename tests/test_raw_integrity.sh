@@ -162,6 +162,8 @@ echo "--- 5. loss before the finalization; the operator restores the raw ---"
 stub_reset
 loss_run after-extract-published stash --url "https://example.com/ri-fin" --capture-id ri-fin
 assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error raw-missing" "a raw gone between the extract and the final receipt → integrity-error/raw-missing"
+revf="$(rget ri-fin '.revision')"
+assert_not_contains "$(cat "$VAULT/index.md" 2>/dev/null)" "Sources/$revf/extract|" "...the unfinalized capture is not indexed"
 rawf="$(rget ri-fin '.raw_path')"
 mv "$rawf.stash" "$rawf"
 stub_reset
@@ -169,6 +171,22 @@ run_gw --capture-id ri-fin
 assert_eq "$rc $(result status) $(result replayed)" "0 extracted true" "...restored by the operator, the replay answers extracted"
 assert_eq "$(rget ri-fin '.state') $(rget ri-fin '.error_class')" "extracted null" "...the receipt reconciled to extracted"
 assert_eq "$(stub_calls)" "0" "...no model call (the extract was already published)"
+[[ "$(rget ri-fin '.finalized_at')" != "null" ]] && pass "...and finalized: finalized_at set" || fail "finalized_at after the restored replay" "null"
+assert_contains "$(cat "$VAULT/index.md")" "Sources/$revf/extract|" "...the reindex hook ran: the revision is in index.md"
+assert_eq "$(result reindex)" "ok" "...RESULT:reindex=ok"
+assert_eq "$(ls -d "$VSTATE/runs/ri-fin" 2>/dev/null)" "" "...the attempt dir removed after the final receipt"
+# the raw-loss hooks are scrubbed like the crash hooks: an inherited MNEMON_TEST_RAW_LOSS_AT never
+# reaches a suite (the recovery case after-source-published of test_capture.sh, under the inherited
+# pair: leaked, the crash run would lose its raw at after-convert and publish nothing)
+inherited="$(MNEMON_TEST_RAW_LOSS_AT=after-convert MNEMON_TEST_RAW_LOSS=delete bash -c '
+  MNEMON_ROOT="$1"; source "$1/tests/test-helper.sh" >/dev/null; source "$1/tests/fixtures/capture/setup.sh" >/dev/null
+  export MNEMON_TEST_HOOKS=1 MNEMON_TEST_CRASH_AT=after-source-published
+  run_gw --url "https://example.com/ri-inherit" --capture-id ri-inherit
+  unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT
+  run_gw --capture-id ri-inherit
+  printf "%s %s %s|%s" "$rc" "$(result status)" "$(rget ri-inherit ".state")" "${MNEMON_TEST_RAW_LOSS_AT:-unset}"
+  cleanup_capture_test' _ "$MNEMON_ROOT" 2>/dev/null)"
+assert_eq "$inherited" "0 extracted extracted|unset" "an inherited MNEMON_TEST_RAW_LOSS_AT / MNEMON_TEST_RAW_LOSS is scrubbed: the crash recovery case recovers"
 stub_reset
 loss_run after-extract-published tamper --url "https://example.com/ri-fin-t" --capture-id ri-fin-t
 assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error raw-mismatch" "a raw whose bytes changed → integrity-error/raw-mismatch"

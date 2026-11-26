@@ -681,6 +681,12 @@ cap_replay() {
       if [[ ! -f "$VAULT_PATH/Sources/$REVISION/extract.md" ]]; then
         cap_run_extract_step true "$KEEP_LOCATOR"
       fi
+      # an integrity error found at the finalization (contracts A12) left this capture's extract
+      # published and the capture unfinalized: once the raw is back it is finalized now — receipt
+      # extracted with finalized_at, the reindex hook, the attempt cleanup — not only relabelled
+      if [[ "$RECEIPT_STATE" == "integrity-error" && -z "$(cap_receipt_get "$CAPTURE_ID" '.finalized_at // ""')" ]] && cap_extract_belongs; then
+        cap_reconcile_extracted "$KEEP_LOCATOR"
+      fi
       if [[ "$RECEIPT_STATE" == "integrity-error" ]]; then
         cap_receipt_update "$CAPTURE_ID" '.state="extracted" | .error_class=null | .error=null | .retryable=null'
       fi
