@@ -13,7 +13,16 @@ echo "=== Resolve-once Tests ==="
 print_toolchain; assert_toolchain_legacy
 
 TEST_TMPDIR="$(cd "$(mktemp -d -t mnemon-once-XXXX)" && pwd -P)"
-export XDG_CONFIG_HOME="$TEST_TMPDIR/xdg" XDG_STATE_HOME="$TEST_TMPDIR/state"
+# hermetic (AGENTS.md): a temporary HOME and XDG tree, and stubs first on PATH for the tools the doctor runs — the
+# fixture `claude` of the capture suites (it answers --version and --help, nothing else is called here) and a `yt-dlp`
+# whose debug header the media-tools probe reads; the real ones never run
+export HOME="$TEST_TMPDIR/home" XDG_CONFIG_HOME="$TEST_TMPDIR/xdg" XDG_STATE_HOME="$TEST_TMPDIR/state"
+STUBS="$TEST_TMPDIR/stubs"
+mkdir -p "$HOME" "$STUBS" "$TEST_TMPDIR/stub-calls"
+cp "$MNEMON_ROOT/tests/fixtures/capture/stub-claude.sh" "$STUBS/claude"
+printf '#!/bin/sh\nprintf "[debug] yt-dlp version stable@2026.11.01 from yt-dlp/yt-dlp [c0ffee000] (pip)\\n[debug] JS runtimes: none\\n" >&2\nexit 2\n' > "$STUBS/yt-dlp"
+chmod +x "$STUBS/claude" "$STUBS/yt-dlp"
+export PATH="$STUBS:$PATH" STUB_DIR="$TEST_TMPDIR/stub-calls"
 unset MNEMON_CONFIG MNEMON_INSTANCE MNEMON_CONFIG_DIR MNEMON_RESOLVED MNEMON_CONFIG_FILE MNEMON_CONFIG_SOURCE
 CFG_DIR="$XDG_CONFIG_HOME/mnemon"
 LOG="$TEST_TMPDIR/loader.log"
@@ -44,6 +53,8 @@ printf 'a text\n' > "$TEST_TMPDIR/in.txt"
 assert_eq "$(loads "$M" add --file-text "$TEST_TMPDIR/in.txt" --title T --tier bookmark)" "1 1" "mnemon add (a write under the vault lock): one load; the gateway behind vault-lock.py reuses it"
 assert_contains "$(cat "$TEST_TMPDIR/out")" "RESULT:status=bookmarked" "...and the capture ran (the card is published)"
 assert_eq "$(loads "$M" doctor)" "1 0" "mnemon doctor: one load"
+assert_contains "$(cat "$TEST_TMPDIR/out")" " fence — claude 9.9.9-stub" "...the doctor ran the stub claude, never a real one"
+assert_contains "$(cat "$TEST_TMPDIR/out")" " media-tools — yt-dlp 2026.11.01" "...and the stub yt-dlp"
 assert_eq "$(loads "$M" audit --cutoff 2026-01-01)" "1 1" "mnemon audit: the dispatcher loads, archive-audit.py reuses (no --config handed down)"
 assert_eq "$(loads "$M" status)" "1 1" "mnemon status: the dispatcher loads, the gateway's status reuses"
 
