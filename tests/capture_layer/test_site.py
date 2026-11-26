@@ -52,6 +52,9 @@ def build_site(srv: LocalServer) -> None:
 
 
 class SiteBase(unittest.TestCase):
+    """The stub site and its plan (max 13 pages, blog excluded), shared by Map and Bundle; Map adds the
+    small plan it reads, Bundle the bundle it reads — neither builds what only the other one uses."""
+
     @classmethod
     def setUpClass(cls):
         cls.server = LocalServer()
@@ -67,23 +70,8 @@ class SiteBase(unittest.TestCase):
         rc, so, se = run_cli([CS, "map", cls.server.base + "/", "--out", cls.plan_path, "--max-pages", "13",
                               "--exclude", "blog"], env=cls.env, timeout=300)
         assert rc == 0, se
-        cls.small_plan_path = os.path.join(cls.work, "plan-small.json")
-        rc, so, se = run_cli([CS, "map", cls.server.base + "/", "--out", cls.small_plan_path, "--max-pages", "4"], env=cls.env, timeout=300)
-        assert rc == 0, se
-        with open(cls.small_plan_path, encoding="utf-8") as fh:
-            cls.small_plan = json.load(fh)
         with open(cls.plan_path, encoding="utf-8") as fh:
             cls.plan = json.load(fh)
-        cls.bundle = os.path.join(cls.work, "bundle")
-        cls.bundle_report = os.path.join(cls.work, "bundle.json")
-        cls.server.reset()
-        rc, so, se = run_cli([CS, "fetch-bundle", cls.plan_path, "--out", cls.bundle, "--report", cls.bundle_report,
-                              "--site-timeout", "120"], env=cls.env, timeout=300)
-        assert rc == 0, se
-        cls.bundle_stdout = so.strip()
-        with open(os.path.join(cls.bundle, "manifest.json"), "rb") as fh:
-            cls.manifest_bytes = fh.read()
-        cls.manifest = json.loads(cls.manifest_bytes.decode("utf-8"))
 
     @classmethod
     def tearDownClass(cls):
@@ -95,6 +83,15 @@ class SiteBase(unittest.TestCase):
 
 
 class Map(SiteBase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.small_plan_path = os.path.join(cls.work, "plan-small.json")
+        rc, so, se = run_cli([CS, "map", cls.server.base + "/", "--out", cls.small_plan_path, "--max-pages", "4"], env=cls.env, timeout=300)
+        assert rc == 0, se
+        with open(cls.small_plan_path, encoding="utf-8") as fh:
+            cls.small_plan = json.load(fh)
+
     def test_plan_shape(self):
         fixture = expected_shapes("site-plan.json")
         assert_same_keys(self, self.plan, fixture, "mnemon-site-plan/1")
@@ -516,6 +513,20 @@ class Aggregate(unittest.TestCase):
 
 
 class Bundle(SiteBase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.bundle = os.path.join(cls.work, "bundle")
+        cls.bundle_report = os.path.join(cls.work, "bundle.json")
+        cls.server.reset()
+        rc, so, se = run_cli([CS, "fetch-bundle", cls.plan_path, "--out", cls.bundle, "--report", cls.bundle_report,
+                              "--site-timeout", "120"], env=cls.env, timeout=300)
+        assert rc == 0, se
+        cls.bundle_stdout = so.strip()
+        with open(os.path.join(cls.bundle, "manifest.json"), "rb") as fh:
+            cls.manifest_bytes = fh.read()
+        cls.manifest = json.loads(cls.manifest_bytes.decode("utf-8"))
+
     def test_members_dispositions_and_the_stdout_line(self):
         fixture = expected_shapes("site-manifest.json")
         assert_same_keys(self, self.manifest, fixture, "mnemon-site-bundle/1")
