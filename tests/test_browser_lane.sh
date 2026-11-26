@@ -68,7 +68,15 @@ if [[ " $* " == *" --dump-single-json "* ]]; then
         echo "WARNING: [youtube] $id: extra headers --add-header 'X-Goog-AuthUser:synthetic-user' --add-header Cookie:synthetic-d"
         echo "WARNING: [youtube] $id: unable to download https://rr1.googlevideo.com/videoplayback?v=$id&sig=synthetic-sig&token=synthetic-tok#t=1 (retrying)"
         echo "WARNING: [youtube] $id: po_token 1700000000synthetic0123456789abcdef was rejected"
+        echo "WARNING: [youtube] $id: challenge 1700000000synthetic0123456789abcdef was rejected"
         cat "$MEDIA_FIX/ytdlp-bot-wall.stderr.txt"
+      } >&2; exit 1 ;;
+    freeform)
+      {
+        echo "ERROR: Cookie header was: a=synthetic-1; b=synthetic-2"
+        echo "WARNING: Authorization header was: Bearer synthetic-free-token"
+        echo "WARNING: [youtube] $id: the tokenizer, the sidebar and the secretary stay; so does a cookie-consent banner"
+        echo "WARNING: config echo ['--add-header', 'Authorization: Bearer synthetic-echo', '-v']"
       } >&2; exit 1 ;;
     creds-error) echo "ERROR: [youtube] $id: HTTP Error 403 on https://rr1.googlevideo.com/videoplayback?v=$id&sig=synthetic-sig-9; Authorization: Bearer synthetic-err-token" >&2; exit 1 ;;
   esac
@@ -244,7 +252,7 @@ STUB_YTDLP=leaky run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" 
 B="$(bundle_of abc123xyz00)"
 assert_contains "$out" "blocked abc123xyz00 — bot-wall: ERROR: [youtube] abc123xyz00: Sign in to confirm you’re not a bot" "a wall behind a debug run's lines: blocked, the classifier's line"
 assert_contains "$(cat "$B/stderr.txt")" "Sign in to confirm you’re not a bot" "...stderr.txt keeps the wall's line"
-assert_contains "$(cat "$B/stderr.txt")" "WARNING: [youtube] abc123xyz00: cookies file <path> is not used; Cookie: <redacted>" "...a kept WARNING loses its path and its session value"
+assert_contains "$(cat "$B/stderr.txt")" "WARNING: [youtube] abc123xyz00: cookies <redacted>" "...a kept WARNING loses everything after its first credential word (the path and the session value with it)"
 assert_contains "$(cat "$B/stderr.txt")" "7 other line(s) not kept" "...the debug, cookie-store, traffic and traceback lines are counted, not kept"
 leak="$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")"
 for needle in sekret /Users/reader "Extracting cookies" "Extracted 42" "[debug]" "Set-Cookie" Traceback; do
@@ -261,9 +269,21 @@ assert_contains "$kept" "WARNING: [youtube] abc123xyz00: SID=<redacted>" "...a q
 assert_contains "$kept" "WARNING: [youtube] abc123xyz00: Cookie: <redacted>" "...a Cookie header with several pairs: every pair goes"
 assert_contains "$kept" "WARNING: [youtube] abc123xyz00: extra headers --add-header <redacted>" "...an --add-header echo: the header and what follows go"
 assert_contains "$kept" "videoplayback?v=abc123xyz00&sig=<redacted>&token=<redacted>#t=1 (retrying)" "...a URL keeps the video id; sig= and token= lose their values"
-assert_contains "$kept" "WARNING: [youtube] abc123xyz00: po_token <redacted> was rejected" "...a token-shaped string goes"
-assert_contains "$kept" "ERROR: [youtube] abc123xyz00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication." "...and the wall's own line survives whole"
+assert_contains "$kept" "WARNING: [youtube] abc123xyz00: po_token <redacted>" "...a token word: the rest of the line goes"
+assert_contains "$kept" "WARNING: [youtube] abc123xyz00: challenge <redacted> was rejected" "...a token-shaped string without a credential word goes on its own"
+assert_contains "$kept" "ERROR: [youtube] abc123xyz00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication." "...and the wall's own sentence survives up to its first credential word (the option names --cookies and --cookies-from-browser are not one)"
+assert_contains "$kept" "FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies <redacted>" "...a URL's fragment is not a credential word; the prose 'pass cookies' is, and the rest of the line goes"
 assert_not_contains "$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")" "synthetic" "...no credential value in stderr.txt, error.json or any printed line"
+stub_reset
+STUB_YTDLP=freeform run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
+B="$(bundle_of abc123xyz00)"
+kept="$(cat "$B/stderr.txt")"
+assert_contains "$out" "failed abc123xyz00 — yt-dlp metadata failed: ERROR: Cookie <redacted> · diagnostics:" "free wording 'Cookie header was: a=1; b=2': the line ends at the credential word, on the terminal"
+assert_contains "$kept" "ERROR: Cookie <redacted>" "...and in stderr.txt"
+assert_contains "$kept" "WARNING: Authorization <redacted>" "...the same wording with Authorization"
+assert_contains "$kept" "WARNING: [youtube] abc123xyz00: the tokenizer, the sidebar and the secretary stay; so does a cookie-consent banner" "...a credential word inside a longer word (tokenizer, sidebar, secretary, cookie-consent) is not one: the line stays whole"
+assert_contains "$kept" "WARNING: config echo ['--add-header <redacted>']" "...an echoed config list is cut at --add-header and stays well-formed (its quote and bracket closed)"
+assert_not_contains "$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")" "synthetic" "...no credential value anywhere"
 stub_reset
 STUB_YTDLP=creds-error run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
 B="$(bundle_of abc123xyz00)"

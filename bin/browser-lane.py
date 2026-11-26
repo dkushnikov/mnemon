@@ -248,23 +248,29 @@ def add_argv(mnemon: str, canonical: str, bundle: str, track: dict, args) -> lis
 
 # Retained and printed tool output (capture layer A18, A13's disclosure rule): only yt-dlp's ERROR / WARNING lines are
 # kept, and every kept or printed line goes through redact(). The rule: a line never holds a header value, a cookie
-# value or a token-shaped string — at a credential key the rest of the line is dropped, since a value may be quoted,
-# hold spaces (`Bearer <token>`) or run on as `a=1; b=2`.
+# value or a token-shaped string. A line that names a credential word anywhere — with `:` or `=` after it or in free
+# wording (`Cookie header was: a=1; b=2`) — loses everything after that word, since a value may be quoted, hold
+# spaces (`Bearer <token>`) or run on as `a=1; b=2`.
 _KEEP_PREFIXES = ("ERROR", "WARNING")
-# a credential key: a header or cookie name, a token or secret field, written `key:` or `key=` (the key may be quoted)
-_CRED_KEY_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9_])(?P<key>set-cookie|cookies?|proxy-authorization|authorization|x-goog-authuser|x-goog-visitor-id|"
-    r"x-youtube-identity-token|x-origin|[a-z0-9_-]*sapisid(?:hash)?|apisid|hsid|ssid|sid|__secure-[a-z0-9_-]*|__host-[a-z0-9_-]*|"
-    r"login_info|visitor_info1_live|pref|ysc|access_token|refresh_token|id_token|[a-z0-9_-]*token|api[_-]?key|"
-    r"password|passwd|secret|session(?:id|_token)?)(?P<q>[\"']?)(?P<sep>\s*[:=])(?!\s*<redacted>)")
-# a header echoed through yt-dlp's own option, and a bare `Bearer <token>` (`--cookies <file>` names a path only)
-_ADD_HEADER_RE = re.compile(r"(?i)(--add-header)(?:[\s=]+).*$")
-_BEARER_RE = re.compile(r"(?i)\b(bearer|basic)\s+\S.*$")
+# a credential word: a header or cookie name, a token, secret or password field — a word of its own. A word joined to
+# a longer one by a letter, digit, `_` or `-` is not one (`tokenizer`, `sidebar`, `cookie-consent`, the option names
+# `--cookies` and `--cookies-from-browser`, a URL fragment `#how-to-pass-cookies`), nor is a word inside a URL (its
+# query values go by the query rule first)
+_CRED_WORD_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_-])(?P<word>set-cookie|cookies?|proxy-authorization|authorization|bearer|"
+    r"x-goog-authuser|x-goog-visitor-id|x-youtube-identity-token|x-origin|"
+    r"[a-z0-9_]*sapisid(?:hash)?|apisid|hsid|ssid|sid|nid|__secure-[a-z0-9_-]*|__host-[a-z0-9_-]*|login_info|"
+    r"visitor_info1_live|pref|ysc|[a-z0-9_]*tokens?|api[ _-]?keys?|apikey|passwords?|passwd|secrets?|credentials?|"
+    r"session(?:id|_token)?)(?![A-Za-z0-9_-])(?P<sep>[\"']?\s*[:=])?")
+# yt-dlp's own header option: whatever follows it is a header
+_ADD_HEADER_RE = re.compile(r"(?i)(?<![A-Za-z0-9_])--add-header(?![A-Za-z0-9_-])")
+_URL_RE = re.compile(r"(?i)https?://(?:<redacted>|[^\s'\"<>])+")   # a URL after the query rule ran
 # a URL's query: every value but the video id `v` is dropped (`sig=`, `token=`, `pot=`, `n=` … carry credentials)
 _QUERY_RE = re.compile(r"(?i)(https?://[^\s'\"?#<>]+)\?([^\s'\"#<>]*)")
 _PATH_RE = re.compile(r"(?<![A-Za-z0-9_:/.~-])(?:~/|/)[^\s'\"]+")
 # token-shaped: 24 or more characters of a token alphabet with at least one digit and one letter
 _TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_+=-])(?=[A-Za-z0-9_+=-]*[0-9])(?=[A-Za-z0-9_+=-]*[A-Za-z])[A-Za-z0-9_+=-]{24,}")
+_CLOSERS = {"[": "]", "(": ")", "{": "}", "'": "'", '"': '"'}
 STDERR_MAX_LINES = 200
 STDERR_MAX_CHARS = 2000
 
@@ -277,16 +283,40 @@ def _redact_query(m) -> str:
     return m.group(1) + "?" + "&".join(pairs)
 
 
+def _closers(prefix: str) -> str:
+    """What the kept part of a cut line leaves open — brackets, and quotes that open a value (after a space, `[`,
+    `(`, `{`, `,`, `=` or `:`; an apostrophe inside a word is not a quote) — closed in reverse order, so a cut line
+    stays well-formed: `['--add-header <redacted>']`."""
+    stack = []
+    for i, ch in enumerate(prefix):
+        if stack and ch == _CLOSERS[stack[-1]] and (ch in "'\"" or stack[-1] in "[({"):
+            stack.pop()
+        elif ch in "[({":
+            stack.append(ch)
+        elif ch in "'\"" and (i == 0 or prefix[i - 1] in " \t[({,=:"):
+            stack.append(ch)
+    return "".join(_CLOSERS[c] for c in reversed(stack))
+
+
 def redact(line: str) -> str:
-    """One line made safe to print or retain: URL query values first (the video id aside); then, at the first
-    credential key (or `--add-header`, `Bearer`), the rest of the line becomes <redacted>; then absolute and
-    home-relative paths, and token-shaped strings."""
+    """One line made safe to print or retain: URL query values first (the video id aside); then the rest of the line
+    after the first credential word outside a URL, or after `--add-header`, becomes <redacted> — the separator kept
+    when the word has one (`Authorization: <redacted>`, `SID=<redacted>`), whatever was left open closed; then
+    absolute and home-relative paths, and token-shaped strings."""
     line = _QUERY_RE.sub(_redact_query, line)
-    m = _CRED_KEY_RE.search(line)
-    if m:
-        line = line[:m.end("sep")] + ("<redacted>" if m.group("sep").endswith("=") else " <redacted>")
-    line = _ADD_HEADER_RE.sub(lambda m: m.group(1) + " <redacted>", line)
-    line = _BEARER_RE.sub(lambda m: m.group(1) + " <redacted>", line)
+    urls = [(m.start(), m.end()) for m in _URL_RE.finditer(line)]
+    cut = None
+    for m in _CRED_WORD_RE.finditer(line):
+        if not any(a <= m.start() < b for a, b in urls):
+            end = m.end("sep") if m.group("sep") else m.end("word")
+            cut = (end, "<redacted>" if (m.group("sep") or "").endswith("=") else " <redacted>")
+            break
+    m = _ADD_HEADER_RE.search(line)
+    if m and not any(a <= m.start() < b for a, b in urls) and (cut is None or m.end() < cut[0]):
+        cut = (m.end(), " <redacted>")
+    if cut is not None:
+        prefix = line[:cut[0]]
+        line = prefix + cut[1] + _closers(prefix)
     line = _PATH_RE.sub("<path>", line)
     return _TOKEN_RE.sub("<redacted>", line)
 
