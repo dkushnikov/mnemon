@@ -96,6 +96,9 @@ if [[ " $* " == *" --dump-single-json "* ]]; then
         echo "WARNING: client_secret=synthetic-prefixed"
         echo "WARNING: proxy http://reader:synthetic-userinfo@proxy.example.com:8080 refused the connection"
         echo "WARNING: https://sid:synthetic-userkey@proxy.example.com/p then a note synthetic-tail"
+        echo "WARNING: upstream http://reader:synthetic-pw-pwd=x@proxy.example.com"
+        echo "WARNING: relay http://reader:synthetic-at@sign@proxy.example.com:8080 refused"
+        echo "WARNING: port 8080http://reader:synthetic-glued-url@proxy.example.com refused"
       } >&2; exit 1 ;;
     creds-error) echo "ERROR: [youtube] $id: HTTP Error 403 on https://rr1.googlevideo.com/videoplayback?v=$id&sig=synthetic-sig-9; Authorization: Bearer synthetic-err-token" >&2; exit 1 ;;
   esac
@@ -325,10 +328,14 @@ assert_contains "$kept" "WARNING: auth-Basic <redacted>" "...and with a hyphen o
 assert_contains "$kept" "WARNING: https://example.com/p#--add-header <redacted>" "...--add-header glued to a URL"
 assert_contains "$kept" "WARNING: client_secret=<redacted>" "...a secret field with a prefix in its name"
 assert_contains "$kept" "WARNING: proxy http://<redacted>@proxy.example.com:8080 refused the connection" "...the user and password of a URL go, the rest of the line stays"
-assert_contains "$kept" "WARNING: https://sid: <redacted>" "...a key in a URL's user part is a field first: the line is cut there, as the first release cut it"
+assert_contains "$kept" "WARNING: https://<redacted>" "...a key as the user name of a URL: the cut takes the whole user part and the rest of the line"
+assert_contains "$kept" "WARNING: upstream http://<redacted>" "...a field name inside the password: no piece of the user part is kept"
+assert_contains "$kept" "WARNING: relay http://<redacted>@proxy.example.com:8080 refused" "...a raw @ in the password: the user part runs to the last @"
+assert_contains "$kept" "WARNING: port 8080http://<redacted>@proxy.example.com refused" "...a URL glued to the text before it has a user part too"
 leak="$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")"
 assert_not_contains "$leak" "synthetic" "...no credential value anywhere"
 assert_not_contains "$leak" "dXNlcjpwYXNz" "...nor the Basic value"
+assert_not_contains "$leak" "reader:" "...nor the user name of a URL"
 stub_reset
 STUB_YTDLP=creds-error run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
 B="$(bundle_of abc123xyz00)"
