@@ -500,7 +500,7 @@ run env PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
 assert_contains "$out" "warn capture-deps — defuddle missing (pandoc and the DOM text remain as converters) · pandoc missing (html conversion falls back to the DOM text)" "doctor: capture-deps names missing converters"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^fail capture-deps' || true)" "0" "doctor: capture-deps never fails (every tool is optional)"
 
-# --- doctor: media-tools (capture layer A18) — yt-dlp's own report: its version and age, the JS runtimes it can use ---
+# --- doctor: media-tools (capture layer A20) — yt-dlp's own report: its version and age, the JS runtimes it can use ---
 echo "--- doctor: media-tools ---"
 cat > "$CSTUB/yt-dlp" <<'STUB'
 #!/bin/sh

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# test_capture_lanes.sh — the capture lanes' contract points of capture contracts §16: the session of a capture
-# (A14: explicit --session → $MNEMON_SESSION → empty; a replay and --resume keep the receipt's) and a plain-text
-# --file through the exact-text route (A15). Everything runs against the stubs of tests/fixtures/capture/setup.sh;
+# test_capture_lanes.sh — the capture lanes' contract points of capture contracts §16–§17: the session of a capture
+# (A13, §16: explicit --session → $MNEMON_SESSION → empty; a replay and --resume keep the receipt's) and a plain-text
+# --file through the exact-text route (A14, §17). Everything runs against the stubs of tests/fixtures/capture/setup.sh;
 # no network, no model. bash 3.2 / python 3.9.
 source "$(dirname "$0")/test-helper.sh"
 MNEMON_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
@@ -16,7 +16,7 @@ ext_of() { printf '%s/Sources/%s/extract.md' "$VAULT" "$1"; }
 text_file() { printf '%s\n' "$2" > "$TEST_TMPDIR/$1.txt"; printf '%s' "$TEST_TMPDIR/$1.txt"; }
 
 # ---------------------------------------------------------------------------------------------
-echo "--- A14 the session: explicit → MNEMON_SESSION → empty ---"
+echo "--- A13 the session: explicit → MNEMON_SESSION → empty ---"
 stub_reset
 run_gw_stdin "$(text_file s1 'session text one')" --origin text --title "S1" --capture-id s-1 --session "Flag session"
 assert_eq "$rc $(result status)" "0 extracted" "an explicit --session: extracted"
@@ -38,7 +38,7 @@ assert_eq "$(rget s-4 '.metadata.session')" "Flag wins" "--session outranks MNEM
 MNEMON_SESSION="Env session" run_gw_stdin "$(text_file s5 'session text five')" --origin text --title "S5" --capture-id s-5 --session ""
 assert_eq "$(rget s-5 '.metadata.session')" "null" "an explicit empty --session outranks MNEMON_SESSION too (empty)"
 
-echo "--- A14 a replay keeps the receipt's session ---"
+echo "--- A13 a replay keeps the receipt's session ---"
 stub_reset
 STUB_MODE=exit1 MNEMON_SESSION="First session" run_gw_stdin "$(text_file r1 'replay text one')" --origin text --title "R1" --capture-id r-1
 assert_eq "$rc $(result status)" "4 captured" "(setup) the extractor fails: the source is published, exit 4"
@@ -63,7 +63,7 @@ MNEMON_SESSION="Resumer" run_gw --resume r-3 --session "Resumer flag"
 assert_eq "$rc $(result status)" "0 extracted" "--resume <capture_id> of a capture recorded without a session"
 assert_eq "$(ccfm "$(ext_of "$rev_r3")" session)" '""' "...stays without one: an empty recorded session is the receipt's value too"
 
-echo "--- A14 a batch passes the session to its items ---"
+echo "--- A13 a batch passes the session to its items ---"
 stub_reset
 python3 - "$TEST_TMPDIR/batch-s.json" <<'PY'
 import json, sys
@@ -81,7 +81,7 @@ MNEMON_SESSION="Env batch" run_gw --manifest "$TEST_TMPDIR/batch-s2.json"
 assert_eq "$(rget bs-2 '.metadata.session')" "Env batch" "a batch without the flag: its items take MNEMON_SESSION"
 
 # ---------------------------------------------------------------------------------------------
-echo "--- A15 a plain-text --file is captured as its bytes (the --file-text route) ---"
+echo "--- A14 a plain-text --file is captured as its bytes (the --file-text route) ---"
 stub_reset
 # Markdown-looking text that pandoc would rewrite (emphasis, a list marker, two trailing spaces, CRLF)
 printf '* item one\r\n**bold**  \r\nplain line\r\n' > "$TEST_TMPDIR/notes.txt"
@@ -128,7 +128,7 @@ printf '# a heading\n\n*emphasis*\n' > "$TEST_TMPDIR/note.md"
 run_gw --file "$TEST_TMPDIR/note.md" --capture-id pt-md
 assert_eq "$(rget pt-md '.request.origin')" "file" "a .md file stays on the file route (Markdown is a converter's input)"
 
-echo "--- A15 an explicit --origin file keeps the file route ---"
+echo "--- A14 an explicit --origin file keeps the file route ---"
 printf 'explicit *file* origin\n' > "$TEST_TMPDIR/explicit.txt"
 run_gw --origin file --file "$TEST_TMPDIR/explicit.txt" --capture-id pt-explicit
 assert_eq "$(rget pt-explicit '.request.origin') $(rget pt-explicit '.request.resource_kind') $(rget pt-explicit '.raw_store')" "file file archive" "--origin file --file x.txt: origin file, a file-kind resource, the raw retained"
@@ -138,7 +138,7 @@ else
   assert_eq "$rc $(result error_class)" "1 unsupported" "...the file route without pandoc: unsupported, as before"
 fi
 
-echo "--- A15 --canonical-url ---"
+echo "--- A14 --canonical-url ---"
 printf 'exported document text\n' > "$TEST_TMPDIR/export1.txt"
 printf 'exported document text, edited\n' > "$TEST_TMPDIR/export2.txt"
 run_gw --file "$TEST_TMPDIR/export1.txt" --canonical-url "https://docs.example.com/d/abc/edit?utm_source=x" --capture-id pt-canon
@@ -149,7 +149,7 @@ assert_eq "$(body_sha "$src_c")" "$(shasum -a 256 "$TEST_TMPDIR/export1.txt" | c
 run_gw --file "$TEST_TMPDIR/export2.txt" --canonical-url "https://docs.example.com/d/abc/edit"
 assert_eq "$rc $(result status)" "0 skipped-duplicate" "...a second export of the same document is a duplicate"
 
-echo "--- A15 the same bytes captured before as a file are one resource ---"
+echo "--- A14 the same bytes captured before as a file are one resource ---"
 printf 'captured once as a file\n' > "$TEST_TMPDIR/once.txt"
 run_gw --origin file --file "$TEST_TMPDIR/once.txt" --capture-id pt-once-file
 rev_once="$(result revision)"
@@ -164,7 +164,7 @@ else
   echo "  (pandoc missing: the file-kind predecessor cannot be made; the alias case is not run)"
 fi
 
-echo "--- A15 a receipt recorded before the rule replays as it was recorded ---"
+echo "--- A14 a receipt recorded before the rule replays as it was recorded ---"
 printf 'an older *file* capture\n' > "$TEST_TMPDIR/older.txt"
 STUB_MODE=exit1 run_gw --origin file --file "$TEST_TMPDIR/older.txt" --capture-id pt-old
 rev_old="$(result revision)"
@@ -188,7 +188,7 @@ else
   assert_eq "$rc $(result error_class) $(rget pt-old-crash '.request.origin')" "1 unsupported file" "...the replay stays on the recorded file route (no pandoc: unsupported)"
 fi
 
-echo "--- A15 --file-text is a documented door ---"
+echo "--- A14 --file-text is a documented door ---"
 help_out="$(bash "$GW" source-add --help 2>&1 || true)"
 assert_contains "$help_out" "--file-text <path>    A text file captured as its bytes, exactly" "the gateway's --help documents --file-text as a door"
 assert_contains "$help_out" "takes the --file-text" "...and the plain-text --file route"

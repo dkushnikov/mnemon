@@ -295,7 +295,7 @@ def _wall_line(data):
 
 
 def error_line(data):
-    """The one line that names a tool's failure (capture layer A17): the line the wall classifier matched when it
+    """The one line that names a tool's failure (capture layer A20): the line the wall classifier matched when it
     names a wall (`_wall_line`, inside an ERROR block when there is one); else the first line of the first `ERROR:`
     block — the tool's own terminal error, never a WARNING printed before or after it, never the last ERROR by
     position; else the last non-empty line (a tool that printed no prefixed ERROR — a traceback's exception line);

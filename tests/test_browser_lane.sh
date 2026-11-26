@@ -207,7 +207,7 @@ assert_eq "$rc" "1" "a wall at the metadata call: exit 1"
 assert_contains "$out" "blocked abc123xyz00 — bot-wall: ERROR: [youtube] abc123xyz00: Sign in to confirm you’re not a bot" "...the video's line names the wall and yt-dlp's own line"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^blocked ')" "2" "...the next video is still tried (and walled too)"
 assert_eq "$(ncalls mnemon-calls)" "0" "...no gateway call"
-# the attempt's directory exists before the metadata call (capture layer A17): the wall keeps its diagnostics there
+# the attempt's directory exists before the metadata call (capture layer A20): the wall keeps its diagnostics there
 B="$(bundle_of abc123xyz00)"
 [[ -n "$B" && -d "$B" && ! -f "$B/media.json" ]] && pass "a video walled at the metadata call keeps an attempt directory, without media.json (never a bundle)" || fail "attempt directory before the metadata" "${B:-none}"
 assert_eq "$(jget "$B/error.json" 'd["schema"]') $(jget "$B/error.json" 'd["error_class"]') $(jget "$B/error.json" 'd["stage"]') $(jget "$B/error.json" 'd["kind"]') $(jget "$B/error.json" 'd["retryable"]')" "mnemon-media-error/1 blocked download bot-wall false" "...error.json: the mnemon-media-error/1 shape, blocked at the metadata stage, the wall's kind, not retryable"
@@ -337,7 +337,7 @@ assert_contains "$out" "$STUBS/mnemon --config /some/dir/work.yaml add --url" ".
 stub_reset
 MNEMON_INSTANCE=work STUB_ADD=captured run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
 assert_contains "$out" "finish with: $STUBS/mnemon --instance work add --resume 2026-11-05_abcd1234" "...and the --resume hint carries the instance and the dispatcher's path"
-# the session (capture contracts A14): --session as given, else the caller's MNEMON_SESSION — resolved by the lane, so
+# the session (capture contracts A13): --session as given, else the caller's MNEMON_SESSION — resolved by the lane, so
 # the executed add and a printed command name the same one
 stub_reset
 run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0 --session "Lane session"

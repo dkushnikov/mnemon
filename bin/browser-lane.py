@@ -23,7 +23,7 @@ The bundle, `<out>/<video_id>/<UTC timestamp>/`:
                           acquired_at}
   <video_id>.<code>.vtt   the track as yt-dlp wrote it (SRT when the video offers no VTT; the converter reads both)
 
-The directory is allocated before the first yt-dlp call (capture layer A17), so every attempt that ran a tool has a
+The directory is allocated before the first yt-dlp call (capture layer A20), so every attempt that ran a tool has a
 place: `media.json`, written last, is the one mark of a complete bundle. An attempt that ends blocked, failed or past
 its --timeout keeps its diagnostics there instead — `error.json` (`mnemon-media-error/1`, the shape media-extract.py
 writes: error_class blocked | failed | timeout, stage download | captions, kind, error, retryable) and, when the tool
@@ -223,7 +223,7 @@ def render_argv(argv) -> str:
 
 
 def session_of(args):
-    """The session the lane hands to `add` (capture contracts A14): --session as given (an empty value too), else
+    """The session the lane hands to `add` (capture contracts A13): --session as given (an empty value too), else
     the caller's MNEMON_SESSION, else None. Resolved here, not left to the inherited environment, so the executed
     add and every PRINTED command (a retry runs in the reader's shell) name the same session."""
     if args.session is not None:
@@ -246,7 +246,7 @@ def add_argv(mnemon: str, canonical: str, bundle: str, track: dict, args) -> lis
     return argv
 
 
-# Retained and printed tool output (capture layer A17, A13's disclosure rule): only yt-dlp's ERROR / WARNING lines are
+# Retained and printed tool output (capture layer A20, A13's disclosure rule): only yt-dlp's ERROR / WARNING lines are
 # kept, and every kept or printed line goes through redact(). The rule: a line never holds a header value, a cookie
 # value or a token-shaped string — at a credential key the rest of the line is dropped, since a value may be quoted,
 # hold spaces (`Bearer <token>`) or run on as `a=1; b=2`.
@@ -416,7 +416,7 @@ def _one_video(o: Outcome, url: str, args, mnemon: str, emit) -> Outcome:
         return o.done("planned", "nothing ran (--dry-run)")
 
     sup = ME.Supervisor(args.timeout)
-    # 0. the attempt's directory, before any tool runs (A17): an early failure keeps its diagnostics here; media.json,
+    # 0. the attempt's directory, before any tool runs (A20): an early failure keeps its diagnostics here; media.json,
     # written last, stays the one mark of a complete bundle
     bundle = os.path.join(args.out, vid, stamp())
     os.makedirs(bundle, mode=0o700, exist_ok=True)
@@ -552,7 +552,7 @@ def main() -> int:
     ok = {"captured", "skipped-duplicate", "bundled", "planned", "captured-pending-extract"}
     rc = 0 if all(o.outcome in ok for o in outcomes) else EXIT_FAILED
     summary = "browser-lane: %d video(s) · %s" % (len(outcomes), " · ".join("%s %d" % (k, counts[k]) for k in sorted(counts)))
-    # the last line alone says why (A17): every video not captured, with its wall kind or its outcome, five at most
+    # the last line alone says why (A20): every video not captured, with its wall kind or its outcome, five at most
     missed = [o for o in outcomes if o.outcome not in ok]
     if missed:
         named = ["%s (%s)" % (o.video_id or o.url, o.wall or ("timeout" if o.detail.startswith("timeout") else o.outcome))

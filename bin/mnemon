@@ -657,7 +657,7 @@ _doctor_capture_deps() {
   _check "$status" capture-deps "$detail"
 }
 
-# media-tools — what the media path and the browser lane depend on beyond presence (capture layer A18): yt-dlp's
+# media-tools — what the media path and the browser lane depend on beyond presence (capture layer A20): yt-dlp's
 # version and its age in days, and the JavaScript runtimes yt-dlp itself reports it can use (YouTube's player
 # challenges need one; a deno or node on PATH proves nothing: yt-dlp enables only deno by default, the others need
 # --js-runtimes). One probe, `yt-dlp -v --ignore-config` without a URL — the debug header on stderr (`yt-dlp version

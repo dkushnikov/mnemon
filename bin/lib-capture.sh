@@ -280,7 +280,7 @@ elif cmd == "revision-candidates":
     import subprocess
     sources, rsha, canon, fetch_cmd = a[0], a[1], a[2], a[3]
     # one identity, or several comma-separated: a plain-text --file also matches the file-kind identity of
-    # the same bytes (capture contracts A15)
+    # the same bytes (capture contracts A14)
     rshas = {x for x in rsha.split(",") if x}
     CAP = 256 * 1024
     literal = yaml_literal
@@ -1069,7 +1069,7 @@ cap_generate_capture_id() {   # <resource_id>
 cap_lookup_head() {   # uses RESOURCE_SHA256, CANONICAL_URL (empty for non-url kinds) → CAP_HEAD CAP_HEAD_MANAGED CAP_CANDIDATES
   local canon="" rshas="$RESOURCE_SHA256"
   [[ "$RESOURCE_KIND" == "url" ]] && canon="${CANONICAL_URL:-}"
-  # a plain-text --file on the exact-text route (capture contracts A15) is a text-kind resource; the same
+  # a plain-text --file on the exact-text route (capture contracts A14) is a text-kind resource; the same
   # bytes captured before this rule as a file-kind resource are its earlier revisions (one resource per file)
   [[ "${PLAIN_TEXT_FILE:-false}" == true && "$RESOURCE_KIND" == "text" ]] && rshas="$rshas,$(cap_sha256_str "file:$RESOURCE_KEY")"
   CAP_CANDIDATES="$(cap_py revision-candidates "$VAULT_PATH/Sources" "$rshas" "$canon" "$CAP_FETCH_CMD")"
@@ -1403,7 +1403,7 @@ cap_acquire_exact() {   # text / idea / --file-text / ref:vault
 
 cap_detect_mime() { file -b --mime-type "$1" 2>/dev/null || echo application/octet-stream; }
 
-# A plain-text input file (capture contracts A15): the extension .txt or .text in any case, or no
+# A plain-text input file (capture contracts A14): the extension .txt or .text in any case, or no
 # extension and `file` types it text/plain. Such a --file takes the exact-text route of --file-text when
 # the origin is auto-detected; everything else (.md included) stays on the file route.
 cap_plain_text_file() {   # <path>

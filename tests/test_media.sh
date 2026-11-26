@@ -331,7 +331,7 @@ assert m.classify_wall(tb) is None, m.classify_wall(tb)
 # the age gate is a login wall (D6), never retryable
 assert m.classify_wall("ERROR: [youtube] x: Sign in to confirm your age. This video may be inappropriate for some users.") == "login"
 assert m._wall_line(ytdlp).startswith("ERROR: [youtube] abc123xyz00: Sign in to confirm"), m._wall_line(ytdlp)
-# error_line (capture layer A17): the wall's matched line; else the FIRST ERROR line; else the last line; "" for nothing
+# error_line (capture layer A20): the wall's matched line; else the FIRST ERROR line; else the last line; "" for nothing
 assert m.error_line(ytdlp).startswith("ERROR: [youtube] abc123xyz00: Sign in to confirm"), m.error_line(ytdlp)
 assert m.error_line(mixed).startswith("ERROR: [youtube] abc123xyz00: Private video"), m.error_line(mixed)
 assert m.error_line("ERROR: first\nERROR: second\nWARNING: after") == "ERROR: first"

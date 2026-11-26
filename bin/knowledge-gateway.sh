@@ -195,7 +195,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$DEPTH" in auto|off|force) ;; *) echo "ERROR: --depth takes auto|off|force" >&2; exit 2 ;; esac
-# the session of the capture (capture contracts A14): an explicit --session (even an empty one) →
+# the session of the capture (capture contracts A13): an explicit --session (even an empty one) →
 # the caller's MNEMON_SESSION → empty. It is unbound metadata of the receipt; a replay and --resume
 # restore the receipt's value (cap_restore_from_receipt), never the retrying caller's.
 $SESSION_GIVEN || SESSION="${MNEMON_SESSION:-}"
@@ -261,7 +261,7 @@ if [[ -z "$ORIGIN" && "$AUTO_DETECT_ORIGIN" == "true" ]]; then
     if [[ "$FILE_PATH" =~ \.pdf$ ]]; then
       ORIGIN="pdf"
     elif cap_plain_text_file "$FILE_PATH"; then
-      # capture contracts A15: a plain-text file is captured as its bytes on the exact-text route of
+      # capture contracts A14: a plain-text file is captured as its bytes on the exact-text route of
       # --file-text (pandoc read .txt as Markdown and the text no longer matched the input); an explicit
       # --origin file keeps the file route, and a known capture id replays as its receipt recorded it
       ORIGIN="text"; FILE_TEXT="$FILE_PATH"; FILE_PATH=""; PLAIN_TEXT_FILE=true
@@ -1186,7 +1186,7 @@ run_batch() {
   return 0
 }
 
-# A plain-text --file auto-routed to the text origin (A15) that names a known capture id: the receipt is
+# A plain-text --file auto-routed to the text origin (A14) that names a known capture id: the receipt is
 # authoritative. A receipt recorded before the rule (origin file) is bound and replayed as a --file of
 # origin file, the route the old auto-detection chose for every input the rule takes — never reinterpreted.
 cap_plain_text_receipt_route() {

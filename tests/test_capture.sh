@@ -746,7 +746,7 @@ assert_eq "$(result error_class)" "unsupported" "...unsupported"
 assert_file_exists "$ARCHIVE/$(rget file-xyz '.revision').xyz" "...raw retained"
 # the extension comes from the basename: a dot in a directory name is not one (an extensionless
 # file is .bin and unsupported on the file route — named by --origin file, since a plain-text one is
-# auto-routed to the text origin, capture contracts A15; the same bytes as .md convert)
+# auto-routed to the text origin, capture contracts A14; the same bytes as .md convert)
 mkdir -p "$TEST_TMPDIR/sub.dir"
 printf 'notes without an extension\n' > "$TEST_TMPDIR/sub.dir/notes"
 run_gw --origin file --file "$TEST_TMPDIR/sub.dir/notes" --capture-id ext-1
