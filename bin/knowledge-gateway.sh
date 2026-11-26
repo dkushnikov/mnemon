@@ -1048,12 +1048,17 @@ cap_fresh() {
 
 # --resume <revision|capture_id>: the operator's explicit tool
 cap_resolve_resume() {
-  local target="$1" cid
+  local target="$1" cid rev
   if cap_receipt_exists "$target"; then
     cap_receipt_case_check "$target"
     CAPTURE_ID="$target"; CAPTURE_ID_GIVEN=true
-    if [[ "$(cap_receipt_get "$target" '.state')" == "extracted" && -f "$VAULT_PATH/Sources/$(cap_receipt_get "$target" '.resolved_to_revision // .revision')/extract.md" ]]; then
-      cap_die2 "--resume: capture $target is complete (nothing to finish)"
+    rev="$(cap_receipt_get "$target" '.resolved_to_revision // .revision')"
+    if [[ "$(cap_receipt_get "$target" '.state')" == "extracted" && -f "$VAULT_PATH/Sources/$rev/extract.md" ]]; then
+      # «complete» is an answer about a published revision too (contracts A12): the raw it claims is
+      # checked first, by presence — nothing is opened or written. Lost or changed: the replay of
+      # this capture answers (integrity-error on its receipt), never «complete»
+      cap_raw_evidence_check "$rev" presence && cap_die2 "--resume: capture $target is complete (nothing to finish)"
+      return 0
     fi
     if [[ "$(cap_receipt_get "$target" '.state')" == "bookmarked" || "$(cap_receipt_get "$target" '.request.tier // "full"')" == "bookmark" ]]; then
       cap_die2 "--resume: capture $target is a bookmark (nothing to finish) — promote it with mnemon add --url <url> (a full capture supersedes the card), or mnemon triage promote $(cap_receipt_get "$target" '.revision // ""'); an unfinished card is finished by replaying its id (mnemon add --capture-id $target)"
@@ -1061,7 +1066,22 @@ cap_resolve_resume() {
     return 0
   fi
   if [[ -d "$VAULT_PATH/Sources/$target" ]]; then
-    [[ -f "$VAULT_PATH/Sources/$target/extract.md" ]] && cap_die2 "--resume: revision $target is complete (nothing to finish)"
+    if [[ -f "$VAULT_PATH/Sources/$target/extract.md" ]]; then
+      # the same rule by the revision's name: the raw first, by presence. Lost or changed: the owner's
+      # replay answers when its receipt is in this ledger; else the folder's own claim does, under a
+      # fresh id and with no receipt written (as a duplicate's guard, contracts A12)
+      cap_raw_evidence_check "$target" presence && cap_die2 "--resume: revision $target is complete (nothing to finish)"
+      cid="$(_mnemon_yaml_literal capture_id "$VAULT_PATH/Sources/$target/source.md")"
+      if [[ -n "$cid" ]] && cap_receipt_exists "$cid"; then
+        CAPTURE_ID="$cid"; CAPTURE_ID_GIVEN=true
+        return 0
+      fi
+      cap_restore_folder_request "$target"
+      REVISION="$target"
+      CAPTURE_ID="$(cap_generate_capture_id "$RESOURCE_ID")"
+      cap_raw_guard ok presence
+      cap_die2 "--resume: revision $target is complete (nothing to finish)"
+    fi
     [[ -f "$VAULT_PATH/Sources/$target/source.md" ]] || cap_die2 "--resume: Sources/$target/ has no source.md"
     [[ "$(cap_effective_tier "$target")" == "bookmark" ]] && cap_die2 "--resume: revision $target is a bookmark (nothing to finish) — promote it: mnemon triage promote $target, or mnemon add --url <url> (a full capture supersedes the card)"
     cid="$(_mnemon_yaml_literal capture_id "$VAULT_PATH/Sources/$target/source.md")"
