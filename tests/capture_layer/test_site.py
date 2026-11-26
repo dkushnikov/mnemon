@@ -4,6 +4,8 @@ timeout, --no-render precedence, the A9 teardown), verify (modified, missing, sy
 assemble (the composite, the mnemon-site/1 report, a convert-failed page, a landing without text)."""
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -11,8 +13,8 @@ import subprocess
 import time
 import unittest
 
-from _helpers import BIN, LocalServer, PY, assert_same_keys, clean_env, expected_shapes, private_tmpdir, run_cli, tmpdir, \
-    wait_gone, write_stub
+from _helpers import BIN, LocalServer, PY, apply_env, assert_same_keys, clean_env, expected_shapes, private_tmpdir, \
+    restore_env, run_cli, tmpdir, wait_gone, write_stub
 
 from capture import proc, site
 from capture import policy as policymod
@@ -817,6 +819,38 @@ class Pacing(unittest.TestCase):
             plan = json.load(fh)
         self.assertEqual([p["url"] for p in plan["pages"] if p["include"]], [self.server.base + "/", self.server.base + "/a"])
         self.assert_paced("map", 4)
+
+
+class PacingControl(unittest.TestCase):
+    """The test-only pacing control (site.pace_s): MNEMON_TEST_SITE_PACE_S replaces PACE_S only under
+    MNEMON_TEST_HOOKS=1; without the master switch it is ignored and the warning names it; under the switch a
+    value that is not a finite number ≥ 0 keeps PACE_S."""
+
+    def pace(self, env):
+        old = apply_env(env)
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                return site.pace_s(), err.getvalue()
+        finally:
+            restore_env(old)
+
+    def test_honoured_only_under_the_master_switch(self):
+        self.assertEqual(self.pace(clean_env()), (site.PACE_S, ""), "no control: production pacing")
+        self.assertEqual(self.pace(clean_env(unpaced=True)), (0.0, ""))
+        self.assertEqual(self.pace(clean_env({"MNEMON_TEST_SITE_PACE_S": "0.25"})), (0.25, ""))
+        self.assertEqual(self.pace(clean_env({"MNEMON_TEST_SITE_PACE_S": "0"}, hooks=False)), (site.PACE_S, ""),
+                         "without MNEMON_TEST_HOOKS=1 the variable is ignored")
+        for bad in ("x", "-1", "nan", "inf", " "):
+            seconds, err = self.pace(clean_env({"MNEMON_TEST_SITE_PACE_S": bad}))
+            self.assertEqual(seconds, site.PACE_S, "%r keeps PACE_S" % bad)
+            self.assertIn("MNEMON_TEST_SITE_PACE_S=%r ignored" % bad, err)
+
+    def test_the_site_cli_names_it_without_the_master_switch(self):
+        rc, so, se = run_cli([CS, "map", "http://127.0.0.1:9/", "--json"],
+                             env=clean_env({"MNEMON_TEST_SITE_PACE_S": "0"}, hooks=False), timeout=60)
+        self.assertIn("MNEMON_TEST_SITE_PACE_S", se)
+        self.assertIn("ignored: MNEMON_TEST_HOOKS=1 is not set", se)
 
 
 class SectionAndSitemaps(unittest.TestCase):

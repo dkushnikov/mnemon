@@ -79,8 +79,11 @@ def assert_same_keys(testcase, actual: dict, fixture: dict, where: str, nullable
         testcase.assertEqual(ashape[k], ftype, "%s: %s has type %s, fixture %s" % (where, k, ashape[k], ftype))
 
 
-def clean_env(extra=None, hooks=True, port=None, rewrite=None) -> dict:
-    """The suite's environment: inherited keys and proxies cleared, the test hooks set when `hooks`."""
+def clean_env(extra=None, hooks=True, port=None, rewrite=None, unpaced=False) -> dict:
+    """The suite's environment: inherited keys and proxies cleared (every MNEMON_* variable among them), the
+    test hooks set when `hooks`. `unpaced` adds the site pacing control MNEMON_TEST_SITE_PACE_S=0 (honoured
+    only with the hooks on): for a site fixture that tests what a plan or a bundle holds, never for one that
+    tests pacing, a deadline, a budget or the watchdog."""
     env = dict(os.environ)
     for k in list(env):
         if k in ("FIRECRAWL_API_KEY", "JINA_API_KEY", "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
@@ -89,6 +92,8 @@ def clean_env(extra=None, hooks=True, port=None, rewrite=None) -> dict:
     if hooks:
         env["MNEMON_TEST_HOOKS"] = "1"
         env["MNEMON_POLICY_ALLOW_LOOPBACK"] = "1"
+    if unpaced:
+        env["MNEMON_TEST_SITE_PACE_S"] = "0"
     if rewrite:
         env["MNEMON_FETCH_URL_REWRITE"] = rewrite
     if extra:
