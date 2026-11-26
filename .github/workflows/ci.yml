@@ -1,5 +1,5 @@
-# CI — staged (2026-10-17): a lint job and the suites on two hosts. Not a required check yet:
-# that comes after a week of green runs (maintainer decision). Releases stay manual (`mnemon release`).
+# CI: a lint job and the suites on two hosts. Both are required checks on `main` (CLAUDE.md,
+# § Branch model). Releases stay manual (`mnemon release`).
 name: ci
 
 on:
@@ -61,11 +61,13 @@ jobs:
           # Pinned to an image known to carry that exact toolchain: on another image the runner
           # refuses with exit 2 ("legacy toolchain … is not available") before any suite runs —
           # move the pin deliberately, after checking /usr/bin/python3 there.
-          # --jobs 3: three suites at once (the runner keeps the table's order and gives every suite a
-          # private TMPDIR); the hosted macos-15 runner has 3 cores, ubuntu-latest 4
+          # --jobs: suites at once (the runner keeps the table's order and gives every suite a private
+          # TMPDIR). The hosted macos-15 runner has 3 cores, ubuntu-latest 4, and one suite already
+          # runs several processes at a time: 2 on macOS and 3 on ubuntu leave a core for them and for
+          # the checks that time a teardown. Raise a number only on measured wall time of this job.
           - os: macos-15
             toolchain: legacy
-            args: --legacy -k --jobs 3
+            args: --legacy -k --jobs 2
           # a current toolchain on another OS: the distribution's bash 5 and python 3
           - os: ubuntu-latest
             toolchain: current
