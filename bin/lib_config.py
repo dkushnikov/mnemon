@@ -7,6 +7,12 @@ re-implement it; they run the bash loader in a child shell and read its
 exports back. MNEMON_CONFIG / MNEMON_INSTANCE are honoured from the
 environment, exactly as for the shell tools.
 
+Resolve once per command (B7): when the environment already carries a
+resolution — MNEMON_RESOLVED and every name of EXPORTS, as the dispatcher or
+the gateway exported them — and its digest (mnemon-resolution/1, the same
+fields bin/mnemon-config.sh hashes) still matches, load_config() returns those
+values without running the loader. A path argument always runs it.
+
 Stdlib only, python3.9+.
 
     import lib_config
@@ -16,6 +22,7 @@ Stdlib only, python3.9+.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -120,6 +127,48 @@ CONFIG_KEYS = (
 # The loader only reads small files; a longer wait means a hung mount, not work.
 LOADER_TIMEOUT = 15
 
+# The environment inputs that shape the resolved values (MNEMON_RESOLUTION_INPUTS of the loader).
+RESOLUTION_INPUTS = ("HOME", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "MNEMON_CONFIG_DIR")
+RESOLUTION_SCHEMA = "mnemon-resolution/1"
+LOADER_FILE = ENGINE_ROOT / "bin" / "mnemon-config.sh"
+
+
+def resolution_digest(env) -> str | None:
+    """The mirror of `_mnemon_resolution_digest` (bin/mnemon-config.sh): NUL-terminated fields — the schema, the
+    loader file's sha256, the config file's sha256, the inputs, every export of EXPORTS in order — hashed. None
+    when the loader or the config file cannot be read."""
+    try:
+        sig = hashlib.sha256(LOADER_FILE.read_bytes()).hexdigest()
+        cfgsha = hashlib.sha256(Path(env.get("MNEMON_CONFIG_FILE") or "/nonexistent").read_bytes()).hexdigest()
+    except OSError:
+        return None
+    fields = [RESOLUTION_SCHEMA.encode(), b"loader=" + sig.encode(), b"config_sha256=" + cfgsha.encode()]
+    for name in RESOLUTION_INPUTS + EXPORTS:
+        fields.append(name.encode() + b"=" + os.fsencode(env.get(name, "")))
+    return hashlib.sha256(b"".join(f + b"\0" for f in fields)).hexdigest()
+
+
+def inherited_resolution(env) -> dict[str, str] | None:
+    """The resolution the environment carries, when it can be reused as it is (the loader's
+    `_mnemon_resolution_reusable`): MNEMON_RESOLVED set, every name of EXPORTS present, the digest equal."""
+    stamp = env.get("MNEMON_RESOLVED")
+    if not stamp or any(name not in env for name in EXPORTS):
+        return None
+    if resolution_digest(env) != stamp:
+        return None
+    return {name: env[name] for name in EXPORTS}
+
+
+def _trace(env, what: str) -> None:
+    """The loader's test hook (MNEMON_TEST_HOOKS=1 + MNEMON_TEST_LOADER_LOG): one line per load_config()."""
+    log = env.get("MNEMON_TEST_LOADER_LOG", "")
+    if env.get("MNEMON_TEST_HOOKS", "") == "1" and log:
+        try:
+            with open(log, "a", encoding="utf-8") as fh:
+                fh.write("%s %d py\n" % (what, os.getpid()))
+        except OSError:
+            pass
+
 
 class ConfigError(RuntimeError):
     """The bash loader refused: the message is its stderr, ready to print."""
@@ -131,7 +180,13 @@ def load_config(config_path: str | None = None, env: dict | None = None) -> dict
     Warnings the loader prints (legacy config locations) are forwarded to
     stderr. Raises ConfigError with the loader's message on failure.
     """
-    child_env = dict(os.environ if env is None else env)
+    source_env = os.environ if env is None else env
+    if not config_path:
+        reused = inherited_resolution(source_env)
+        if reused is not None:
+            _trace(source_env, "reuse")
+            return reused
+    child_env = dict(source_env)
     child_env["MNEMON_ROOT"] = str(ENGINE_ROOT)
     script = (
         'source "$MNEMON_ROOT/bin/mnemon-config.sh" && load_config "$@" && '

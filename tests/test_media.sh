@@ -331,6 +331,14 @@ assert m.classify_wall(tb) is None, m.classify_wall(tb)
 # the age gate is a login wall (D6), never retryable
 assert m.classify_wall("ERROR: [youtube] x: Sign in to confirm your age. This video may be inappropriate for some users.") == "login"
 assert m._wall_line(ytdlp).startswith("ERROR: [youtube] abc123xyz00: Sign in to confirm"), m._wall_line(ytdlp)
+# error_line (capture layer A18): the wall's matched line; else the FIRST ERROR line; else the last line; "" for nothing
+assert m.error_line(ytdlp).startswith("ERROR: [youtube] abc123xyz00: Sign in to confirm"), m.error_line(ytdlp)
+assert m.error_line(mixed).startswith("ERROR: [youtube] abc123xyz00: Private video"), m.error_line(mixed)
+assert m.error_line("ERROR: first\nERROR: second\nWARNING: after") == "ERROR: first"
+assert m.error_line("WARNING: HTTP Error 429\nERROR: [youtube] x: Sign in to confirm you're not a bot.") == "ERROR: [youtube] x: Sign in to confirm you're not a bot."
+assert m.error_line(tb) == "ERROR: [youtube] abc: Video unavailable", m.error_line(tb)
+assert m.error_line("Traceback (most recent call last):\n  File \"x\"\nModuleNotFoundError: no yt_dlp") == "ModuleNotFoundError: no yt_dlp"
+assert m.error_line(b"") == "" and m.error_line(None) == ""
 PY
 stub_reset
 DW="$TEST_TMPDIR/out-wall"; mkdir -p "$DW"; printf 'keep me\n' > "$DW/keep.txt"

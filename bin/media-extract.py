@@ -294,6 +294,22 @@ def _wall_line(data):
     return cands[-1][0] if cands else ""
 
 
+def error_line(data):
+    """The one line that names a tool's failure (capture layer A18): the line the wall classifier matched when it
+    names a wall (`_wall_line`, inside an ERROR block when there is one); else the first line of the first `ERROR:`
+    block — the tool's own terminal error, never a WARNING printed before or after it, never the last ERROR by
+    position; else the last non-empty line (a tool that printed no prefixed ERROR — a traceback's exception line);
+    empty for no output."""
+    text = _text_of(data)
+    if classify_wall(text):
+        return _wall_line(text)
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    for s in lines:
+        if s.split(":", 1)[0].upper() == "ERROR":
+            return s
+    return lines[-1] if lines else ""
+
+
 def fail(stage, message):
     """Print the error and raise Failed (main() writes error.json under --out-dir and exits 1)."""
     print(f"ERROR: {message}", file=sys.stderr)
