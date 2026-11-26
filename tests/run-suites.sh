@@ -47,7 +47,9 @@
 #
 # Exit codes: 0 every suite passed · 1 a suite failed or was not run · 2 usage error, no suites,
 # the legacy toolchain is not available, or a live runner owns the logs directory · 130
-# interrupted (the running suites are stopped).
+# interrupted with --jobs above 1 (INT or TERM: the running suites are stopped). With one job the
+# runner traps no signal, like the sequential runner before it: SIGTERM ends it with 143 and
+# removes its lock, and the suite it was running goes on.
 # Runs under bash 3.2.
 
 set -u
