@@ -201,6 +201,35 @@ elif cmd == "publish-dir":
         for f in files:
             fsync_path(os.path.join(root, f))
     fsync_dir(a[0]); os.rename(a[0], a[1]); fsync_dir(os.path.dirname(a[1]))
+elif cmd == "fresh-rename":
+    # <staged> <fresh> <final>: a fresh copy of the staged raw (a file, or a bundle tree), fsynced,
+    # renamed to <final> at once — the name <fresh> exists only for the copy (capture contracts
+    # A12). Exit 0 only when <final> is in place; on any failure <fresh> is removed, <staged> stays.
+    src, fresh, final = a
+    try:
+        if os.path.lexists(final) or os.path.lexists(fresh):
+            sys.exit(1)
+        if os.path.isdir(src):
+            shutil.copytree(src, fresh, symlinks=True)
+            for root, dirs, files in os.walk(fresh):
+                for f in files:
+                    fsync_path(os.path.join(root, f))
+                fsync_dir(root)
+        else:
+            with open(src, "rb") as s, open(fresh, "wb") as d:
+                shutil.copyfileobj(s, d); d.flush(); os.fsync(d.fileno())
+            shutil.copymode(src, fresh)
+        os.rename(fresh, final)
+    except OSError:
+        if os.path.isdir(fresh) and not os.path.islink(fresh):
+            shutil.rmtree(fresh, ignore_errors=True)
+        elif os.path.lexists(fresh):
+            try:
+                os.unlink(fresh)
+            except OSError:
+                pass
+        sys.exit(1)
+    fsync_dir(os.path.dirname(final))
 elif cmd == "write-json":
     data = sys.stdin.buffer.read()
     json.loads(data.decode("utf-8"))
@@ -1254,23 +1283,41 @@ cap_cleanup_attempts() {   # <capture_id> <keep_locator true|false>
 # site bundle directories (.<revision>.site.staging-<pid>/) — whose receipt is final or absent (a
 # non-final receipt names its staged path and is handled by the recovery table; a directory is
 # removed only when no non-final receipt owns it, §12 A5). The archive's staged sidecars
-# (.<revision>.report.json.staging-*) are plain files here and are swept the same way.
+# (.<revision>.report.json.staging-*) are plain files here and are swept the same way. A staged
+# copy whose published name is missing and that carries the hash a receipt recorded for that name
+# is the published raw renamed back by the file system (contracts A12): it is renamed into place,
+# and kept when that fails — never deleted.
 cap_cleanup_staging() {
-  local d f base rev keep owned
+  local d f rev map final line sha cid tab=$'\t'
+  local -a staged
   shopt -s nullglob
   for d in "$VAULT_PATH/Sources"/.*.staging-*; do
     [[ -d "$d" ]] && rm -rf "$d"
   done
-  owned="$(for rev in "$CAPTURES_DIR"/*.json; do jq -r 'select(.state != "extracted" and .state != "bookmarked") | (.raw_staged_path // "") | rtrimstr("/")' "$rev" 2>/dev/null; done)"
-  for f in "${ARCHIVE_DIR:-/nonexistent}"/.*.staging-* "$STATE_RAW_DIR"/.*.staging-*; do
-    [[ -e "$f" ]] || continue
-    keep=false
-    if printf '%s\n' "$owned" | grep -qxF -- "${f%/}"; then keep=true; fi
-    if ! $keep; then
-      if [[ -d "$f" ]]; then rm -rf "$f"; else rm -f "$f"; fi
-    fi
-  done
+  staged=("${ARCHIVE_DIR:-/nonexistent}"/.*.staging-* "$STATE_RAW_DIR"/.*.staging-*)
   shopt -u nullglob
+  [[ ${#staged[@]} -gt 0 ]] || return 0
+  # one jq per receipt: the staged path a non-final receipt owns (O), every recorded raw (R)
+  map="$(shopt -s nullglob; for rev in "$CAPTURES_DIR"/*.json; do jq -r '
+      (select(.state != "extracted" and .state != "bookmarked") | "O\t" + ((.raw_staged_path // "") | rtrimstr("/"))),
+      (select((.raw_path | type) == "string" and (.raw_sha256 | type) == "string")
+        | "R\t" + (.raw_path | rtrimstr("/")) + "\t" + .raw_sha256 + "\t" + (.capture_id // ""))' "$rev" 2>/dev/null; done)"
+  for f in "${staged[@]}"; do
+    [[ -e "$f" ]] || continue
+    f="${f%/}"
+    grep -qxF -- "O$tab$f" <<< "$map" && continue
+    final="$(basename "$f")"; final="${final#.}"; final="$(dirname "$f")/${final%.staging-*}"
+    if [[ ! -e "$final" ]]; then
+      line="$(awk -F'\t' -v p="$final" '$1 == "R" && $2 == p { print; exit }' <<< "$map")"
+      if [[ -n "$line" ]]; then
+        sha="$(printf '%s' "$line" | cut -f3)"; cid="$(printf '%s' "$line" | cut -f4)"
+        cap_raw_heal "$final" "$sha" "$cid" || true
+        [[ ! -e "$final" && -e "$f" ]] && cap_raw_carries "$f" "$sha" && continue
+      fi
+    fi
+    [[ -e "$f" ]] || continue
+    if [[ -d "$f" ]]; then rm -rf "$f"; else rm -f "$f"; fi
+  done
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -1356,7 +1403,13 @@ cap_raw_commit() {
       FAIL_MSG="a file already exists at $RAW_PATH with different content (no receipt accounts for it)"
       return 1
     fi
+  elif cap_py fresh-rename "$RAW_STAGED" "$RAW_STAGED-r" "$RAW_PATH"; then
+    # the published name comes from a fresh copy renamed at once, so no File Provider sees a
+    # long-lived staged name that it could later restore over the rename (contracts A12); the
+    # staged original, now a duplicate of the published raw, goes
+    rm -rf "$RAW_STAGED"
   else
+    # the fresh copy could not be made (no room, unwritable): the staged original is renamed itself
     if [[ -d "$RAW_STAGED" ]]; then
       if ! cap_py publish-dir "$RAW_STAGED" "$RAW_PATH"; then
         FAIL_CLASS=fetch
@@ -1373,6 +1426,123 @@ cap_raw_commit() {
   cap_receipt_update "$CAPTURE_ID" '.raw_published=true | .raw_staged_path=null | .raw_kind=$k' --arg k "${RAW_KIND:-none}"
   cap_crash_at after-raw-published
   return 0
+}
+
+# ---------------------------------------------------------------------------------------------
+# The published raw as evidence (capture contracts A12). A File Provider folder (iCloud Drive,
+# observed 2026-11-26) can rename a published raw back to the staged name it had while the
+# provider uploaded it: the copy keeps the recorded hash under `.<name>.staging-<pid>`. The
+# engine renames such a copy into place again under the lock, never deletes it as stale staging,
+# and verifies the raw before the source is published and before a capture reports a revision.
+# ---------------------------------------------------------------------------------------------
+cap_raw_carries() {   # <path> <sha256>: a file whose bytes, or a bundle whose manifest and members, hash to it
+  if [[ -d "$1" ]]; then cap_bundle_verify "$1" "$2"; else [[ -f "$1" && "$(cap_sha256 "$1")" == "$2" ]]; fi
+}
+
+# cap_raw_heal <raw_path> <raw_sha256> [capture_id] → 0 when a staged copy that carries the hash
+# was renamed into place (a NOTE on stderr, `raw_restored` appended in the receipt); 1 when
+# <raw_path> exists or no copy was restored. CAP_HEAL_FOUND names a copy that carries the hash
+# even when its rename failed.
+cap_raw_heal() {
+  local final="$1" sha="$2" cid="${3:-}" s how
+  CAP_HEAL_FOUND=""
+  [[ -n "$final" && -n "$sha" && ! -e "$final" ]] || return 1
+  for s in "$(dirname "$final")/.$(basename "$final").staging-"*; do
+    [[ -e "$s" ]] && cap_raw_carries "$s" "$sha" || continue
+    CAP_HEAL_FOUND="$s"
+    if [[ -d "$s" ]]; then how=publish-dir; else how=fsync-rename; fi
+    cap_py "$how" "$s" "$final" || continue
+    echo "NOTE: restored the published raw $final from $(basename "$s") (the file system had renamed it back to its staged name)" >&2
+    if [[ -n "$cid" ]] && cap_receipt_exists "$cid"; then
+      cap_receipt_update "$cid" '.raw_restored = ((.raw_restored // []) + [{at: $now, from: $f}])' --arg f "$(basename "$s")"
+    fi
+    return 0
+  done
+  return 1
+}
+
+# cap_raw_evidence_check <revision> [full | presence] → 0 when the revision claims no raw, or its
+# raw verifies (after a heal when it had been renamed back); 1 with VERIFY_CLASS raw-missing |
+# raw-mismatch and VERIFY_MSG. `full` (default) hashes the raw (a bundle: capture-site.py verify);
+# `presence` — the answers that write nothing (a duplicate, the replay of a duplicate alias) —
+# checks that it exists with its recorded size (a bundle: its manifest), so a file that a synced
+# folder evicted is not downloaded to answer. The reference: this run's RAW_STORE /
+# RAW_PATH / RAW_SHA256 / RAW_BYTES (a fresh capture, or a receipt restored for a replay); else
+# the receipt of the folder's capture_id; else the folder's own claim (capture.raw_store archive,
+# `archive:` under this config's archive_dir, capture.raw_sha256 / raw_bytes). A state raw without
+# its receipt, a legacy folder or a config without archive_dir has nothing to compare with (0).
+# A receipt's archive path that moved with the archive_dir resolves by its name under it.
+cap_raw_evidence_check() {
+  local rev="$1" mode="${2:-full}" f="$VAULT_PATH/Sources/$1/source.md" store="${RAW_STORE:-none}" path="${RAW_PATH:-}" sha="${RAW_SHA256:-}"
+  local bytes="${RAW_BYTES:-}" ref="${CAPTURE_ID:-}" cid name
+  VERIFY_CLASS=""; VERIFY_MSG=""; CAP_VERIFY_NOTE=""
+  if [[ "$store" == none || -z "$path" || -z "$sha" ]]; then
+    store=none; path=""; sha=""; bytes=""; ref=""
+    if [[ -f "$f" ]]; then
+      cid="$(_mnemon_yaml_literal capture_id "$f")"
+      if [[ -n "$cid" ]] && cap_receipt_exists "$cid"; then
+        store="$(cap_receipt_get "$cid" '.raw_store // "none"')"
+        path="$(cap_receipt_get "$cid" '.raw_path // ""')"
+        sha="$(cap_receipt_get "$cid" '.raw_sha256 // ""')"
+        bytes="$(cap_receipt_get "$cid" '.raw_bytes // ""')"
+        ref="$cid"
+      fi
+      if [[ "$store" == none || -z "$path" || -z "$sha" ]] && [[ "$(cap_py nested "$f" capture raw_store)" == archive && -n "${ARCHIVE_DIR:-}" ]]; then
+        name="$(_mnemon_yaml_literal archive "$f")"
+        store=archive; sha="$(cap_py nested "$f" capture raw_sha256)"; bytes="$(cap_py nested "$f" capture raw_bytes)"; path=""
+        [[ -n "$name" && "$name" != */* ]] && path="$ARCHIVE_DIR/$name"
+      fi
+    fi
+    [[ "$store" != none && -n "$path" && -n "$sha" ]] || return 0
+  fi
+  if [[ ! -e "$path" && "$store" == archive && -n "${ARCHIVE_DIR:-}" && -e "$ARCHIVE_DIR/$(basename "$path")" ]]; then
+    path="$ARCHIVE_DIR/$(basename "$path")"
+  fi
+  if [[ -e "$path" ]]; then
+    if [[ "$mode" == presence ]]; then
+      if [[ -d "$path" ]]; then [[ -f "$path/manifest.json" ]] && return 0
+      elif [[ -f "$path" ]] && { [[ ! "$bytes" =~ ^[0-9]+$ ]] || [[ "$(cap_bytes "$path")" == "$bytes" ]]; }; then return 0; fi
+      CAP_VERIFY_NOTE="not the recorded size or shape"
+    elif cap_raw_carries "$path" "$sha"; then
+      return 0
+    fi
+    VERIFY_CLASS=raw-mismatch
+    VERIFY_MSG="the raw $path recorded for Sources/$rev/ no longer matches its record${CAP_VERIFY_NOTE:+ ($CAP_VERIFY_NOTE)}; recorded raw evidence is never refetched (operator)"
+    return 1
+  fi
+  cap_raw_heal "$path" "$sha" "$ref" && return 0
+  VERIFY_CLASS=raw-missing
+  if [[ -n "$CAP_HEAL_FOUND" ]]; then
+    VERIFY_MSG="the raw $path recorded for Sources/$rev/ is missing; the staged copy $CAP_HEAL_FOUND carries its hash but could not be renamed into place (operator)"
+  else
+    VERIFY_MSG="the raw $path recorded for Sources/$rev/ is missing and no staged copy carries its hash; recorded raw evidence is never refetched (operator)"
+  fi
+  return 1
+}
+
+# The published-evidence guard of every path that reports a published revision (contracts A12):
+# the raw verifies, or the capture ends integrity-error/raw-missing | raw-mismatch (exit 1, the
+# revision kept).
+cap_raw_guard() {   # <extract state for the RESULT line: ok | missing> [full | presence]
+  [[ -n "${REVISION:-}" ]] || return 0
+  cap_raw_evidence_check "$REVISION" "${2:-full}" && return 0
+  cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG" "${1:-none}"
+}
+
+# Raw-loss injection for the guard tests (contracts A12), only with MNEMON_TEST_HOOKS=1:
+# MNEMON_TEST_RAW_LOSS_AT=<after-convert | after-source-published | after-extract-published> and
+# MNEMON_TEST_RAW_LOSS=delete (default) | revert (the published name renamed back to a staged
+# name, as the File Provider does) | stash (moved to <raw>.stash, where an operator can restore
+# it from) | tamper (the bytes change).
+cap_raw_loss_at() {
+  [[ "${MNEMON_TEST_HOOKS:-}" == "1" && "${MNEMON_TEST_RAW_LOSS_AT:-}" == "$1" && -n "${RAW_PATH:-}" && -e "${RAW_PATH:-}" ]] || return 0
+  case "${MNEMON_TEST_RAW_LOSS:-delete}" in
+    revert) mv "$RAW_PATH" "$(dirname "$RAW_PATH")/.$(basename "$RAW_PATH").staging-$$" ;;
+    stash)  mv "$RAW_PATH" "$RAW_PATH.stash" ;;
+    tamper) if [[ -d "$RAW_PATH" ]]; then printf 'x' >> "$RAW_PATH/manifest.json"; else printf 'x' >> "$RAW_PATH"; fi ;;
+    *)      rm -rf "$RAW_PATH" ;;
+  esac
+  echo "mnemon: test raw loss (${MNEMON_TEST_RAW_LOSS:-delete}) at $1" >&2
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -2547,6 +2717,7 @@ cap_sidecar_recover() {
 # failure here, never a published revision that fails verification later).
 cap_publish_source() {
   local staged="$VAULT_PATH/Sources/.$REVISION.staging-$$" final="$VAULT_PATH/Sources/$REVISION"
+  cap_raw_loss_at after-convert
   if ! mkdir -p "$VAULT_PATH/Sources" || ! { rm -rf "$staged" && mkdir -p "$staged"; }; then
     FAIL_CLASS=convert; FAIL_MSG="could not create the staging directory $staged (unwritable Sources/?)"; return 1
   fi
@@ -2556,11 +2727,21 @@ cap_publish_source() {
     FAIL_CLASS=convert; FAIL_MSG="the staged source.md does not reproduce the capture-text (disk full or unwritable?)"; return 1
   fi
   cap_crash_at after-source-staged
+  # the retained raw is verified (and restored when it was renamed back) immediately before the
+  # source names it (contracts A12): a raw that is gone or changed fails the capture, nothing
+  # published
+  if [[ "${RAW_STORE:-none}" != none ]] && ! cap_raw_evidence_check "$REVISION"; then
+    rm -rf "$staged"
+    FAIL_CLASS=evidence-mismatch; FAIL_RETRYABLE=false; FAIL_STAGE=""
+    FAIL_MSG="before the source publication: $VERIFY_MSG"
+    return 1
+  fi
   cap_report_freeze
   if ! cap_py publish-dir "$staged" "$final"; then
     FAIL_CLASS=convert; FAIL_MSG="could not publish Sources/$REVISION/ (the rename of $staged failed)"; return 1
   fi
   cap_crash_at after-source-published
+  cap_raw_loss_at after-source-published
   cap_receipt_update "$CAPTURE_ID" '.state="source-published" | .source_published=true'
   [[ "${REPORT_STATUS:-}" == "pending" ]] && cap_sidecar_publish
   [[ "${REPORT_STATUS:-}" == "conflict" ]] && { REPORT_STATUS=failed; echo "WARNING: a different sidecar already sits at $ARCHIVE_DIR/$REVISION.report.json (report-conflict); the receipt keeps the frozen report" >&2; }
@@ -2688,11 +2869,12 @@ cap_retryable_of() {   # <class> → true|false
 
 # Integrity error: the receipt (and the alias that delegated to it) is stored as integrity-error,
 # RESULT, exit 1; nothing is retried automatically (§12 A3).
-cap_integrity_exit() {   # <class> <message>  (extract=none: the contract fixtures' shape)
+cap_integrity_exit() {   # <class> <message> [extract]  (extract=none: the contract fixtures' shape;
+  # a raw class, contracts A12, reports the extract as the files hold it)
   echo "ERROR: integrity: $2" >&2
   cap_receipt_exists "$CAPTURE_ID" && cap_receipt_fail "$CAPTURE_ID" integrity-error "$1" false "$2"
   [[ -n "${ALIAS_ID:-}" ]] && cap_receipt_fail "$ALIAS_ID" integrity-error "$1" false "$2"
-  cap_result integrity-error none "$1" false "${REPLAYED:-false}"
+  cap_result integrity-error "${3:-none}" "$1" false "${REPLAYED:-false}"
   exit 1
 }
 
@@ -3137,6 +3319,12 @@ cap_alias_account() {   # <state> [extract_sha256]  (an attempt is counted only 
 # The common tail of a successful extraction: receipt extracted → verify → reindex → cleanup → RESULT.
 cap_finish_extracted() {   # <replayed true|false> <keep_locator true|false>
   cap_crash_at after-extract-published
+  cap_raw_loss_at after-extract-published
+  # the raw the revision names is still there before the receipt is final (contracts A12)
+  if ! cap_raw_evidence_check "$REVISION"; then
+    cap_receipt_update "$CAPTURE_ID" '.extract_sha256=$e' --arg e "$EXTRACT_SHA256"
+    cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG" ok
+  fi
   cap_receipt_update "$CAPTURE_ID" '.state="extracted" | .extract_sha256=$e | .finalized_at=$now | .error_class=null | .error=null | .retryable=null' --arg e "$EXTRACT_SHA256"
   cap_alias_account extracted "$EXTRACT_SHA256"
   cap_reindex
@@ -3189,6 +3377,9 @@ cap_finish_bookmarked() {   # <replayed true|false> <keep_locator true|false>
 
 cap_finish_extract_failed() {   # <replayed>
   local retry
+  # a published revision without its raw ends as an integrity error, not as a retryable capture
+  # (contracts A12)
+  cap_raw_guard missing
   retry="$(cap_retryable_of "$EXTRACT_CLASS")"
   cap_receipt_fail "$CAPTURE_ID" extract-failed "$EXTRACT_CLASS" "$retry" "$EXTRACT_MSG"
   if [[ -n "${ALIAS_ID:-}" ]]; then
