@@ -1912,7 +1912,9 @@ case "$cmd" in
               _reject_post_command_selectors "$@"
               case "${1:-}" in -h|--help) exec python3 "$BIN_DIR/text-mismatch-audit.py" --help ;; esac
               _resolve_or_die
-              exec python3 "$BIN_DIR/text-mismatch-audit.py" --config "$MNEMON_CONFIG_FILE" "$@"
+              # the resolution the dispatcher exported is handed down (MNEMON_RESOLVED), as for the archive
+              # audit below: no --config, no second load; --config / --instance before the command still select
+              exec python3 "$BIN_DIR/text-mismatch-audit.py" "$@"
             fi
             _resolve_or_die
             # --canonical (capture layer §3.10, D5): groups Sources/*/source.md by the v1 canonical form of

@@ -39,6 +39,12 @@ loads() {
   (cd "$TEST_TMPDIR/cwd" && MNEMON_TEST_HOOKS=1 MNEMON_TEST_LOADER_LOG="$LOG" "$@" >"$TEST_TMPDIR/out" 2>"$TEST_TMPDIR/err") || true
   printf '%s %s' "$(grep -c '^full ' "$LOG" || true)" "$(grep -c '^reuse ' "$LOG" || true)"
 }
+# audited_vault: the vault the last `audit text-mismatch --json` run (loads) reports, or "-" when it printed no document
+audited_vault() { python3 -c 'import json, sys
+try:
+    print(json.load(open(sys.argv[1]))["vault"])
+except Exception:
+    print("-")' "$TEST_TMPDIR/out"; }
 # resolved_env <instance>: the environment the dispatcher hands to its command, as `export NAME='VALUE'` lines
 resolved_env() { (cd "$TEST_TMPDIR/cwd" && bash -c 'source "$1/bin/mnemon-config.sh"; export MNEMON_INSTANCE="$2"; unset MNEMON_CONFIG; load_config >/dev/null; for v in MNEMON_RESOLVED $MNEMON_EXPORT_NAMES; do printf "export %s='"'"'%s'"'"'\n" "$v" "${!v}"; done' _ "$MNEMON_ROOT" "$1"); }
 
@@ -56,6 +62,8 @@ assert_eq "$(loads "$M" doctor)" "1 0" "mnemon doctor: one load"
 assert_contains "$(cat "$TEST_TMPDIR/out")" " fence — claude 9.9.9-stub" "...the doctor ran the stub claude, never a real one"
 assert_contains "$(cat "$TEST_TMPDIR/out")" " media-tools — yt-dlp 2026.11.01" "...and the stub yt-dlp"
 assert_eq "$(loads "$M" audit --cutoff 2026-01-01)" "1 1" "mnemon audit: the dispatcher loads, archive-audit.py reuses (no --config handed down)"
+assert_eq "$(loads "$M" audit text-mismatch --json) $(audited_vault)" "1 1 $TEST_TMPDIR/va" "mnemon audit text-mismatch: the dispatcher loads, text-mismatch-audit.py reuses (no --config handed down) — the default instance's vault"
+assert_eq "$(grep '^reuse ' "$LOG" | awk '{print $3}')" "py" "...the reuse is the audit's (lib_config)"
 assert_eq "$(loads "$M" status)" "1 1" "mnemon status: the dispatcher loads, the gateway's status reuses"
 
 echo "--- equivalence with the two-pass result ---"
@@ -87,6 +95,10 @@ assert_eq "$(loads "$M" --instance beta config get vault_path) $(cat "$TEST_TMPD
 assert_eq "$(loads "$M" --config "$CFG_DIR/instances/beta.yaml" config get vault_path) $(cat "$TEST_TMPDIR/out")" "1 0 $TEST_TMPDIR/vb" "--config beta.yaml: loaded, beta's vault"
 assert_eq "$(loads "$M" --config "$CFG_DIR/instances/alpha.yaml" config get vault_path) $(cat "$TEST_TMPDIR/out")" "1 0 $TEST_TMPDIR/va" "--config naming the very file: an explicit selection is loaded too"
 assert_eq "$(loads "$GW" source-add --instance beta --origin text --title T --dry-run) $(grep '^Vault: ' "$TEST_TMPDIR/out" | cut -d' ' -f2)" "1 0 $TEST_TMPDIR/vb" "the gateway's own --instance beta: loaded, beta's vault"
+assert_eq "$(loads "$M" audit text-mismatch --json) $(audited_vault)" "0 2 $TEST_TMPDIR/va" "audit text-mismatch, inherited and unchanged: the dispatcher and the audit both reuse — alpha's vault"
+assert_eq "$(loads "$M" --instance beta audit text-mismatch --json) $(audited_vault)" "1 1 $TEST_TMPDIR/vb" "--instance beta audit text-mismatch: the dispatcher loads beta, the audit reuses it — beta's vault"
+assert_eq "$(loads "$M" --config "$CFG_DIR/instances/beta.yaml" audit text-mismatch --json) $(audited_vault)" "1 1 $TEST_TMPDIR/vb" "--config beta.yaml audit text-mismatch: the dispatcher loads beta, the audit reuses it — beta's vault"
+assert_eq "$(loads "$M" audit text-mismatch --config "$CFG_DIR/instances/beta.yaml") $(grep -c -- '--config belongs before the command' "$TEST_TMPDIR/err")" "0 0 1" "a selector after the subcommand is still refused, before any load"
 
 echo "--- a direct entry point without the dispatcher ---"
 unset MNEMON_RESOLVED
