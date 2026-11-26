@@ -60,7 +60,8 @@ class SiteBase(unittest.TestCase):
         cls.stubs = os.path.join(cls.work, "stubs")
         os.makedirs(cls.stubs)
         cls.render_fail = write_stub(cls.stubs, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
-        cls.env = clean_env({"MNEMON_FETCH_URL_REWRITE": "https://raw.githubusercontent.com=%s/gh" % cls.server.base})
+        # structure and content, not pacing: the maps and the bundle run without the 1 s interval (Pacing holds it)
+        cls.env = clean_env({"MNEMON_FETCH_URL_REWRITE": "https://raw.githubusercontent.com=%s/gh" % cls.server.base}, unpaced=True)
         cls.env["RENDER_URL_CMD"] = cls.render_fail
         cls.plan_path = os.path.join(cls.work, "plan.json")
         rc, so, se = run_cli([CS, "map", cls.server.base + "/", "--out", cls.plan_path, "--max-pages", "13",
@@ -313,7 +314,8 @@ class RobotsPerOrigin(unittest.TestCase):
         self.server = LocalServer()
         b = self.server.base
         self.work = tmpdir("mnemon-origin-")
-        self.env = clean_env({"MNEMON_FETCH_URL_REWRITE": "https://docs.example.test=%s/docs-host;https://example.test=%s" % (b, b)})
+        self.env = clean_env({"MNEMON_FETCH_URL_REWRITE": "https://docs.example.test=%s/docs-host;https://example.test=%s" % (b, b)},
+                             unpaced=True)
         self.env["RENDER_URL_CMD"] = write_stub(self.work, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
         links = '<a href="/search">s</a> <a href="/search?q=x">q</a> <a href="https://docs.example.test/guide">g</a>'
         self.server.add("/", page("Landing", "<nav>%s</nav>" % links))
@@ -440,7 +442,7 @@ class MapCli(unittest.TestCase):
         try:
             server.add("/", page("Landing", '<a href="/product">p</a>'))
             server.add("/product", page("Product"))
-            env = clean_env()
+            env = clean_env(unpaced=True)
             env["RENDER_URL_CMD"] = write_stub(work, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
             tmp = private_tmpdir(self, work, env)
             rc, so, se = run_cli([CS, "map", server.base + "/", "--json"], env=env, timeout=120)
@@ -549,7 +551,9 @@ class Bundle(SiteBase):
         self.assertEqual(sum(1 for p in self.manifest["pages"]), sum(1 for p in self.plan["pages"] if p["include"]))
         self.assertTrue(all(p["disposition"] in ("captured", "fetch-failed", "skipped-timeout") for p in self.manifest["pages"]))
 
-    def test_requests_paced_per_host(self):
+    def test_bundle_requests_reach_the_server(self):
+        """The request count this fixture held as `test_requests_paced_per_host`; the fixture runs without
+        pacing now, and the pacing itself is asserted by Pacing, with the production interval."""
         reqs = self.server.requests()
         self.assertGreaterEqual(len(reqs), 8)
 
@@ -649,11 +653,17 @@ class Bundle(SiteBase):
 
 
 class BundleLoop(unittest.TestCase):
+    """The loop's dispositions and its deadline. The site-timeout cases keep the production pacing (their
+    deadlines count it); the cases that test what the bundle holds call `unpaced()`."""
+
     def setUp(self):
         self.server = LocalServer()
         self.work = tmpdir("mnemon-loop-")
         self.env = clean_env()
         self.env["RENDER_URL_CMD"] = write_stub(self.work, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
+
+    def unpaced(self):
+        self.env["MNEMON_TEST_SITE_PACE_S"] = "0"
 
     def tearDown(self):
         self.server.close()
@@ -711,6 +721,7 @@ class BundleLoop(unittest.TestCase):
         self.assertEqual(so.strip(), "")
 
     def test_no_render_prohibits_a_plan_forced_render(self):
+        self.unpaced()
         marker = os.path.join(self.work, "rendered")
         self.env["RENDER_URL_CMD"] = write_stub(self.work, "render-mark.sh", "#!/usr/bin/env bash\ntouch %s\nprintf '%s'\n" % (marker, page("Rendered").replace("'", "")))
         self.server.add("/", page("Landing"))
@@ -727,6 +738,7 @@ class BundleLoop(unittest.TestCase):
         self.assertEqual(manifest["pages"][1]["raw_kind"], "response")
 
     def test_hop_rejections_off_site_and_robots(self):
+        self.unpaced()
         self.server.add("/", page("Landing"))
         self.server.add("/robots.txt", "User-agent: *\nDisallow: /private\n", content_type="text/plain")
         self.server.add("/away", "", status=302, headers=[("Location", "https://other.example/x")])
@@ -764,7 +776,9 @@ class Pacing(unittest.TestCase):
     The local server stamps every request on arrival; the checks are lower bounds only, so a loaded machine
     cannot break them: load makes a gap longer, and the one way a gap seen by the server is shorter than the
     client's interval is the latency between the client's pacing stamp and the server's arrival stamp of the
-    earlier request (SKEW_S). Without pacing these local gaps are milliseconds."""
+    earlier request (SKEW_S). Without pacing these local gaps are milliseconds. The fixtures that test what a
+    plan or a bundle holds run with the test-only control MNEMON_TEST_SITE_PACE_S=0 (`clean_env(unpaced=True)`,
+    `BundleLoop.unpaced`); this class, Watchdog and the site-timeout cases keep the production interval."""
 
     SKEW_S = 0.25
 
@@ -861,7 +875,7 @@ class SectionAndSitemaps(unittest.TestCase):
         self.server = LocalServer()
         b = self.server.base
         self.work = tmpdir("mnemon-section-")
-        self.env = clean_env()
+        self.env = clean_env(unpaced=True)     # discovery, roles and the cap, not pacing (test_sitemap_budget runs in process)
         self.env["RENDER_URL_CMD"] = write_stub(self.work, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
         links = " ".join('<a href="%s">%s</a>' % (h, h) for h in ["/help/air/intro.html", "/products/p1/", "/store/", "/pricing", "/blog/post-1"])
         self.server.add("/help/air/landing.html", page("Air docs", "<nav>%s</nav>" % links))
