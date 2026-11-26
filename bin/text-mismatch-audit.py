@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import math
 import os
 import shutil
 import sys
@@ -303,6 +304,20 @@ def convert_raw(path: str, rec: dict, timeout: float, work: str, archive_dir: Op
     return Converted(None, None, None, NO_CONVERTER, "no read-only converter for %s raws" % (ext or "extension-less"), None)
 
 
+def raw_acquisition(path: str, thin_words: int) -> Optional[str]:
+    """The acquisition classification of an HTML raw (§3.4, the rendered row: no status), from at most the
+    first CLASSIFY_MAX_BYTES — what the raw is (`ok`, `thin`, `js-shell`, `bot-wall`, `login`, …). A mismatch
+    over a raw that is a wall or a shell says more about the raw than about the body."""
+    if os.path.isdir(path) or os.path.splitext(path)[1].lower() not in HTML_EXTS:
+        return None
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(check.CLASSIFY_MAX_BYTES)
+    except OSError:
+        return None
+    return check.acquisition(None, {}, head, thin_words=thin_words).outcome
+
+
 def titles_of(rec: dict, conv_title: Optional[str]) -> List[str]:
     src = rec.get("src") or {}
     return [t for t in (src.get("title"), src.get("video_title"), conv_title) if t]
@@ -310,7 +325,7 @@ def titles_of(rec: dict, conv_title: Optional[str]) -> List[str]:
 
 def new_result(rec: dict, cited: set) -> dict:
     return {"revision": rec["name"], "class": None, "detail": None, "raw": None, "raw_store": None,
-            "converter": None, "eligible_lines": None, "not_found": None, "share": None, "samples": [],
+            "converter": None, "raw_acquisition": None, "eligible_lines": None, "not_found": None, "share": None, "samples": [],
             "cited": rec["name"] in cited, "current": bool(rec.get("current")),
             "completeness": rec.get("completeness"), "source_type": rec.get("source_type"),
             "source_words": rec.get("body_words"), "converted_words": None, "seconds": None}
@@ -338,6 +353,7 @@ def audit_one(rec: dict, ctx: dict) -> Optional[dict]:
     if check.source_presence(body, "", titles_of(rec, None)).eligible_count == 0:
         out.update({"class": NO_LINES, "detail": "no line of the body is eligible", "eligible_lines": 0})
         return out
+    out["raw_acquisition"] = raw_acquisition(path, ctx["thin_words"])
     work = tempfile.mkdtemp(prefix="rev-", dir=ctx["tmp"])
     try:
         conv = convert_raw(path, rec, ctx["timeout"], work, ctx["archive_dir"])
@@ -432,8 +448,11 @@ def print_human(doc: dict) -> None:
         print()
         print("Mismatch candidates (share of eligible lines not found, highest first):")
         for r in mism:
-            print("  %s  %.2f  %d/%d  %s%s  raw %s" % (r["revision"], r["share"], r["not_found"], r["eligible_lines"],
-                                                    r["converter"] or "-", "  cited" if r["cited"] else "", r["raw"]))
+            print("  %s  %.2f  %d/%d  %s  words body %s / raw %s%s%s" % (
+                r["revision"], r["share"], r["not_found"], r["eligible_lines"], r["converter"] or "-",
+                r["source_words"] if r["source_words"] is not None else "?", r["converted_words"],
+                "  raw: %s" % r["raw_acquisition"] if r["raw_acquisition"] not in (None, "ok") else "",
+                "  cited" if r["cited"] else ""))
             for s in r["samples"]:
                 print("      not found: %s" % s)
     other = [r for r in doc["results"] if r["class"] in (NO_CONVERTER, UNREADABLE)]
@@ -482,9 +501,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             timeout = float(cfg.get("CONVERT_TIMEOUT") or DEFAULT_TIMEOUT)
         except ValueError:
             timeout = DEFAULT_TIMEOUT
-    if timeout <= 0:
-        print("mnemon audit text-mismatch: --timeout must be positive", file=sys.stderr)
+    if not math.isfinite(timeout) or timeout <= 0:
+        print("mnemon audit text-mismatch: --timeout must be a positive number of seconds", file=sys.stderr)
         return 2
+    try:
+        thin_words = int(cfg.get("THIN_WORDS") or check.THIN_WORDS_DEFAULT)
+    except ValueError:
+        thin_words = check.THIN_WORDS_DEFAULT
     if not vault:
         print("mnemon audit text-mismatch: the configuration names no vault_path", file=sys.stderr)
         return 2
@@ -529,7 +552,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     ctx = {"vault": vault, "archive_dir": archive_dir if archive_dir and os.path.isdir(archive_dir) else None,
            "entries": entries, "state_raw": state_raw, "timeout": timeout, "tmp": tmp, "cited": cited,
-           "snapshot": snapshot, "tools": None}
+           "snapshot": snapshot, "tools": None, "thin_words": thin_words}
     results: List[dict] = []
     progress = sys.stderr.isatty() and not args.json
     try:

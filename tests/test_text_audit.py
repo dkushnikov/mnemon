@@ -284,6 +284,13 @@ class MainVault(unittest.TestCase):
     def test_a_raw_without_text_is_a_mismatch(self):
         i = self.by_rev()["2026-01-09_iiiiiiii"]
         self.assertEqual((i["class"], i["share"], i["detail"]), ("mismatch", 1.0, "the raw converts to no text"))
+        self.assertEqual((i["raw_acquisition"], i["converted_words"]), ("thin", 0))
+
+    def test_raw_acquisition_only_for_html_raws(self):
+        r = self.by_rev()
+        self.assertEqual(r["2026-01-01_aaaaaaaa"]["raw_acquisition"], "thin")
+        self.assertIsNone(r["2026-01-06_ffffffff"]["raw_acquisition"])
+        self.assertIsNone(r["2026-01-03_cccccccc"]["raw_acquisition"])
 
     def test_population_excludes_bookmarks_managed_superseded_and_other_origins(self):
         revs = set(self.by_rev())
@@ -378,6 +385,11 @@ class Flags(unittest.TestCase):
                            capture_output=True, env=self.v.env())
         self.assertEqual(p.returncode, 2)
 
+    def test_a_timeout_that_is_not_a_positive_finite_number_exits_2(self):
+        for t in ("0", "-1", "inf", "nan"):
+            rc, out, err = self.v.run("--timeout", t)
+            self.assertEqual(rc, 2, t)
+
     def test_tmpdir_inside_the_vault_is_refused(self):
         inner = os.path.join(self.v.vault, "_tmp_inside")
         os.makedirs(inner)
@@ -468,6 +480,24 @@ class Units(unittest.TestCase):
             with mock.patch.object(TMA, "CAPTURE_SITE", stub):
                 c = TMA.convert_raw(bundle, {"name": "2026-01-01_aaaaaaaa"}, 10, d, None)
             self.assertEqual((c.text, c.converter, c.klass), ("assembled text of the bundle", "site-assemble", None))
+        finally:
+            shutil.rmtree(d)
+
+    def test_raw_acquisition_classifies_the_html_raw(self):
+        d = tempfile.mkdtemp(prefix="mnemon-tma-u-")
+        try:
+            wall = os.path.join(d, "w.html")
+            with open(wall, "w") as fh:
+                fh.write("<html><head><title>Just a moment...</title></head><body>Checking your browser</body></html>")
+            ok = os.path.join(d, "ok.html")
+            with open(ok, "w") as fh:
+                fh.write("<html><body><p>%s</p></body></html>" % " ".join("word%d" % i for i in range(80)))
+            txt = os.path.join(d, "t.txt")
+            with open(txt, "w") as fh:
+                fh.write("text")
+            self.assertEqual(TMA.raw_acquisition(wall, 60), "bot-wall")
+            self.assertEqual(TMA.raw_acquisition(ok, 60), "ok")
+            self.assertIsNone(TMA.raw_acquisition(txt, 60))
         finally:
             shutil.rmtree(d)
 
