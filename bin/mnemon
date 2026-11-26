@@ -60,6 +60,12 @@ Commands:
   research apply <id> --by <who> | delete <page> | ask --task-id <id> --question <q> | synthesize … | triage --propose
   audit [--cutoff DATE]      Archive consistency audit
   audit --canonical          Folders whose URLs coincide under the current canonicalization (v2; read-only)
+  audit text-mismatch [--all-url] [--cited] [--json] [--timeout <s>]
+                             Text mismatch candidates: revisions whose source.md text does not occur in
+                             the text their retained raw converts to now (pre-contract url revisions;
+                             --all-url every url revision with a raw; --cited only cited ones). Read-only,
+                             no fetch; a mismatch is a candidate — converter drift and old selection
+                             rules produce one too (docs/capture.md §16)
   init <name> --vault <path> [--archive <dir>] [--collection <name>]
        [--search-provider grep|qmd] [--reader-context <path> | --reader-context-path <path>]
        [--charter <path>] [--writer-host <host>] [--default] [--force] [--non-interactive]
@@ -73,7 +79,8 @@ Commands:
                              Consume mnemon-envelope/1 files from an inbox directory under
                              the vault lock; one result record per envelope (docs/inbox.md)
   browser-lane youtube <url>… [--browser safari] [--out <dir>] [--no-add] [--context <ctx>]
-               [--intent <text>] [--recapture] [--pause <s>] [--timeout <s>] [--dry-run] [--json]
+               [--intent <text>] [--session <name>] [--recapture] [--pause <s>] [--timeout <s>]
+               [--dry-run] [--json]
                              The browser lane's media form: one caption track per video through
                              yt-dlp and the reader's own browser cookies (one call per video, in
                              order), a bundle per video, then `add --url <video> --media-bundle
@@ -109,7 +116,9 @@ Config resolution — explicit beats inherited: --config → --instance → $MNE
 $MNEMON_INSTANCE → ./mnemon.yaml → $MNEMON_CONFIG_DIR/default → legacy mnemon.yaml (warns).
 $MNEMON_CONFIG and $MNEMON_INSTANCE both set must agree (same file, or the file declares
 that instance), otherwise exit 2. The dispatcher resolves once and exports the pair to the
-command. MNEMON_CONFIG_DIR defaults to ${XDG_CONFIG_HOME:-~/.config}/mnemon; instances live
+command with the MNEMON_RESOLVED stamp: the gateway and the Python tools reuse that resolution
+while nothing it depends on changed (a flag, an edited config, another instance load again).
+MNEMON_CONFIG_DIR defaults to ${XDG_CONFIG_HOME:-~/.config}/mnemon; instances live
 in its instances/ folder.
 USAGE
 }
@@ -159,7 +168,8 @@ _apply_selectors() {
     unset MNEMON_CONFIG MNEMON_CONFIG_SOURCE
   fi
 }
-# Resolve once; the exported MNEMON_CONFIG + MNEMON_INSTANCE pair is what children see.
+# Resolve once; the exported MNEMON_CONFIG + MNEMON_INSTANCE pair is what children see, and the
+# MNEMON_RESOLVED stamp lets them reuse the whole resolution without loading the file again (B7).
 _resolve_or_die() { load_config || exit $?; }
 # Selectors are global options; a child must never re-decide (`mnemon add --instance x` is refused).
 _reject_post_command_selectors() {
@@ -653,6 +663,73 @@ _doctor_capture_deps() {
   _check "$status" capture-deps "$detail"
 }
 
+# media-tools — what the media path and the browser lane depend on beyond presence (capture layer A18): yt-dlp's
+# version and its age in days, and the JavaScript runtimes yt-dlp itself reports it can use (YouTube's player
+# challenges need one; a deno or node on PATH proves nothing: yt-dlp enables only deno by default, the others need
+# --js-runtimes). One probe, `yt-dlp -v --ignore-config` without a URL — the debug header on stderr (`yt-dlp version
+# <channel>@<YYYY.MM.DD[.N]>`, `Optional libraries: …`, `JS runtimes: <runtime-version, …> | none`), then a usage
+# exit 2; no network, no cookies (the config files that could name a browser are ignored), 15 s at most. warn when
+# yt-dlp is missing, its version is unknown, it is older than 90 days (the age yt-dlp itself warns at), or it reports
+# no JS runtime (or predates the report); never fail — every media tool is optional.
+_doctor_media_tools() {
+  local out status detail
+  if ! command -v yt-dlp >/dev/null 2>&1; then
+    _check warn media-tools "yt-dlp missing (YouTube captures and the browser lane need it: brew install yt-dlp)"
+    return 0
+  fi
+  out="$(python3 - <<'PY' 2>/dev/null || printf 'warn\tcould not probe yt-dlp (the probe itself failed)'
+import datetime as dt, re, subprocess
+MAX_AGE = 90
+try:
+    p = subprocess.run(["yt-dlp", "-v", "--ignore-config"], stdin=subprocess.DEVNULL, capture_output=True, timeout=15)
+    text = (p.stdout + p.stderr).decode("utf-8", "replace")
+except subprocess.TimeoutExpired:
+    print("warn\tyt-dlp did not answer within 15 s (version and JS runtimes not probed)")
+    raise SystemExit(0)
+except OSError as exc:
+    print("warn\tyt-dlp could not run: %s" % exc)
+    raise SystemExit(0)
+warn = False
+m = re.search(r"^\[debug\] yt-dlp version (?:[\w-]+@)?(\S+)", text, re.M)
+ver = m.group(1) if m else None
+d = re.match(r"^(\d{4})\.(\d{2})\.(\d{2})(?:\.\d+)?$", ver or "")
+age_days = None
+if d:
+    try:
+        age_days = (dt.date.today() - dt.date(int(d.group(1)), int(d.group(2)), int(d.group(3)))).days
+    except ValueError:
+        d = None
+if ver is None:
+    warn = True
+    parts = ["yt-dlp version unknown (no version in its debug header)"]
+elif d is None:
+    warn = True
+    parts = ["yt-dlp %s (not a dated version: age unknown)" % ver]
+elif age_days > MAX_AGE:
+    warn = True
+    parts = ["yt-dlp %s (%d days old, > %d: brew upgrade yt-dlp)" % (ver, age_days, MAX_AGE)]
+else:
+    parts = ["yt-dlp %s (%d days old)" % (ver, max(age_days, 0))]
+r = re.search(r"^\[debug\] JS runtimes: (.*)$", text, re.M)
+if r is None:
+    warn = True
+    parts.append("JS runtimes: not reported (this yt-dlp predates the report; YouTube needs a runtime)")
+elif r.group(1).strip().lower() in ("", "none"):
+    warn = True
+    parts.append("JS runtimes: none (YouTube's challenges need one: install deno, or enable node/bun/quickjs with yt-dlp --js-runtimes)")
+else:
+    parts.append("JS runtimes: " + r.group(1).strip())
+lib = re.search(r"^\[debug\] Optional libraries: (.*)$", text, re.M)
+ejs = [x.strip() for x in (lib.group(1).split(",") if lib else []) if x.strip().startswith("yt_dlp_ejs")]
+parts.append("challenge solver: " + (ejs[0] if ejs else "yt_dlp_ejs not installed"))
+print(("warn" if warn else "ok") + "\t" + " · ".join(parts))
+PY
+)"
+  status="${out%%$'\t'*}"; detail="${out#*$'\t'}"
+  case "$status" in ok|warn) ;; *) status=warn; detail="could not probe yt-dlp" ;; esac
+  _check "$status" media-tools "$detail"
+}
+
 # egress — the instance's external_fetch value and, per fetcher of external_fetchers, whether its
 # key variable is set. The key itself is never printed. The loader's exports win when present;
 # before them the instance file is read directly; defaults: off, firecrawl,jina (spec §5).
@@ -1126,6 +1203,7 @@ cmd_doctor() {
   # phase 2 (capture layer §3.10): the converter chain's tools with versions, the egress policy,
   # the canonical identity rules
   _doctor_capture_deps
+  _doctor_media_tools
   _doctor_egress
   _doctor_canonical
 
@@ -1826,7 +1904,19 @@ case "$cmd" in
                 exec python3 "$BIN_DIR/mnemon-research.py" --help ;;
               *) usage_error "research: expected update | apply <id> | delete <page> | ask | synthesize | triage --propose (docs/research.md)" ;;
             esac ;;
-  audit)    _resolve_or_die
+  audit)    # text-mismatch (capture layer §18, A17): revisions whose source.md text is not found in the text
+            # their retained raw converts to now — candidates, read-only, no fetch; its own flags, so it is a
+            # subcommand word rather than a flag beside --canonical and --cutoff. --help needs no instance
+            if [[ "${1:-}" == text-mismatch ]]; then
+              shift
+              _reject_post_command_selectors "$@"
+              case "${1:-}" in -h|--help) exec python3 "$BIN_DIR/text-mismatch-audit.py" --help ;; esac
+              _resolve_or_die
+              # the resolution the dispatcher exported is handed down (MNEMON_RESOLVED), as for the archive
+              # audit below: no --config, no second load; --config / --instance before the command still select
+              exec python3 "$BIN_DIR/text-mismatch-audit.py" "$@"
+            fi
+            _resolve_or_die
             # --canonical (capture layer §3.10, D5): groups Sources/*/source.md by the v1 canonical form of
             # their URLs and prints the groups of ≥ 2; never writes, never merges
             if _has_flag --canonical "$@"; then
@@ -1834,7 +1924,8 @@ case "$cmd" in
               for _aa in "$@"; do [[ "$_aa" == --canonical ]] || _audit_args+=("$_aa"); done
               exec python3 "$BIN_DIR/canonical-audit.py" --vault "$VAULT_PATH" ${_audit_args[@]+"${_audit_args[@]}"}
             fi
-            exec python3 "$BIN_DIR/archive-audit.py" --config "$MNEMON_CONFIG_FILE" "$@" ;;
+            # the resolution the dispatcher exported is handed down (MNEMON_RESOLVED): no --config, no second load
+            exec python3 "$BIN_DIR/archive-audit.py" "$@" ;;
   init)     cmd_init "$@" ;;
   doctor)   cmd_doctor "$@" ;;
   config)   cmd_config "$@" ;;
