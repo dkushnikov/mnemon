@@ -301,6 +301,9 @@ assert_eq "$rc" "2" "--jobs many is a usage error"
 assert_contains "$out" "--jobs takes a positive number or auto" "...named"
 run "$RUNNER" --suites-dir "$ALL" --jobs
 assert_eq "$rc" "2" "--jobs without a value is a usage error"
+run "$RUNNER" --suites-dir "$ALL" --jobs 2 test_a.sh "$ALL/test_a.sh"
+assert_eq "$rc" "2" "--jobs 2 with one suite named twice is a usage error"
+assert_contains "$out" "test_a.sh is named twice" "...named: the two runs would share a log, a working directory and a TMPDIR"
 cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"; [[ $cores -le 8 ]] || cores=8
 run "$RUNNER" --suites-dir "$ALL" --jobs auto
 assert_eq "$rc" "0" "--jobs auto runs"

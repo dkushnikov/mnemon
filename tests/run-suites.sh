@@ -134,6 +134,17 @@ if $LIST; then
   exit 0
 fi
 
+# with more than one job, two suites of one name would run at once with one log, one working
+# directory and one TMPDIR
+if [[ $JOBS -gt 1 ]]; then
+  seen=" "
+  for f in "${SUITES[@]}"; do
+    b="$(basename "$f")"
+    case "$seen" in *" $b "*) die2 "--jobs: $b is named twice — the two runs would share a log, a working directory and a TMPDIR" ;; esac
+    seen="$seen$b "
+  done
+fi
+
 # --- toolchains ---
 # tc_versions <PATH>: the bash and python3 that PATH resolves, with their versions — the suites
 # will run under exactly this PATH, so this is what `bash "$suite"` and its `python3` calls get.
