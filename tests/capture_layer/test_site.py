@@ -8,12 +8,11 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import time
 import unittest
 
-from _helpers import BIN, LocalServer, PY, assert_same_keys, clean_env, expected_shapes, run_cli, tmpdir, wait_gone, \
-    write_stub
+from _helpers import BIN, LocalServer, PY, assert_same_keys, clean_env, expected_shapes, private_tmpdir, run_cli, tmpdir, \
+    wait_gone, write_stub
 
 from capture import proc, site
 from capture import policy as policymod
@@ -414,7 +413,7 @@ class Watchdog(unittest.TestCase):
             env = clean_env({"MNEMON_TEST_MAP_HANG": "1"})
             env["RENDER_URL_CMD"] = write_stub(work, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
             plan = os.path.join(work, "plan.json")
-            before = set(d for d in os.listdir(tempfile.gettempdir()) if d.startswith("mnemon-map-"))
+            tmp = private_tmpdir(self, work, env)
             t0 = time.monotonic()
             rc, so, se = run_cli([CS, "map", server.base + "/", "--out", plan, "--site-timeout", "1"], env=env, timeout=180)
             secs = time.monotonic() - t0
@@ -425,8 +424,8 @@ class Watchdog(unittest.TestCase):
             self.assertFalse(os.path.exists(plan))
             ps = subprocess.run(["pgrep", "-f", "capture-site.py --_worker map %s" % server.base], capture_output=True)
             self.assertEqual(ps.stdout.strip(), b"", "no map worker is left")
-            after = set(d for d in os.listdir(tempfile.gettempdir()) if d.startswith("mnemon-map-"))
-            self.assertEqual(after - before, set(), "a watchdog-killed map leaves no staging directory behind")
+            self.assertEqual([d for d in os.listdir(tmp) if d.startswith("mnemon-map-")], [],
+                             "a watchdog-killed map leaves no staging directory behind")
         finally:
             server.close()
             shutil.rmtree(work, ignore_errors=True)
@@ -441,14 +440,14 @@ class MapCli(unittest.TestCase):
             server.add("/product", page("Product"))
             env = clean_env()
             env["RENDER_URL_CMD"] = write_stub(work, "render-fail.sh", "#!/usr/bin/env bash\nexit 11\n")
-            before = set(d for d in os.listdir(tempfile.gettempdir()) if d.startswith("mnemon-map-"))
+            tmp = private_tmpdir(self, work, env)
             rc, so, se = run_cli([CS, "map", server.base + "/", "--json"], env=env, timeout=120)
             self.assertEqual(rc, 0, se)
             plan = json.loads(so)
             self.assertEqual(plan["schema"], "mnemon-site-plan/1")
             self.assertEqual([p["url"] for p in plan["pages"] if p["include"]], [server.base + "/", server.base + "/product"])
-            after = set(d for d in os.listdir(tempfile.gettempdir()) if d.startswith("mnemon-map-"))
-            self.assertEqual(after - before, set(), "the mapper's work directory is removed on exit")
+            self.assertEqual([d for d in os.listdir(tmp) if d.startswith("mnemon-map-")], [],
+                             "the mapper's work directory is removed on exit")
         finally:
             server.close()
             shutil.rmtree(work, ignore_errors=True)
