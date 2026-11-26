@@ -15,6 +15,8 @@ TEST_TMPDIR="$(cd "$(mktemp -d -t mnemon-runsuites-XXXX)" && pwd -P)"
 run() { rc=0; out=$("$@" 2>&1) || rc=$?; }
 # the table row of <suite> under <toolchain>, without the mark
 row_of() { printf '%s\n' "$out" | grep -E "^. +$1 +$2 " || true; }
+# no_lock <logs dir> <label>: the runner's lock is gone from the logs dir
+no_lock() { if [[ -e "$1/.run-suites.lock" ]]; then fail "$2" "$1/.run-suites.lock is still there"; else pass "$2"; fi; }
 
 # mk_suite <dir> <name> <passed> <failed>: a fake suite in the helper's output format — N ✓ lines,
 # M ✗ lines, the Results line, exit 1 on any failure (what `summary` does)
@@ -55,6 +57,7 @@ assert_contains "$out" "run-suites: 3 suite run(s) · 3 passed · 0 failed · 0 
 assert_file_exists "$TEST_TMPDIR/logs-all/current.test_b.sh.log" "each suite's output is kept as <toolchain>.<suite>.log"
 assert_contains "$(cat "$TEST_TMPDIR/logs-all/current.test_b.sh.log")" "Results: 2 passed, 0 failed" "...with the suite's full output"
 assert_not_contains "$out" "✗" "no failure lines when everything passed"
+no_lock "$TEST_TMPDIR/logs-all" "a finished run leaves no lock in the logs directory"
 
 echo "--- a failure in the middle: fail fast (default) ---"
 run "$RUNNER" --suites-dir "$MID" --logs "$TEST_TMPDIR/logs-mid"
@@ -68,6 +71,7 @@ assert_contains "$(row_of current test_c.sh)" "not run" "the suites after the fa
 assert_contains "$(row_of current test_d.sh)" "not run" "...every one of them"
 assert_contains "$out" "run-suites: 4 suite run(s) · 1 passed · 1 failed · 2 not run" "the summary counts passed, failed and not run"
 [[ -e "$TEST_TMPDIR/logs-mid/current.test_c.sh.log" ]] && fail "a not-run suite was not started" "log exists" || pass "a not-run suite was not started (no log)"
+no_lock "$TEST_TMPDIR/logs-mid" "a failing run leaves no lock either"
 
 echo "--- a failure in the middle: --keep-going ---"
 run "$RUNNER" --suites-dir "$MID" -k --logs "$TEST_TMPDIR/logs-k"
@@ -266,6 +270,7 @@ assert_contains "$(row_of current test_d.sh)" "not run" "...every later one is n
 assert_eq "$(rows_of)" "test_a.sh test_b.sh test_c.sh test_d.sh" "...in the table's order"
 assert_contains "$out" "run-suites: 4 suite run(s) · 1 passed · 1 failed · 2 not run" "...and counted as not run"
 [[ -e "$TEST_TMPDIR/logs-midj/current.test_c.sh.log" ]] && fail "a not-run suite was not started under --jobs" "log exists" || pass "a not-run suite was not started under --jobs (no log)"
+no_lock "$TEST_TMPDIR/logs-midj" "...and the failing run leaves no lock"
 rm -f "$SYNC"/*
 run env SYNC_DIR="$SYNC" "$RUNNER" --suites-dir "$MIDJ" --jobs 2 -k
 assert_eq "$rc" "1" "--jobs 2 -k: exit 1 too"
@@ -320,6 +325,60 @@ for p in $(cat "$SYNC/a.pids" "$SYNC/b.pids"); do
 done
 assert_eq "$left" "" "...and the suites and their children are gone: each job's whole process group was stopped"
 [[ -e "$TEST_TMPDIR/logs-intr/current.test_c.sh.log" ]] && fail "no suite starts after an interrupt" "test_c.sh ran" || pass "no suite starts after an interrupt"
+no_lock "$TEST_TMPDIR/logs-intr" "...and the interrupted runner removed its lock"
+
+echo "--- one runner per logs directory ---"
+OWN="$TEST_TMPDIR/own"; mkdir -p "$OWN"
+mk_suite "$OWN" test_a.sh 3 0; mk_suite "$OWN" test_b.sh 2 0
+# test_c.sh says it started, then holds its runner until $SYNC_DIR/go exists (at most 10 s)
+cat > "$OWN/test_c.sh" <<'EOF'
+#!/usr/bin/env bash
+: > "$SYNC_DIR/c.started"
+i=0; while [ ! -e "$SYNC_DIR/go" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+if [ -e "$SYNC_DIR/go" ]; then echo "  ✓ released"; echo "Results: 1 passed, 0 failed"
+else echo "  ✗ never released"; echo "Results: 0 passed, 1 failed"; exit 1; fi
+EOF
+# wait_text <file> <text>: wait until <file> holds <text>, at most 10 s
+wait_text() { local i=0; while ! grep -qF -- "$2" "$1" 2>/dev/null && [[ $i -lt 200 ]]; do sleep 0.05; i=$((i + 1)); done; }
+for j in 1 2; do
+  L="$TEST_TMPDIR/logs-own$j"; OUT1="$TEST_TMPDIR/own$j.out"
+  rm -f "$SYNC"/*
+  env SYNC_DIR="$SYNC" "$RUNNER" --suites-dir "$OWN" --jobs "$j" --logs "$L" >"$OUT1" 2>&1 &
+  owner_pid=$!
+  # the owner holds the directory: test_c.sh runs, and the rows of test_a.sh and test_b.sh are
+  # printed — with two jobs, their jobs have ended, so a job that ends does not give the lock away
+  wait_file "$SYNC/c.started"; wait_text "$OUT1" " test_b.sh "
+  before="$(find "$L" | sort)"
+  run "$RUNNER" --suites-dir "$OWN" --jobs "$j" --logs "$L"
+  assert_eq "$rc" "2" "--jobs $j: a second runner on a logs directory that a live runner owns is refused (exit 2)"
+  assert_contains "$out" "the logs directory $L is in use by another runner (pid $owner_pid," "...the message names the directory and the owner's pid"
+  assert_not_contains "$out" "toolchain" "...before any suite starts: no table"
+  assert_eq "$(find "$L" | sort)" "$before" "...and the refusal removes nothing from the directory, the owner's lock included"
+  run "$RUNNER" --suites-dir "$OWN" --list --logs "$L"
+  assert_eq "$rc:$out" "0:$(printf 'test_a.sh\ntest_b.sh\ntest_c.sh')" "...--list takes no lock: it lists beside the owner"
+  : > "$SYNC/go"
+  rc=0; wait "$owner_pid" || rc=$?
+  out="$(cat "$OUT1")"
+  assert_eq "$rc" "0" "...the owner's exit code is untouched: 0"
+  assert_eq "$(rows_of)" "test_a.sh test_b.sh test_c.sh" "...its table has every row, once, in order"
+  assert_contains "$out" "run-suites: 3 suite run(s) · 3 passed · 0 failed · 0 not run · logs: $L" "...and its summary counts them"
+  assert_not_contains "$out" "No such file" "...none of its files went missing"
+  no_lock "$L" "...and its finished run leaves no lock"
+done
+L="$TEST_TMPDIR/logs-stale"; mkdir -p "$L/.run-suites.lock"
+sh -c ':' & gone=$!; wait "$gone"
+printf '%s\n' "$gone" > "$L/.run-suites.lock/pid"
+run "$RUNNER" --suites-dir "$ALL" --logs "$L"
+assert_eq "$rc" "0" "a lock whose owner is gone is stale: the runner takes it over and runs"
+assert_contains "$out" "run-suites: took over the lock of $L from pid $gone, which is gone" "...and says so in one line"
+assert_contains "$out" "run-suites: 3 suite run(s) · 3 passed · 0 failed · 0 not run" "...every suite runs"
+no_lock "$L" "...and the run that took it over leaves no lock"
+L="$TEST_TMPDIR/logs-half"; mkdir -p "$L/.run-suites.lock"
+run "$RUNNER" --suites-dir "$ALL" --logs "$L"
+assert_eq "$rc" "2" "a lock with no pid file is refused (exit 2): a runner is taking it, or one died doing so"
+assert_contains "$out" "holds a half-taken lock ($L/.run-suites.lock)" "...named, with the way out"
+assert_not_contains "$out" "toolchain" "...before any suite starts"
+assert_dir_exists "$L/.run-suites.lock" "...and the lock stays"
 
 echo "--- --jobs: usage ---"
 run "$RUNNER" --suites-dir "$ALL" --jobs 0
