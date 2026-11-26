@@ -573,7 +573,7 @@ Canonicalization and dedup by canonical URL, the capture layer (resolve · fetch
 - 2026-10-15 — fresh-context verification of the integrated branch: the real captures of §9.17 **passed** on a temporary instance against Claude Code 2.1.296 — text, url and pdf through `mnemon add` (body == the capture-text artifact, `extract.md` published by the gateway, the receipt's argv showing the fence) and one envelope through `mnemon ingest`; the fence probe record was rewritten by the fixed script with `ambient-user: skipped` (A9). The branch passed for merge; the release was blocked on gaps fixed in the commit series that follows this entry: (1) **ingest poison pills** — a JSON envelope nested beyond the decoder's recursion limit or carrying a lone surrogate escape ended the pass with a traceback and blocked the inbox; now every failure while reading, parsing, validating or snapshotting one envelope quarantines that envelope (reason and exception recorded) and the pass continues (§5.2 step 4, `docs/inbox.md`); (2) **duplicate integrity** — a fresh request for a resource whose published `source.md` body was edited answered `skipped-duplicate`; now the duplicate path verifies the body against the source's own `capture.text_sha256` (a legacy source without it by existence) and answers `integrity-error`/`evidence-mismatch` (§3.4 step 5, §9.5). Also in the series: `--no-session-persistence` in the fence argv with probe 5 asserting it (§4.2, §4.7), the url-alias legacy dedup restored (§3.1), the case-insensitive ledger collision named (exit 2), `doctor` reporting permanent ingest failures apart, and README / docs / vault-template prose brought to the phase-1 flow.
 - 2026-11-06 — field test of the browser lane's media form (release/2026-11-06, capture layer §14): one of five captioned videos failed extraction as `invalid-output` after two rejected answers, `retryable: false`; `mnemon add --resume` published the extract on its first call. The class is retryable since — amendment A10 (§13, v4.2).
 - 2026-11-06 — the maintainer's answer to the question capture layer A14 left open: `RESULT:title=` (and `mnemon search`, capture layer A15) name a video by its title — amendment A11 (§14, v4.3).
-- 2026-11-26 — the image origin: `mnemon add --origin image --file <png|jpeg>` publishes text recognized locally from a screenshot — amendment A14 (§17, v4.6); the recognition mechanics are capture layer A21 (§22). Specification only; a second reader reviews it against the code before implementation.
+- 2026-11-26 — the image origin: `mnemon add --origin image --file <png|jpeg>` publishes text recognized locally from a screenshot — amendment A14 (§17, v4.6); the recognition mechanics are capture layer A21 (§22). Specification only. Round 1 of the second reader's review (rework, six blocking issues) is folded in with the hub's cuts for version 1: no public recognizer seam, an ordered language sequence, upright images only, the pointer rule in the skill with built `https` addresses, repeatability on one installation, an envelope check apart from the effective failure classification, the raw through A12's publish path with the input hash checked; round 2 checks §3.2 against A12.
 
 ## 12. Amendments v4.1 (binding)
 
@@ -661,30 +661,37 @@ These amendments are **binding** and win over §3–§9 where they differ (the s
 
 ### A14 — An image is a file input whose capture-text is recognized text (`bin/knowledge-gateway.sh`, `bin/lib-capture.sh`; spec §3.1–§3.4, §3.6, §6; the recognition mechanics are capture layer A21, §22 there)
 
-**Why.** Sources saved from a phone sometimes exist only as a screenshot. Two shapes recur. A *pointer*: the image shows the address of a document (a readable arXiv id, a full URL), and the wanted source is that document. *Content*: the image holds the text, and no other copy is at hand (a post with its author cropped). Before this amendment `--file shot.png` took the generic `file` row of §6 and failed `unsupported` (pandoc reads no image), raw retained. The pointer shape stays outside the engine: the engine never reads an address out of an image and never fetches one; the `source-add` skill does that and captures the URL (capture layer §22.10). This amendment adds the content shape.
+**Why.** Sources saved from a phone sometimes exist only as a screenshot. Two shapes recur. A *pointer*: the image shows the address of a document (a readable arXiv id, a DOI, a full URL), and the wanted source is that document. *Content*: the image holds the text, and no other copy is at hand (a post with its author cropped). Before this amendment `--file shot.png` took the generic `file` row of §6 and failed `unsupported` (pandoc reads no image), raw retained. The pointer shape stays outside the engine: the engine never reads an address out of an image and never fetches one; the `source-add` skill reads the address and captures the URL (capture layer §22.10). This amendment adds the content shape.
 
-**Scope of version 1.** `mnemon add --origin image --file <image>`, directly or as an item of a `--manifest` batch (`origin: image`, `file`). Formats: PNG and JPEG. Three things stay as they are:
+**Scope of version 1.** `mnemon add --origin image --file <image>`, directly or as an item of a `--manifest` batch: an upright screenshot (EXIF orientation 1 or none), PNG or JPEG, recognized by one built-in recognizer, tesseract (capture layer §22.3). There is no public backend seam. Three things stay as they are:
 
-- **Auto-detection.** The gateway's origin detector is unchanged: a `--file` without `--origin` never becomes `image`; a PNG or JPEG still takes the `file` row and fails `unsupported`, and that refusal's message now names `--origin image` when the bytes carry a PNG or JPEG signature. Reason: the inbox dispatches a `payload.kind: file` envelope with `request.origin: null` as `--file <snapshot>` with the origin auto-detected (§5.3). An auto-detected image would route inbox payloads into recognition while the envelope schema does not admit the origin.
+- **Auto-detection.** The gateway's origin detector is unchanged: a `--file` without `--origin` never becomes `image`; a PNG or JPEG still takes the `file` row and fails `unsupported`, and that refusal's message now names `--origin image` when the bytes carry a PNG or JPEG signature. Reason: the inbox dispatches a `payload.kind: file` envelope with `request.origin: null` as `--file <snapshot>` with the origin auto-detected (§5.3); an auto-detected image would route inbox payloads into recognition while the envelope schema does not admit the origin.
 - **The inbox.** `request.origin` stays `text | url | file | pdf | audio | null` (`bin/mnemon-ingest.py`); an image payload ends `failed`/`unsupported` as before, and `tests/fixtures/contracts/` is unchanged. Auto-detection and the inbox origin change together, in one later amendment.
-- **Formats and inputs.** HEIC, WebP, GIF, TIFF, BMP and an image by URL are later work; such bytes fail validation (`unsupported`, below).
+- **Everything else** — HEIC, WebP, GIF, TIFF, BMP, an animated PNG, a rotated image, an image by URL, another recognizer — is later work; such inputs fail the envelope check (§3.6 below).
 
 #### §3.1 — identity
 
 - `resource_kind`: `image` is a file origin — `file` (`pdf` · `audio` · `file` · `book` · `image` by `--file`). It has no URL form, so `cap_resource_kind image` answers `file` whether `FILE_PATH` is set or not; the catch-all `*) url` of `cap_resource_kind` (`bin/lib-capture.sh`) must never see it.
 - `resource_key` = `sha256(file bytes)`, `resource_sha256` = `sha256("file:" + resource_key)`, `resource_id` = `sha256(resource_key)[:8]` — the existing algorithm of `cap_resource_identity`, unchanged. Consequences: the same bytes are one resource whatever the origin — a later `--origin image` of bytes that once failed as `--origin file` is that resource, and the failed `file` receipt is listed `failed/resolved` by `doctor captures` once the image revision is published (capture layer A13's rule); a second `--origin image` of the same bytes is `skipped-duplicate`; another screenshot of the same post (other bytes) is another resource.
-- **Refused for `--origin image`** (exit 2, before any write; the dry-run runs the same check): no `--file`; `--url`; `--canonical-url`; `--site`; `--media-bundle`; `--ocr-languages` with any other origin; an `--ocr-languages` value outside the grammar of capture layer §22.6. `--tier bookmark` is already refused (a bookmark takes no file, capture layer B1).
-- **Why no URL.** A URL in an image's request would make recognized text a url-kind resource (capture layer B3) or an alias of one: §3.1's legacy rule and capture layer §4.1 match a folder by `url:`, `canonical_url:`, `final_url:`, `posted_url:`, `declared_canonical_url:` and `folded_sources`. A later `mnemon add --url` of the document would then answer `skipped-duplicate` against a screenshot, and only `--recapture` would fetch the document. So an image's `source.md` carries none of those keys. A URL capture of the document a screenshot shows is never suppressed by the screenshot: the two are separate resources, and neither supersedes the other unless the operator says `--supersedes`. The pointer rule of the skill (capture layer §22.10) makes the URL capture instead of the image capture whenever the address is readable.
-- **The request.** `mnemon-request/2` binds one more key for `origin: image` only: `ocr_languages`, the language set recognition runs with (`--ocr-languages`, else the instance's `ocr_languages`; capture layer §22.6). Every other request keeps the hash it always had — the rule of `tier` (capture layer B1). The other `/2` fields take the defaults of a file input (`render: auto`, `external: off`, `site: null`, `requested_version: null`; B3's rule). A replay that names bound arguments and another language set is a binding mismatch (exit 2); when it names bound arguments without `--ocr-languages`, the instance's `ocr_languages` is compared (as `external` follows `external_fetch`); a replay by `--capture-id` alone recognizes with the bound set.
-- **Receipt restoration.** `cap_restore_from_receipt` (`bin/knowledge-gateway.sh`, the `case "$ORIGIN"` after the `eval`) sets `FILE_PATH` from `input_path` for `image` as for `pdf|audio|file|book`, and restores `OCR_LANGUAGES` from `request.ocr_languages`. The origin a receipt records is authoritative: a `file` receipt of a PNG written before this amendment replays as `file` and fails `unsupported` again; it is never reinterpreted as an image.
+- **Refused with `--origin image`** (exit 2, before any write; the dry-run runs the same check):
+  - no `--file`;
+  - an input of another kind: `--file-text`, `--ref-path`, `--manifest`;
+  - a URL or an identity override: `--url`, `--canonical-url`;
+  - a flag of URL acquisition: `--site`, `--media-bundle`, `--render`, `--no-render`, `--no-external`, `--depth`;
+  - `--tier bookmark` (already refused: a bookmark takes no file, capture layer B1).
+- **Refused `--ocr-languages`** (exit 2): with any origin but `image`; at the batch level (`--manifest`); a value outside the grammar of capture layer §22.6, a repeated code included.
+- **Batch items.** An item with `origin: image` takes `file` and, optionally, `ocr_languages` (passed to its child as `--ocr-languages`). An item that also carries `url`, `ref_path`, `content`, `canonical_url` or `tier` is refused by its child gateway (exit 2); the batch goes on and lists the item among its failures.
+- **Why no URL.** A URL in an image's request would make recognized text a url-kind resource (capture layer B3) or an alias of one: §3.1's legacy rule and capture layer §4.1 match a folder by `url:`, `canonical_url:`, `final_url:`, `posted_url:`, `declared_canonical_url:` and `folded_sources`. A later `mnemon add --url` of the document would then answer `skipped-duplicate` against a screenshot, and only `--recapture` would fetch the document. So an image's `source.md` carries none of those keys. A URL capture of the document a screenshot shows is never suppressed by the screenshot: the two are separate resources, and neither supersedes the other unless the operator says `--supersedes`. The skill's pointer rule (capture layer §22.10) makes the URL capture instead of the image capture whenever the address is readable.
+- **The request.** `mnemon-request/2` binds one more key for `origin: image` only: `ocr_languages`, the **ordered** sequence of recognition languages as given (`"rus+eng"` is not `"eng+rus"`: the recognizer weighs the first language first), never sorted, a repeated code refused. `--ocr-languages` sets it for one capture, else the instance's `ocr_languages`. Every other request keeps the hash it always had — the rule of `tier` (capture layer B1). The other `/2` fields take the defaults of a file input (`render: auto`, `external: off`, `site: null`, `requested_version: null`; capture layer B3's rule). A replay that names bound arguments and another sequence is a binding mismatch (exit 2); when it names bound arguments without `--ocr-languages`, the instance's `ocr_languages` is compared (as `external` follows `external_fetch`); a replay by `--capture-id` alone recognizes with the bound sequence. A language whose model is missing is an environmental failure (exit 3, §3.6 below) — never a fallback to another sequence.
+- **Receipt restoration.** `cap_restore_from_receipt` (`bin/knowledge-gateway.sh`, the `case "$ORIGIN"` after the `eval`) sets `FILE_PATH` from `input_path` for `image` as for `pdf|audio|file|book`, and restores `OCR_LANGUAGES` from `request.ocr_languages`. The input's file name, which the report's extension diagnostics need, is the basename of the receipt's `input_path`: a replay never reopens the locator for it. The origin a receipt records is authoritative: a `file` receipt of a PNG written before this amendment replays as `file` and fails `unsupported` again; it is never reinterpreted as an image.
 
 #### §3.2 — artifacts
 
-- **raw**: the input file, byte for byte. The name is `<revision>.png` or `<revision>.jpg`, the extension taken from the file's signature (PNG `89 50 4E 47 0D 0A 1A 0A`; JPEG `FF D8 FF`) and never from its name, as URL audio takes the sniffed extension (capture layer §3.7). Bytes with neither signature keep the input's lowercased extension (`bin` without one) and fail validation after publication (§3.4 below). `raw_kind: image`. `raw_store` as for every non-`exact` origin (D8).
-- **The raw goes through the one raw publication path, never its own staging.** The image path calls the publish step that amendment A12 (raw integrity) defines — the raw written as a fresh copy and renamed into place at once, hashed and recorded on the receipt's discipline (§3.4 step 2) — and adds no staging code of its own. Why: the raw-integrity work observed on 2026-11-26 that a raw staged under a dot-name inside an iCloud Drive folder for about two seconds can be renamed back by the File Provider; an `archive_dir` in such a folder is an ordinary setup for a reader who saves from a phone. Whatever A12 makes of the staged checkpoint, the crash hooks and the recovery rows it defines are the image raw's too; the S3–S4 rows below name today's.
-- **Derived inputs are never the raw.** A copy the engine derives from the image for recognition — rotated or rescaled; version 1 makes none (capture layer §22.1, I7) — lives in the attempt dir and is named with its hash in the report; the backend's scratch files live in the scratch dir inside the attempt dir. Neither enters the raw store or the archive; both go with the attempt dir.
+- **raw**: the input file, byte for byte — **`raw_sha256` equals the `input_sha256` bound at S1**, always. The name is `<revision>.png` or `<revision>.jpg`, the extension taken from the bytes' signature (PNG `89 50 4E 47 0D 0A 1A 0A`; JPEG `FF D8 FF`), never from the file name; bytes with neither signature keep the input's lowercased extension (`bin` without one) and fail the envelope check after publication (§3.6 below). `raw_kind: image`; `raw_store` as for every non-`exact` origin (D8).
+- **Publication: the raw publish path of amendment A12.** S3–S4 below call the raw publish step that A12 (raw integrity) defines; the image path has no staging, no rename and no crash rows of its own. It adds one requirement: the copy that step publishes must hash to the `input_sha256` bound at S1. When it does not — the input changed between the request and the copy — nothing is published, no raw is retained, and the receipt ends `failed`/`input-missing`, permanent (the locator no longer holds the recorded bytes: §3.1's binding rule). Why A12's path: on 2026-11-26 the raw-integrity work observed that a raw staged under a dot-name inside an iCloud Drive folder for about two seconds can be renamed back by the File Provider, and an `archive_dir` in such a folder is an ordinary setup for a reader who saves from a phone.
+- **Nothing derived is the raw.** Version 1 derives no copy of the image (no rotation, no rescaling). The recognizer's working files live in a scratch directory inside the attempt dir, never enter the raw store or the archive, and go with the attempt dir.
 - **capture-text**: the recognized text after the normalization of capture layer §22.4 — the body of `source.md`, `capture.text_sha256` as for every origin. It is never byte-equal to the raw (D1); `capture.fidelity: recognized` says so.
-- **receipt**: `capture_report.text` holds the recognition report `mnemon-capture-image/1` (capture layer §22.5), recorded before the source is published, on a failure as well. The archive sidecar `<revision>.report.json` (capture layer D15, A6) freezes it in its `text` member; the sidecar's shape `mnemon-capture-report/1` is unchanged.
+- **receipt**: `capture_report.text` holds the report `mnemon-capture-image/1` (capture layer §22.5) of the latest attempt that reached S5. `ocr_history` (new, an append-only array) keeps one entry per such attempt — `{attempt, outcome, failure_class, execution, adapter, backend_version, languages}`, `null` where the attempt did not learn the value — written in the same receipt update as the report. The archive sidecar `<revision>.report.json` (capture layer D15, A6) freezes the report of the attempt whose text was published, in its `text` member; the sidecar's shape `mnemon-capture-report/1` is unchanged.
 
 #### §3.3 — `source.md`
 
@@ -694,11 +701,11 @@ source_type: article                  # the default for an image; --source-type 
 content_format: text
 origin_path: "…"                      # the --file path as given: context, not evidence (the raw is the evidence)
 capture:
-  method: "ocr:tesseract:eng+rus"     # ocr:<backend>:<languages>
+  method: "ocr:tesseract:rus+eng"     # ocr:<backend>:<languages, as bound>
   fidelity: recognized
   raw_store: archive
   raw_kind: image
-  raw_sha256: "…"
+  raw_sha256: "…"                     # = the request's input_sha256
   raw_bytes: 306624
   text_sha256: "…"
   text_bytes: 1268
@@ -708,82 +715,102 @@ capture:
   image_pixels: "1170x2100"
   ocr_backend: tesseract
   ocr_version: "5.5.4"
-  ocr_languages: "eng+rus"
-  ocr_options: "psm=3"
-  ocr_preprocess: none
-  ocr_confidence: 95.8                # absent when the backend reports none
+  ocr_adapter: "ocr-tesseract/1"
+  ocr_languages: "rus+eng"
+  ocr_confidence: 95.8                # absent when the recognizer reported no word
   ocr_confidence_unit: tesseract-word-0-100   # absent together with ocr_confidence
   ocr_execution: "…"                  # the execution key, capture layer §22.3
   engine: "…"
 ```
 
-- **Serialization** (`cap_source_frontmatter`, `bin/lib-capture.sh`): the image keys follow `completeness` and precede `engine`, in the order shown, and only for `origin: image`. `ocr_version`, `ocr_languages`, `ocr_options`, `ocr_execution` and `image_pixels` go through `cap_q` (a version such as `5.10` must never read back as a number); `converter`, `image_format`, `ocr_backend`, `ocr_preprocess` and `ocr_confidence_unit` through `cap_plain`; `ocr_confidence` is a bare decimal. The values come from the report (`cap_image_fields`, the image twin of `cap_text_fields`); nothing comes from the model.
+- **Serialization** (`cap_source_frontmatter`, `bin/lib-capture.sh`): the image keys follow `completeness` and precede `engine`, in the order shown, and only for `origin: image`. `ocr_version`, `ocr_adapter`, `ocr_languages`, `ocr_execution` and `image_pixels` go through `cap_q` (a version such as `5.10` must never read back as a number); `converter`, `image_format`, `ocr_backend` and `ocr_confidence_unit` through `cap_plain`; `ocr_confidence` is a bare decimal with one fractional digit. The values come from the report (`cap_image_fields`, the image twin of `cap_text_fields`); nothing comes from the model.
+- **Diagnostics in the frontmatter**: the format, the pixel size, the recognizer and its execution, the confidence. The text's length is `capture.text_bytes`; the line and word counts are in the report (`result`), not in the frontmatter. An image that reached publication is upright by construction (§3.6 below), so no orientation is written.
 - **Not written for an image**: `url:`, `canonical_url:`, `final_url:`, `posted_url:`, `declared_canonical_url:`, `folded_sources`, `published:`, `capture.fetch`, `capture.acquisition`, `capture.canonical_version` (§3.1 above).
-- **Consumers.** Flat parsers read top-level keys only and ignore the nested ones (§3.3's rule; the existing test covers new nested keys). `lib_vault.py` reads `capture.fidelity` into the research context (research interface v1.5, §9). `RESULT:completeness=` reads `capture.completeness` as for every revision. In version 1 nothing else reads the `image_*` and `ocr_*` keys: they tell the reader how the text was made.
+- **Consumers.** Flat parsers read top-level keys only and ignore the nested ones (§3.3's rule). `lib_vault.py` reads `capture.fidelity` into its folder record and the research context (research interface v1.5). `RESULT:completeness=` reads `capture.completeness` as for every revision. In version 1 nothing else reads the `image_*` and `ocr_*` keys: they tell the reader how the text was made.
 - **The extractor prompt is unchanged.** Its `Origin: image` line tells the model the content was recognized from an image; `File:` carries the image's basename, as for every file origin. The fence is unchanged.
 
 #### §3.4 — states, receipt and recovery
 
 The image path in the order of the contract. Every step after S1 runs under the vault lock with the receipt's write discipline (§3.4 transition protocol); the crash hooks are §9's (`MNEMON_TEST_HOOKS=1`).
 
-| Step | What happens | Receipt after it | Crash hook | A replay that finds this state |
-|---|---|---|---|---|
-| S0 | contract checks (§3.1 above); `--file` exists | — | — | — (exit 2, or `input-missing` exit 1 with RESULT lines) |
-| S1 | lock, extractor preflight (D13: exit 3 before any raw), reserved revision, request with `ocr_languages`, `input_path` = the `--file` path, `input_sha256` = its hash | `started`, no raw | — | acquires from the input locator: a file that is gone or changed → `input-missing`, permanent (§3.1 binding rules) |
-| S2 | the input's size against `image_max_bytes` | over it: `failed`/`too-large`, permanent, no raw staged | — | acquires again from the locator (the operator may have raised the cap) |
-| S3 | raw named by signature; A12's publish step begins: the bytes copied, fsynced, hashed, recorded | `raw_sha256`, `raw_published: false` | `after-raw-staged` (or A12's successor) | the rows A12 defines (today: finishes the rename) |
-| S4 | the copy renamed into place at once (A12) | `raw_published: true` | `after-raw-renamed`, `after-raw-published` | reconciles (A12's rows), then S5 from the retained raw |
-| S5 | validation of the **published raw** (capture layer §22.2): signature, structure, dimensions, `image_max_pixels`, EXIF orientation | — | — | — |
-| S6 | recognition by the backend under `ocr_timeout`, normalization (capture layer §22.3–§22.4) | — | — | — |
-| S7 | `capture.md` and the report written; report → `capture_report.text`; text hashed | `text_sha256`, `text_bytes` | `after-recognized` (new) | the existing row "`started`, raw published, no source": S5–S7 run again from the retained raw (capture-text is never reused from an old attempt) |
-| S8 | `source.md` staged and published, sidecar | `source-published` | `after-source-staged`, `after-source-published` | the existing rows |
-| S9 | extraction | `extracted` / `extract-failed` | `after-extract-published` | the existing rows: **extraction only** |
+| Step | What happens | Receipt after it | Crash hook |
+|---|---|---|---|
+| S0 | contract checks (§3.1 above); the `--file` exists | — | — |
+| S1 | lock; the revision reserved and the receipt created in **one** receipt write — `started`, the request with `ocr_languages`, `input_path`, `input_sha256`; then the extractor preflight (D13: exit 3, before any raw) | `started`, no raw | — |
+| S2 | the input's size (`stat`) against `image_max_bytes` | over it: `failed`/`too-large`, no raw, no report | — |
+| S3 | the raw destination prepared **by the image acquisition itself** — `cap_raw_prepare` with the reserved revision and the extension of the verified input's signature — and the intent recorded; then A12's publish step copies the input and checks the copy against `input_sha256` | as A12 defines | A12's |
+| S4 | the copy published (A12) | `raw_published: true` | A12's |
+| S5 | the recognition worker (capture layer §22.4): the envelope check of the **published raw** | — | — |
+| S6 | the worker: the recognizer's probe, recognition under `ocr_timeout`, normalization | — | — |
+| S7 | `capture.md` written; **one** receipt update: `capture_report.text`, the `ocr_history` entry, `text_sha256`, `text_bytes` | `text_sha256` | `after-recognized` (new; after that update) |
+| S8 | `source.md` staged, the report frozen, the directory renamed, the sidecar | `source-published` | `after-source-staged`, `after-source-published` |
+| S9 | extraction | `extracted` / `extract-failed` | `after-extract-published` |
 
-Failures of S5–S7 record `failed` with the class of §3.6 below; the raw stays published. The rows they add to the recovery table, beside the existing ones:
+**What a replay does at each boundary** (by `--capture-id <id>`, or `--resume <id>` with a capture id):
+
+| Boundary | Replay |
+|---|---|
+| before the receipt exists (S0–S1) | nothing is recoverable by id: there is no receipt, and the same `--capture-id` with the original input is a fresh operation; the original input is necessary |
+| a receipt without a recorded raw — a crash in S1–S3, S2's `too-large`, the extractor preflight's exit 3, `input-missing` from a changed input | **the one case that reads the input**: the locator is read and verified against `input_sha256` (gone or changed → `input-missing`, permanent), the image acquisition prepares the destination again (S3: the failure helper `cap_receipt_fail` clears `raw_path` and `raw_staged_path` when no raw hash was recorded, so nothing of the earlier intent is reused), and S2–S9 run |
+| a partial copy without a recorded hash | A12's row (today: the staged copy is discarded and the input acquired again) |
+| a recorded copy, before or after its rename, the receipt behind | A12's rows (today: verify and reconcile; recorded evidence is never acquired again) |
+| during S5–S7, or between `capture.md` and the receipt update of S7 | S5–S7 again from the verified published raw, in a new attempt; nothing of the interrupted attempt is reused — its report, its `ocr_history` entry and its text hash reached the receipt in one update or not at all |
+| the source staged, not renamed (S8) | S5–S8 again — recognition may run under a changed recognizer; the new attempt's text and frozen report replace the old pair together (`cap_report_freeze` runs on the new attempt; `cap_cleanup_staging` discards the staged directory) |
+| the source renamed, the receipt or the sidecar behind | the source verified, the receipt reconciled, the sidecar recovered from the frozen bytes; no recognition |
+| the extract renamed, the receipt behind; or the extraction failed | reconcile, or extract only — whatever recognizer is installed |
+
+The recovery rows these add to §3.4's table:
 
 | Receipt state | Files found | Action |
 |---|---|---|
-| `failed`, `environment` (no backend, no language data, exit 3) | published raw with the hash | S5–S9 from the retained raw (§12 A3's `environment` row) — the **retry after the tool is installed**: `mnemon add --capture-id <id>` (or `--resume <id>`). The original `--file` is not read again: the input may be gone. (The inbox, which defers an exit 3 on its own, carries no image in version 1.) |
-| `failed`, `unsupported` · `too-large` (pixels) · `no-text` · `convert` · `invalid-utf8` · `timeout` | published raw with the hash | S5–S9 from the retained raw (§3.4's `convert`/`no-text`/`unsupported` row, extended to the classes listed); the same raw under the same execution fails the same way, so each of these is `retryable: false` — a replay passes only after the operator changed something (the backend, its language data, `image_max_pixels`, `ocr_timeout`) |
-| `failed`, `too-large` (bytes) | no raw | S2 again from the input locator |
-| `source-published` / `extract-failed` | `source.md` verified | extraction only (`--resume <revision>`); recognition never runs again for a published source |
+| `failed`, `environment` (exit 3 after S4: no recognizer, a missing language model, an unreadable version) | the published raw with the hash | S5–S9 from the retained raw (§12 A3's `environment` row) — **the retry after the installation**: `mnemon add --capture-id <id>` or `mnemon add --resume <id>`. The input is not read. A reserved revision whose folder was never published is not a `--resume` target: the receipt id is (`RESULT:capture_id`) |
+| `failed`, `unsupported` · `too-large` (pixels or the recognizer's limit) · `no-text` · `convert` · `invalid-utf8` · `timeout` | the published raw with the hash | S5–S9 from the retained raw on an explicit replay. Each class is `retryable: false`: no consumer retries it on its own; a replay helps once the operator changed something — the recognizer, a model, `image_max_pixels`, `ocr_timeout` |
+| `failed`, `too-large` (bytes) | no raw | S2 again from the verified locator (the operator may have raised `image_max_bytes`) |
+| `failed`, `input-missing` | no raw | exit 1 again with the same class (operator; unchanged) |
+| `source-published` / `extract-failed` | `source.md` verified | extraction only |
 
-**Replay under another backend.** Recognition runs at most once per published source: `source.md` is immutable, and `--resume` never recognizes. Before publication a replay recognizes again with whatever backend is installed, because nothing published carries the earlier text. When the receipt holds an earlier report whose execution key (capture layer §22.3) differs from the new one, the new report names it in `previous_execution` and the gateway prints `NOTE: recognition re-ran under another execution (<old backend version> → <new>)` on stderr. The published `source.md` records the execution that produced it. Text from another backend or version for a published source is a new revision: `--recapture` (it supersedes the old one).
+**Recognition and replay.** Once `source.md` is published, replay and resume never recognize again. Before publication, both may recognize from the retained raw. A published source carries exactly one recognition result: the attempt whose text it holds. When a new attempt's execution key differs from the most recent known one — the last `ocr_history` entry with a non-null `execution` — its report names that key in `previous_execution`, and the gateway prints `NOTE: recognition re-ran under another execution (<old backend version, adapter> → <new>)` on stderr; the descriptive metadata of the old execution stays in its `ocr_history` entry. Text from another execution for a published source is a new revision: `--recapture` (it supersedes the old one).
 
 #### §3.6 — `RESULT:` and exit codes
 
-Every image outcome maps onto the existing statuses, classes and exits. `RESULT:status` is the terminal state; the image's own classification of its input travels beside it on `RESULT:acquisition=` — the line §3.6 (capture layer GH #26) already prints for a failed acquisition — and never replaces a status.
+Every image outcome maps onto the existing statuses, classes and exits. `RESULT:status` is the terminal state. The image's own classification travels beside it on `RESULT:acquisition=` — the line §3.6 (capture layer GH #26) already prints for a failed acquisition — and never replaces a status. The gateway takes the class and the acquisition value from the report's effective failure classification (`failure`, capture layer §22.5), never from the envelope's own outcome (`validation.outcome`), which a later stage never rewrites.
 
-| Outcome | Exit | `RESULT:status` | `error_class` | `retryable` | `RESULT:acquisition=` | Raw |
-|---|---|---|---|---|---|---|
-| text recognized, extracted | 0 | `extracted` | — | — | — | published |
-| text recognized, extraction failed | 4 | `captured` | the extractor's (§3.4 step 4) | per class | — | published |
-| same bytes already captured | 0 | `skipped-duplicate` | — | — | — | — |
-| input over `image_max_bytes` | 1 | `failed` | `too-large` | false | `too-large` | none |
-| not a PNG or JPEG by signature | 1 | `failed` | `unsupported` | false | `wrong-format` | retained |
-| a PNG or JPEG whose structure does not verify | 1 | `failed` | `unsupported` | false | `truncated` · `corrupt` | retained |
-| pixels over `image_max_pixels`, or over the backend's own limit | 1 | `failed` | `too-large` | false | `too-large` | retained |
-| zero recognized text (§22.4 there: nothing but whitespace) | 1 | `failed` | `no-text` | false | — | retained |
-| the backend's output is malformed, or it failed on a valid image | 1 | `failed` | `convert` | false | — | retained |
-| the backend's text is not UTF-8 | 1 | `failed` | `invalid-utf8` | false | — | retained |
-| recognition over `ocr_timeout` | 1 | `failed` | `timeout` (`stage: ocr`) | false | — | retained |
-| no backend, or language data missing | **3** | `failed` | `environment` | true | — | retained |
-| the vault is locked | 75 | `locked` | `locked` | true | — | — |
+| Outcome | Stage | Exit | `RESULT:status` | `error_class` | `retryable` | `RESULT:acquisition=` | Raw | Report |
+|---|---|---|---|---|---|---|---|---|
+| text recognized, extracted | — | 0 | `extracted` | — | — | — | published | yes |
+| text recognized, extraction failed | — | 4 | `captured` | the extractor's (§3.4 step 4) | per class | — | published | yes |
+| the same bytes already captured | — | 0 | `skipped-duplicate` | — | — | — | — | — |
+| the input over `image_max_bytes` | S2 | 1 | `failed` | `too-large` | false | `too-large` | none | none (the receipt's `error` names the size and the cap) |
+| the input changed before the copy | S3 | 1 | `failed` | `input-missing` | false | — | none | none |
+| not a PNG or JPEG by signature, or an animated PNG | S5 `envelope` | 1 | `failed` | `unsupported` | false | `wrong-format` | retained | yes |
+| the container cut short | S5 `envelope` | 1 | `failed` | `unsupported` | false | `truncated` | retained | yes |
+| the container inconsistent (header, frame, EXIF) | S5 `envelope` | 1 | `failed` | `unsupported` | false | `corrupt` | retained | yes |
+| an EXIF orientation other than 1 | S5 `envelope` | 1 | `failed` | `unsupported` | false | `rotated` | retained | yes |
+| more pixels than `image_max_pixels` | S5 `envelope` | 1 | `failed` | `too-large` | false | `too-large` | retained | yes |
+| no recognizer, a missing language model, an unreadable or too old version | S6 `probe` | **3** | `failed` | `environment` | true | — | retained | yes |
+| the recognizer cannot decode the image | S6 `ocr` | 1 | `failed` | `unsupported` | false | `corrupt` | retained | yes |
+| the image over the recognizer's own limit | S6 `ocr` | 1 | `failed` | `too-large` | false | `too-large` | retained | yes |
+| another recognizer failure, or its output missing, malformed or over a cap | S6 `ocr` · `output` | 1 | `failed` | `convert` | false | — | retained | yes |
+| the recognized text is not UTF-8 | S6 `output` | 1 | `failed` | `invalid-utf8` | false | — | retained | yes |
+| zero recognized text | S6 `text` | 1 | `failed` | `no-text` | false | — | retained | yes |
+| recognition over `ocr_timeout` | S5–S6, the stage reached | 1 | `failed` | `timeout` | false | — | retained | yes (the supervisor's) |
+| the recognition process ended without a usable report, or with one that contradicts its exit | S5–S7 `worker` | 1 | `failed` | `convert` | **true** | — | retained | the supervisor's, or none |
+| the vault is locked | — | 75 | `locked` | `locked` | true | — | — | — |
 
-- **No word gate.** Zero recognized text is the only refusal on the text itself. A short valid text (a quote card of twelve words) is published like a long one; its length, the backend's confidence and the image's dimensions are diagnostics in the report and the frontmatter (capture layer D6).
-- **A missing tool is the environment, never a contract error.** Exit 3 is "a tool is missing" (§3.6) — here the recognition backend or its language data, named on stderr. Unlike Poppler for a PDF, the check runs **after** the raw is published (S4 before S6): the image may be the only copy, the retained raw needs no input locator, and the retry after the installation is a replay of the id.
-- **`timeout` is not retryable** for recognition, as for the conversion of a retained raw (capture layer D11, G25): the same image under the same execution takes the same time; raise `ocr_timeout` and replay.
-- The supervisor `capture-image.py` ending without its report (an exit other than 0, 1, 3 and 124) is `convert`, retryable: that is a fault of the engine's process, not a property of the image.
+- **No word gate.** Zero recognized text is the only refusal on the text itself. A short valid text (a quote card of twelve words) is published like a long one. Its length (`capture.text_bytes`, the report's `result`), the recognizer's confidence and the image's dimensions are diagnostics (capture layer D6), never a reason to refuse.
+- **A missing tool is the environment, never a contract error.** Exit 3 is "a tool is missing" (§3.6) — here tesseract or a language model the bound sequence names, said on stderr. Unlike Poppler for a PDF, the check runs **after** the raw is published (S4 before S6): the image may be the only copy, the retained raw needs no locator, and the retry after the installation is a replay of the id.
+- **`timeout` is not retried automatically.** This is a chosen policy, not a claim that the same image always takes the same time: an automatic retry spends another full budget under the vault lock; the operator raises `ocr_timeout` and replays (as for `convert_timeout`, capture layer G25).
+- **A fault of the engine's own process is retryable.** A recognition process that dies without its report, or reports something its exit contradicts, says nothing about the image.
 - An integrity error, a lock and every extraction outcome are unchanged.
 
 #### §6 — origins
 
 | Origin | Raw (`raw_kind`) | Capture-text (method) | Fidelity |
 |---|---|---|---|
-| `image` (`--file`, PNG or JPEG) | the input bytes → `<revision>.png` \| `<revision>.jpg` by signature (`image`) | the text the backend recognized on the published raw, normalized (`ocr:<backend>:<languages>`; capture layer §22); zero text → `no-text`, raw retained; a missing backend → exit 3 after the raw is published | `recognized` |
+| `image` (`--file`; an upright PNG or JPEG) | the input bytes → `<revision>.png` \| `<revision>.jpg` by signature (`image`); `raw_sha256` = `input_sha256` | the text tesseract recognized on the published raw, normalized (`ocr:tesseract:<languages>`; capture layer §22); zero text → `no-text`, raw retained; a missing recognizer or model → exit 3 after the raw is published | `recognized` |
 
 `capture.fidelity` gains its fourth value: `exact | converted | transcribed | recognized`. `recognized` says that a recognizer read the text off pixels — a fact about the chain, not a quality judgement — and keeps it apart from `transcribed` (speech): the two fail differently, and research reads them differently (research interface v1.5).
 
-#### Tests (with the capture layer §22.11 list)
+#### Tests
 
-`tests/test_capture.sh` (the gateway's image path with a stub `OCR_CMD`): the S1–S9 states and each crash hook, the recovery rows above (a replay never reads the input file — the test deletes it first; a replay after `environment` recognizes once the stub appears; the `previous_execution` note), the outcome table row by row against the RESULT lines and exits, `--resume` of an `extract-failed` image capture calling no backend (the stub counts its calls), the frontmatter keys and their serialization (`ocr_version` `"5.10"` reads back as a string), no URL key in an image's `source.md`, a later `--url` capture not deduplicated against it, the same bytes as `file` then `image` (one resource; the doctor's resolved receipt), the request hash of every non-image fixture unchanged (`tests/fixtures/capture/receipts/` byte for byte) and a new `request-v2-image.json`. `tests/test_gateway.sh`: the exit-2 refusals of §3.1 above, also through `--dry-run`; the `file` row's message naming `--origin image` for a PNG; `--manifest` with an `origin: image` item. `tests/test_ingest.sh`: unchanged — an image payload with a null origin is still `unsupported`.
+The required tests are listed once, in capture layer §22.11; the persistence ones are in `tests/test_capture.sh` (the steps and their crash hooks, the boundary rows, the outcome table row by row against the RESULT lines, the exits and the receipt, the frontmatter keys and their serialization, no URL key in an image's `source.md`, the request fixtures) and `tests/test_gateway.sh` (every refusal of §3.1 above, also through `--dry-run`; the batch items). `tests/test_ingest.sh` is unchanged — an image payload with a null origin is still `unsupported`.
