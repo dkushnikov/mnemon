@@ -194,6 +194,10 @@ if cmd == "under-lock":
     sys.exit(0)
 elif cmd == "fsync-file":
     fsync_path(a[0])
+elif cmd == "stat-size":
+    # <path>: the size from the file's metadata — never opened, so an evicted file of a synced
+    # folder is not downloaded (contracts A12, the presence check)
+    print(os.stat(a[0]).st_size)
 elif cmd == "fsync-rename":
     fsync_path(a[0]); os.rename(a[0], a[1]); fsync_dir(os.path.dirname(a[1]))
 elif cmd == "publish-dir":
@@ -1459,8 +1463,9 @@ cap_raw_heal() {
 # raw verifies (after a heal when it had been renamed back); 1 with VERIFY_CLASS raw-missing |
 # raw-mismatch and VERIFY_MSG. `full` (default) hashes the raw (a bundle: capture-site.py verify);
 # `presence` — the answers that write nothing (a duplicate, the replay of a duplicate alias) —
-# checks that it exists with its recorded size (a bundle: its manifest), so a file that a synced
-# folder evicted is not downloaded to answer. The reference: this run's RAW_STORE /
+# checks that it exists with its recorded size (a bundle: its manifest), both from the file
+# system's metadata — the raw is never opened, so a file that a synced folder evicted is not
+# downloaded to answer. The reference: this run's RAW_STORE /
 # RAW_PATH / RAW_SHA256 / RAW_BYTES (a fresh capture, or a receipt restored for a replay); else
 # the receipt of the folder's capture_id; else the folder's own claim (capture.raw_store archive,
 # `archive:` under this config's archive_dir, capture.raw_sha256 / raw_bytes). A state raw without
@@ -1495,7 +1500,7 @@ cap_raw_evidence_check() {
   if [[ -e "$path" ]]; then
     if [[ "$mode" == presence ]]; then
       if [[ -d "$path" ]]; then [[ -f "$path/manifest.json" ]] && return 0
-      elif [[ -f "$path" ]] && { [[ ! "$bytes" =~ ^[0-9]+$ ]] || [[ "$(cap_bytes "$path")" == "$bytes" ]]; }; then return 0; fi
+      elif [[ -f "$path" ]] && { [[ ! "$bytes" =~ ^[0-9]+$ ]] || [[ "$(cap_py stat-size "$path" 2>/dev/null)" == "$bytes" ]]; }; then return 0; fi
       CAP_VERIFY_NOTE="not the recorded size or shape"
     elif cap_raw_carries "$path" "$sha"; then
       return 0
