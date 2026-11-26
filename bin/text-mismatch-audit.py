@@ -100,6 +100,7 @@ class Converted(NamedTuple):
     klass: Optional[str]         # an unprobed class
     detail: Optional[str]
     tools: Optional[dict]        # capture-text's tool versions (defuddle, pandoc)
+    sidecar: Optional[str] = None    # an HTML raw's sidecar: None (none), `used`, `no fetch report`, `unavailable: …`
 
 
 def is_dataless(st) -> bool:
@@ -187,19 +188,37 @@ def _tail(data: bytes, n: int = 200) -> str:
     return data.decode("utf-8", "replace").strip().replace("\n", " ")[-n:]
 
 
-def sidecar_fetch_report(archive_dir: Optional[str], rev: str, work: str) -> Optional[str]:
-    """The `fetch` object of the revision's frozen sidecar `<rev>.report.json`, written to the work dir for
-    `--fetch-report` (what only the fetch saw: the charset, the egress); None without one."""
+def sidecar_fetch_report(archive_dir: Optional[str], rev: str, work: str) -> Tuple[Optional[str], Optional[str]]:
+    """(path, note): the `fetch` object of the revision's frozen sidecar `<rev>.report.json`, written to the
+    work dir for `--fetch-report` (what only the fetch saw: the charset, the egress), and what became of the
+    sidecar — None (there is none), `used`, `no fetch report`, `unavailable: <why>`. The sidecar gets the
+    raw's check before it is opened: a cloud placeholder is never opened (opening it would download it, and
+    outside the conversion's deadline); the conversion then runs without it, and the result says so."""
     if not archive_dir:
-        return None
-    side = _report(os.path.join(archive_dir, rev + ".report.json"))
-    fetch = side.get("fetch")
+        return None, None
+    side_path = os.path.join(archive_dir, rev + ".report.json")
+    try:
+        st = os.stat(side_path)
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        return None, "unavailable: cannot stat the sidecar: %s" % (exc.strerror or exc)
+    if is_dataless(st):
+        return None, "unavailable: the sidecar is a cloud placeholder (not downloaded)"
+    try:
+        with open(side_path, "r", encoding="utf-8") as fh:
+            side = json.load(fh)
+    except OSError as exc:
+        return None, "unavailable: cannot read the sidecar: %s" % (exc.strerror or exc)
+    except ValueError:
+        return None, "unavailable: the sidecar is not JSON"
+    fetch = side.get("fetch") if isinstance(side, dict) else None
     if not isinstance(fetch, dict) or not fetch:
-        return None
+        return None, "no fetch report"
     out = os.path.join(work, "fetch.json")
     with open(out, "w", encoding="utf-8") as fh:
         json.dump(fetch, fh)
-    return out
+    return out, "used"
 
 
 def convert_html(path: str, rec: dict, timeout: float, work: str, archive_dir: Optional[str]) -> Converted:
@@ -214,11 +233,15 @@ def convert_html(path: str, rec: dict, timeout: float, work: str, archive_dir: O
     out, rep = os.path.join(work, "capture.md"), os.path.join(work, "capture-text.json")
     argv = [sys.executable, CAPTURE_TEXT, path, "--url", url or "about:blank", "--out", out, "--report", rep,
             "--raw-kind", raw_kind, "--kind", kind, "--timeout", "%g" % timeout]
-    fr = sidecar_fetch_report(archive_dir, rec["name"], work)
+    fr, side = sidecar_fetch_report(archive_dir, rec["name"], work)
     if fr:
         if (_report(fr).get("egress") or "") == "external":
             argv[argv.index("--raw-kind") + 1] = "external"
         argv += ["--fetch-report", fr]
+    return convert_html_run(argv, out, rep, timeout)._replace(sidecar=side)
+
+
+def convert_html_run(argv: List[str], out: str, rep: str, timeout: float) -> Converted:
     res = proc.run(argv, timeout=timeout + OUTER_GRACE_S)
     report = _report(rep)
     tools = report.get("tools") if isinstance(report.get("tools"), dict) else None
@@ -325,7 +348,7 @@ def titles_of(rec: dict, conv_title: Optional[str]) -> List[str]:
 
 def new_result(rec: dict, cited: set) -> dict:
     return {"revision": rec["name"], "class": None, "detail": None, "raw": None, "raw_store": None,
-            "converter": None, "raw_acquisition": None, "eligible_lines": None, "not_found": None, "share": None, "samples": [],
+            "converter": None, "raw_acquisition": None, "sidecar": None, "eligible_lines": None, "not_found": None, "share": None, "samples": [],
             "cited": rec["name"] in cited, "current": bool(rec.get("current")),
             "completeness": rec.get("completeness"), "source_type": rec.get("source_type"),
             "source_words": rec.get("body_words"), "converted_words": None, "seconds": None}
@@ -360,6 +383,7 @@ def audit_one(rec: dict, ctx: dict) -> Optional[dict]:
     finally:
         shutil.rmtree(work, ignore_errors=True)
     out["converter"] = conv.converter
+    out["sidecar"] = conv.sidecar
     if conv.tools and not ctx["tools"]:
         ctx["tools"] = conv.tools
     if conv.klass:
@@ -461,6 +485,12 @@ def print_human(doc: dict) -> None:
         print("Not probed (converter or raw):")
         for r in sorted(other, key=lambda r: (r["class"], r["revision"])):
             print("  %s  %s — %s" % (r["revision"], r["class"], r["detail"]))
+    unread = [r for r in doc["results"] if (r.get("sidecar") or "").startswith("unavailable")]
+    if unread:
+        print()
+        print("Converted without their sidecar's fetch report (the sidecar was not read):")
+        for r in sorted(unread, key=lambda r: r["revision"]):
+            print("  %s  %s" % (r["revision"], r["sidecar"]))
     if not doc["snapshot"]["complete"]:
         print()
         print("warning: the snapshot is incomplete (%d unreadable file(s)%s)" % (

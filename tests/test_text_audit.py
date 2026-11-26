@@ -172,6 +172,9 @@ def build_main(v: Vault):
              "A second paragraph carries a link to the [documentation pages](https://example.test/docs) of the project.\n",
              page("Alpha page title", "The first paragraph of the alpha page has more than six words.",
                   'A second paragraph carries a link to the <a href="/docs">documentation pages</a> of the project.'))
+    # the sidecar of a later capture era beside the raw: its fetch report is read
+    with open(os.path.join(v.archive, "2026-01-01_aaaaaaaa.report.json"), "w", encoding="utf-8") as fh:
+        json.dump({"schema": "mnemon-capture-report/1", "fetch": {"charset": "utf-8"}, "text": None, "media": None}, fh)
     # mismatch — one line of the page, four that are not in it
     v.source("2026-01-02_bbbbbbbb", legacy("https://example.test/beta", 'archive: "2026-01-02_bbbbbbbb.html"\n'),
              GENUINE_B + "\n\n" + "\n\n".join(INVENTED_B) + "\n", page("Beta", GENUINE_B))
@@ -264,6 +267,8 @@ class MainVault(unittest.TestCase):
         self.assertEqual(a["eligible_lines"], 2, "the title heading is not required, both paragraphs are")
         self.assertTrue(a["converter"].startswith("capture-text:"), a["converter"])
         self.assertEqual((a["raw"], a["raw_store"]), ("2026-01-01_aaaaaaaa.html", "archive"))
+        self.assertEqual(a["sidecar"], "used")
+        self.assertIsNone(self.by_rev()["2026-01-07_gggggggg"]["sidecar"], "no sidecar: nothing to say")
 
     def test_mismatch_share_and_samples(self):
         b = self.by_rev()["2026-01-02_bbbbbbbb"]
@@ -456,6 +461,61 @@ class Units(unittest.TestCase):
             self.assertIn("cannot read", TMA.unreadable_reason(p))
         finally:
             os.chmod(p, 0o600)
+            shutil.rmtree(d)
+
+    def sidecar_fixture(self):
+        d = tempfile.mkdtemp(prefix="mnemon-tma-u-")
+        rev = "2026-01-01_aaaaaaaa"
+        raw = os.path.join(d, rev + ".html")
+        with open(raw, "w", encoding="utf-8") as fh:
+            fh.write(page("Side", "The side page body has more than six words in it."))
+        with open(os.path.join(d, rev + ".report.json"), "w", encoding="utf-8") as fh:
+            json.dump({"fetch": {"charset": "utf-8"}}, fh)
+        work = os.path.join(d, "work")
+        os.makedirs(work)
+        return d, rev, raw, work
+
+    def test_a_placeholder_sidecar_is_never_opened_and_is_reported(self):
+        """Second reader, P2: the sidecar was opened without the raw's placeholder check — a download outside
+        the conversion's deadline. It is now checked first, and the conversion runs without it."""
+        d, rev, raw, work = self.sidecar_fixture()
+        real_open = open
+
+        def guarded_open(path, *a, **kw):
+            if str(path).endswith(".report.json"):
+                raise AssertionError("the sidecar was opened")
+            return real_open(path, *a, **kw)
+
+        try:
+            with mock.patch.object(TMA, "is_dataless", side_effect=lambda st: st.st_ino == os.stat(
+                    os.path.join(d, rev + ".report.json")).st_ino), mock.patch("builtins.open", guarded_open):
+                path, note = TMA.sidecar_fetch_report(d, rev, work)
+            self.assertIsNone(path)
+            self.assertTrue(note.startswith("unavailable:") and "placeholder" in note, note)
+            self.assertEqual(os.listdir(work), [])
+            with mock.patch.object(TMA, "is_dataless", side_effect=lambda st: st.st_ino == os.stat(
+                    os.path.join(d, rev + ".report.json")).st_ino):
+                conv = TMA.convert_html(raw, {"name": rev, "url": "https://example.test/side"}, 60, work, d)
+            self.assertIsNone(conv.klass, conv.detail)
+            self.assertIn("The side page body has more than six words in it.", conv.text)
+            self.assertTrue(conv.sidecar.startswith("unavailable:"), conv.sidecar)
+        finally:
+            shutil.rmtree(d)
+
+    def test_sidecar_notes(self):
+        d, rev, raw, work = self.sidecar_fixture()
+        try:
+            path, note = TMA.sidecar_fetch_report(d, rev, work)
+            self.assertEqual((note, os.path.dirname(path)), ("used", work))
+            self.assertEqual(TMA.sidecar_fetch_report(d, "2026-09-09_zzzzzzzz", work), (None, None))
+            self.assertEqual(TMA.sidecar_fetch_report(None, rev, work), (None, None))
+            with open(os.path.join(d, rev + ".report.json"), "w") as fh:
+                fh.write("{not json")
+            self.assertEqual(TMA.sidecar_fetch_report(d, rev, work), (None, "unavailable: the sidecar is not JSON"))
+            with open(os.path.join(d, rev + ".report.json"), "w") as fh:
+                fh.write("{}")
+            self.assertEqual(TMA.sidecar_fetch_report(d, rev, work), (None, "no fetch report"))
+        finally:
             shutil.rmtree(d)
 
     def test_pdftotext_missing_is_converter_unavailable(self):
