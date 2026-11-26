@@ -344,16 +344,17 @@ def _value_follows(line: str, pos: int, urls) -> bool:
 
 
 def redact(line: str) -> str:
-    """One line made safe to print or retain: URL query values first (the video id aside) and a URL's user and
-    password; then the rest of the line becomes <redacted> at the earliest of four cuts — a credential word outside a
-    URL, with its separator or with a value after it in free wording; and, wherever they stand, a credential key with
-    its separator (a hyphenated name and a URL's fragment included), `Bearer` or `Basic` with a value after it, and
-    `--add-header` — the separator kept when there is one (`Authorization: <redacted>`, `SID=<redacted>`), whatever
-    was left open closed; then absolute and home-relative paths, and token-shaped strings. Every line that the rule of
-    the release before this one cut is cut here too: its key, scheme and option rules read the whole line, as they
-    did."""
+    """One line made safe to print or retain: URL query values first (the video id aside); then the rest of the line
+    becomes <redacted> at the earliest of four cuts — a credential word outside a URL, with its separator or with a
+    value after it in free wording; and, wherever they stand, a credential key with its separator (a hyphenated name
+    and a URL's fragment included), `Bearer` or `Basic` with a value after it, and `--add-header` — the separator kept
+    when there is one (`Authorization: <redacted>`, `SID=<redacted>`), whatever was left open closed; then a URL's
+    user and password, absolute and home-relative paths, and token-shaped strings.
+
+    The key, scheme and option rules read the line as the first release's did — after the query rule and before any
+    other change — and each cuts where it did, or earlier. That is a statement about these three rules, not about
+    every line: an earlier cut keeps what stands before it (see the limits in capture layer A18)."""
     line = _QUERY_RE.sub(_redact_query, line)
-    line = _USERINFO_RE.sub(lambda m: m.group(1) + "<redacted>@", line)
     urls = [(m.start(), m.end()) for m in _URL_RE.finditer(line)]
 
     def outside(m) -> bool:
@@ -383,6 +384,9 @@ def redact(line: str) -> str:
         end, tail = min(cuts)
         prefix = line[:end]
         line = prefix + tail + _closers(prefix)
+    # after the cut, never before it: a key inside a URL's user part (`https://sid:…@host`) is a field, and the cut it
+    # makes takes the rest of the line with it
+    line = _USERINFO_RE.sub(lambda m: m.group(1) + "<redacted>@", line)
     line = _PATH_RE.sub("<path>", line)
     return _TOKEN_RE.sub("<redacted>", line)
 

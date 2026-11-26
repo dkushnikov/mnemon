@@ -95,6 +95,7 @@ if [[ " $* " == *" --dump-single-json "* ]]; then
         echo "WARNING: https://example.com/p#--add-header synthetic-glued-4"
         echo "WARNING: client_secret=synthetic-prefixed"
         echo "WARNING: proxy http://reader:synthetic-userinfo@proxy.example.com:8080 refused the connection"
+        echo "WARNING: https://sid:synthetic-userkey@proxy.example.com/p then a note synthetic-tail"
       } >&2; exit 1 ;;
     creds-error) echo "ERROR: [youtube] $id: HTTP Error 403 on https://rr1.googlevideo.com/videoplayback?v=$id&sig=synthetic-sig-9; Authorization: Bearer synthetic-err-token" >&2; exit 1 ;;
   esac
@@ -324,6 +325,7 @@ assert_contains "$kept" "WARNING: auth-Basic <redacted>" "...and with a hyphen o
 assert_contains "$kept" "WARNING: https://example.com/p#--add-header <redacted>" "...--add-header glued to a URL"
 assert_contains "$kept" "WARNING: client_secret=<redacted>" "...a secret field with a prefix in its name"
 assert_contains "$kept" "WARNING: proxy http://<redacted>@proxy.example.com:8080 refused the connection" "...the user and password of a URL go, the rest of the line stays"
+assert_contains "$kept" "WARNING: https://sid: <redacted>" "...a key in a URL's user part is a field first: the line is cut there, as the first release cut it"
 leak="$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")"
 assert_not_contains "$leak" "synthetic" "...no credential value anywhere"
 assert_not_contains "$leak" "dXNlcjpwYXNz" "...nor the Basic value"
