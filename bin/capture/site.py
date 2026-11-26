@@ -14,11 +14,12 @@ then by role priority, then in discovery order. `fetch_bundle` owns the
 page loop and its deadline: every included page through the chain of §3.3 (host and robots eligibility
 checked per hop, against the destination origin's robots), ≥ 1 s
 between requests to one host (PACE_S; the mapper keeps it too — `pace_s` names the one test hook that
-changes it, MNEMON_TEST_SITE_PACE_S, honoured only under MNEMON_TEST_HOOKS=1), `NN.html` + `NN.fetch.json` per page, `plan.json` (a byte copy) and
-`manifest.json` last — the manifest binds every member with its size and hash and carries the acquisition
-dispositions (`captured`, `fetch-failed`, `skipped-timeout`). `verify_bundle` recomputes the manifest hash
-and every member (no symlink, no escaping path). `assemble` converts every captured page in process and
-writes the composite with the `mnemon-site/1` report (conversion dispositions, the aggregate completeness).
+changes it, MNEMON_TEST_SITE_PACE_S, honoured only under MNEMON_TEST_HOOKS=1), `NN.html` + `NN.fetch.json`
+per page, `plan.json` (a byte copy) and `manifest.json` last — the manifest binds every member with its
+size and hash and carries the acquisition dispositions (`captured`, `fetch-failed`, `skipped-timeout`).
+`verify_bundle` recomputes the manifest hash and every member (no symlink, no escaping path). `assemble`
+converts every captured page in process and writes the composite with the `mnemon-site/1` report
+(conversion dispositions, the aggregate completeness).
 Stdlib only, python 3.9.
 """
 from __future__ import annotations
