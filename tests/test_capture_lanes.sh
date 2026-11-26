@@ -160,6 +160,25 @@ if [[ "$rc" == 0 ]]; then
   rev_re="$(result revision)"
   assert_eq "$rc $(result status) $(fm "$VAULT/Sources/$rev_re/source.md" supersedes)" "0 extracted \"$rev_once\"" "...--recapture makes the text-route revision, superseding the file-kind one"
   assert_eq "$(body_sha "$VAULT/Sources/$rev_re/source.md")" "$(shasum -a 256 "$TEST_TMPDIR/once.txt" | cut -c1-64)" "...with the bytes as its body"
+  assert_eq "$(fm "$VAULT/Sources/$rev_once/source.md" resource_kind) $(fm "$VAULT/Sources/$rev_re/source.md" resource_kind)" "file text" "...the historical revision keeps its file-kind key, the new one is text-kind"
+  # the data doctor reads the pair as one resource (the second reader, integrated review): no cross-resource edge
+  # for the migration the engine made, while an explicit supersedes of another resource still is one
+  supersedes_edges() {
+    python3 "$MNEMON_ROOT/bin/vault-doctor.py" --vault "$VAULT" --state-dir "$TEST_TMPDIR/doctor-state" --json 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+c = [x for x in d["checks"] if x["name"] == "store/supersedes"][0]
+print(c["counts"]["cross_resource"], " ".join(sorted(i["id"] for i in c["items"] if i.get("reason") == "cross-resource edge")))'
+  }
+  mkdir -p "$TEST_TMPDIR/doctor-state"
+  edges="$(supersedes_edges)"
+  assert_not_contains "$edges" "$rev_re → $rev_once" "doctor --data: the file-to-text migration is not a cross-resource edge"
+  assert_eq "${edges%% *}" "0" "...no cross-resource edge in the vault"
+  printf 'another resource entirely\n' > "$TEST_TMPDIR/other.txt"
+  run_gw --file "$TEST_TMPDIR/other.txt" --supersedes "$rev_pt" --capture-id pt-cross
+  rev_cross="$(result revision)"
+  edges="$(supersedes_edges)"
+  assert_eq "$edges" "1 $rev_cross → $rev_pt" "...while a supersedes of another resource is still reported as one"
 else
   echo "  (pandoc missing: the file-kind predecessor cannot be made; the alias case is not run)"
 fi
