@@ -172,7 +172,7 @@ run_gw --capture-id cs-1
 assert_eq "$rc $(result status)" "0 extracted" "the replay finishes the rename"
 assert_dir_exists "$ARCHIVE/$revs1.site" "...the bundle is published"
 [[ -d "$staged" ]] && fail "staged gone" "still there" || pass "...the staged directory is gone"
-assert_eq "$(site_calls fetch-bundle) $(site_calls verify)" "0 2" "...without refetching: the staged tree was verified before the rename, the published one before assembly"
+assert_eq "$(site_calls fetch-bundle) $(site_calls verify)" "0 4" "...without refetching: the staged tree was verified before the rename, the published one before assembly, before the source publication and before the final receipt (contracts A12)"
 stub_reset
 crash_site after-raw-renamed cs-2
 revs2="$(rget cs-2 '.revision')"

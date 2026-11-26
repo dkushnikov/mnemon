@@ -674,6 +674,9 @@ cap_replay() {
       # (an integrity-error receipt is re-verified: when the operator restored the file the
       # capture goes on from the files as they are, §12 A3)
       cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+      # the raw it names too (contracts A12): an extracted receipt whose raw is gone is an integrity error,
+      # and an integrity-error receipt whose raw was restored goes on
+      cap_raw_guard "$(cap_extract_state_of "$REVISION")"
       cap_sidecar_recover
       if [[ ! -f "$VAULT_PATH/Sources/$REVISION/extract.md" ]]; then
         cap_run_extract_step true "$KEEP_LOCATOR"
@@ -691,6 +694,7 @@ cap_replay() {
       exit 0 ;;
     source-published|extract-failed)
       cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+      cap_raw_guard "$(cap_extract_state_of "$REVISION")"
       cap_sidecar_recover
       if cap_extract_belongs; then cap_reconcile_extracted "$KEEP_LOCATOR"; fi
       cap_run_extract_step true "$KEEP_LOCATOR" ;;
@@ -699,6 +703,7 @@ cap_replay() {
         # crash after the directory rename, before the receipt: a source.md at the reserved name
         # is verified (§12 A3 — verification applies once a source.md with this id exists)
         cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+        cap_raw_guard "$(cap_extract_state_of "$REVISION")"
         cap_receipt_update "$CAPTURE_ID" '.state="source-published" | .source_published=true | .error_class=null | .error=null | .retryable=null'
         cap_sidecar_recover
         if cap_extract_belongs; then cap_reconcile_extracted "$KEEP_LOCATOR"; fi
@@ -741,6 +746,13 @@ cap_alias_replay() {
     cap_verify_folder_source "$REVISION" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
   else
     cap_verify_source "$REVISION" "$owner" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+  fi
+  # the target's raw (contracts A12): the owner receipt's record when it was restored, else the
+  # folder's claim — present with its size for a duplicate alias (an answer that writes nothing)
+  if [[ ( "$alias_state" == "extracted" || "$alias_state" == "bookmarked" ) && "$alias_attempts" -eq 0 ]]; then
+    cap_raw_guard "$(cap_extract_state_of "$REVISION")" presence
+  else
+    cap_raw_guard "$(cap_extract_state_of "$REVISION")"
   fi
   if [[ -n "$ALIAS_ID" && ( "$RECEIPT_STATE" == "started" || "$RECEIPT_STATE" == "failed" ) ]]; then
     # the owner's receipt lagged behind its published folder (crash after the rename)
@@ -852,7 +864,8 @@ cap_raw_matches() {   # <path> <sha256>
   if [[ -d "$1" ]]; then cap_bundle_verify "$1" "$2"; else [[ -f "$1" && "$(cap_sha256 "$1")" == "$2" ]]; fi
 }
 
-cap_raw_rename_into_place() {   # <staged> <final>
+cap_raw_rename_into_place() {   # <staged> <final>: a fresh copy renamed at once (contracts A12), else the staged copy itself
+  if cap_py fresh-rename "$1" "$1-r" "$2"; then rm -rf "$1"; return 0; fi
   if [[ -d "$1" ]]; then cap_py publish-dir "$1" "$2"; else cap_py fsync-rename "$1" "$2"; fi
 }
 
@@ -915,6 +928,9 @@ cap_fresh() {
       # an edited body is integrity-error/evidence-mismatch (exit 1), never skipped-duplicate;
       # a legacy source without the field is verified by existence only
       cap_verify_folder_source "$folder" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+      # and the raw the folder claims (contracts A12): a duplicate of a revision without its raw is an
+      # integrity error, never skipped-duplicate (present with its recorded size: nothing is written)
+      cap_raw_guard "$(cap_extract_state_of "$folder")" presence
       if [[ -n "$SITE_MODE" ]]; then
         echo "WARNING: the landing is already captured at Sources/$folder/ — skipping; a site capture of a captured landing needs --recapture (the site revision supersedes it)" >&2
       elif [[ "${URL_KIND:-}" == "arxiv" && -n "${REQUESTED_VERSION:-}" ]]; then
@@ -953,6 +969,7 @@ cap_fresh() {
       cap_restore_from_receipt
       REPLAYED=true
       cap_verify_source "$REVISION" "$CAPTURE_ID" "$TEXT_SHA256" || cap_integrity_exit "$VERIFY_CLASS" "$VERIFY_MSG"
+      cap_raw_guard "$(cap_extract_state_of "$REVISION")"
       if [[ "$(cap_effective_tier "$folder")" == "bookmark" ]]; then cap_finish_bookmarked true "$KEEP_LOCATOR"; fi
       if cap_extract_belongs; then cap_reconcile_extracted "$KEEP_LOCATOR"; fi
       cap_run_extract_step true "$KEEP_LOCATOR"
