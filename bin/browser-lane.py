@@ -285,8 +285,10 @@ _URL_RE = re.compile(r"(?i)https?://(?:<redacted>|[^\s'\"<>])+")   # a URL after
 # the user and password of a URL of any scheme (`http://user:password@proxy:8080`), whatever stands before the
 # scheme: a URL glued to the text before it (`8080http://…`) has a user part too. The part runs to the last `@`
 # before the host — a password with a raw `@` in it is common — and ends at whitespace, a quote, an angle bracket,
-# `/`, `?` or `#`: a part that holds one of those raw is not recognized (capture layer A18, the limits)
-_USERINFO_RE = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^\s/'\"<>?#]+@")
+# `/`, `?` or `#`: a part that holds one of those raw is not recognized (capture layer A18, the limits). The rule
+# starts at the literal `://`, not at a scheme: a pattern that looks for a scheme start rescans a long run of
+# letters and digits from every letter (quadratic), and what stands before `://` does not matter here
+_USERINFO_RE = re.compile(r"(://)[^\s/'\"<>?#]+@")
 # a URL's query: every value but the video id `v` is dropped (`sig=`, `token=`, `pot=`, `n=` … carry credentials)
 _QUERY_RE = re.compile(r"(?i)(https?://[^\s'\"?#<>]+)\?([^\s'\"#<>]*)")
 _PATH_RE = re.compile(r"(?<![A-Za-z0-9_:/.~-])(?:~/|/)[^\s'\"]+")
@@ -295,6 +297,10 @@ _TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_+=-])(?=[A-Za-z0-9_+=-]*[0-9])(?=[A-Za-z
 _CLOSERS = {"[": "]", "(": ")", "{": "}", "'": "'", '"': '"'}
 STDERR_MAX_LINES = 200
 STDERR_MAX_CHARS = 2000
+# redact() reads no more of a line than this. Several rules rescan a long run with no space in it from many
+# starting points (a run of `a-`, a line of `http://` with no `?`), so their time grows with the square of the
+# line; the limit bounds it. Twice the kept length: a redaction shortens a line
+REDACT_MAX_CHARS = 2 * STDERR_MAX_CHARS
 
 
 def _redact_query(m) -> str:
@@ -357,7 +363,17 @@ def redact(line: str) -> str:
 
     The key, scheme and option rules read the line as the first release's did — after the query rule and before any
     other change — and each cuts where it did, or earlier. That is a statement about these three rules, not about
-    every line: an earlier cut keeps what stands before it (see the limits in capture layer A18)."""
+    every line: an earlier cut keeps what stands before it (see the limits in capture layer A18).
+
+    A line longer than REDACT_MAX_CHARS is read up to there. The word that the limit splits goes with the rest —
+    half of a token is not token-shaped any more — and a note counts what was not read."""
+    if len(line) > REDACT_MAX_CHARS:
+        total, i = len(line), REDACT_MAX_CHARS
+        while i > 0 and not line[i - 1].isspace():
+            i -= 1
+        head = line[:i].rstrip()
+        note = "<%d character(s) of the line not read>" % (total - len(head))
+        return (redact(head) + " " + note) if head else note
     line = _QUERY_RE.sub(_redact_query, line)
     urls = [(m.start(), m.end()) for m in _URL_RE.finditer(line)]
     user_parts = [(m.end(1), m.end() - 1) for m in _USERINFO_RE.finditer(line)]   # each URL's user part, up to its `@`

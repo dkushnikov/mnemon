@@ -100,6 +100,16 @@ if [[ " $* " == *" --dump-single-json "* ]]; then
         echo "WARNING: relay http://reader:synthetic-at@sign@proxy.example.com:8080 refused"
         echo "WARNING: port 8080http://reader:synthetic-glued-url@proxy.example.com refused"
       } >&2; exit 1 ;;
+    long)
+      python3 - "$id" >&2 <<'PYLONG'
+import sys
+vid = sys.argv[1]
+print("ERROR: [youtube] %s: a long line " % vid + "word " * 900 + "Cookie: synthetic-far-cookie")
+print("WARNING: " + "a-" * 50000 + " token=synthetic-after-run")
+print("WARNING: " + "x " * 1990 + "synthetic0123456789abcdefghij0123456789ABCDEFGHIJ end")
+print("WARNING: Cookie: synthetic-early-cookie " + "y " * 3000)
+PYLONG
+      exit 1 ;;
     creds-error) echo "ERROR: [youtube] $id: HTTP Error 403 on https://rr1.googlevideo.com/videoplayback?v=$id&sig=synthetic-sig-9; Authorization: Bearer synthetic-err-token" >&2; exit 1 ;;
   esac
   python3 - "$MEDIA_FIX/ytdlp-info-captions.json" "$id" "${STUB_YTDLP:-ok}" "${STUB_YTDLP_MANUAL:-}" <<'PY'
@@ -336,6 +346,21 @@ leak="$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")"
 assert_not_contains "$leak" "synthetic" "...no credential value anywhere"
 assert_not_contains "$leak" "dXNlcjpwYXNz" "...nor the Basic value"
 assert_not_contains "$leak" "reader:" "...nor the user name of a URL"
+# a line is read up to 4000 characters (the rules rescan a long run with no space in it; the limit bounds that):
+# the word that the limit splits goes with the rest, a note counts what was not read, and a field before the limit
+# is still cut
+stub_reset
+STUB_YTDLP=long run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
+assert_eq "$rc" "1" "four long lines: the lane ends (exit 1), it does not hang on them"
+B="$(bundle_of abc123xyz00)"
+kept="$(cat "$B/stderr.txt")"
+assert_eq "$(printf '%s\n' "$kept" | grep -c .)" "4" "...four lines kept"
+assert_contains "$kept" "ERROR: [youtube] abc123xyz00: a long line word word" "...a line of 4500 characters keeps its start"
+assert_contains "$kept" "WARNING: <100027 character(s) of the line not read>" "...a run of 100000 characters with no space: nothing of it is read, the note counts it"
+assert_contains "$kept" "WARNING: Cookie: <redacted> <" "...a field before the limit is cut as on a short line, and the note follows"
+assert_eq "$(printf '%s\n' "$kept" | awk '{ if (length($0) > 2000) n++ } END { print n + 0 }')" "0" "...and no kept line is longer than 2000 characters"
+leak="$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")"
+assert_not_contains "$leak" "synthetic" "...no credential: not the field beyond the limit, not the token the limit splits, not the one after the run"
 stub_reset
 STUB_YTDLP=creds-error run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
 B="$(bundle_of abc123xyz00)"
