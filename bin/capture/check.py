@@ -672,6 +672,31 @@ def plain(line: str) -> str:
     return line.replace(SOFT, "")
 
 
+class _Haystack:
+    """A text the presence test searches: its key, its token index, and the token index with intraword
+    emphasis markers removed (the same object as the first when the text has none)."""
+    __slots__ = ("key", "index", "index2")
+
+    def __init__(self, text: str):
+        self.key = line_key(text)
+        self.index = _TokenIndex(tokens(text))
+        unmarked = _INTRAWORD_MARK.sub("", text)
+        self.index2 = _TokenIndex(tokens(unmarked)) if unmarked != text else self.index
+
+
+def _presence(body: str, cls: str, hay: _Haystack) -> str:
+    """One eligible line against one text: `present`; `missing` — its key is not a substring of the text's
+    key; `glued` — the key is, its token sequence (SOFT boundaries joined) is not, in the plain tokenization
+    or with intraword markers removed. A `spaceless` line is decided by the key alone."""
+    if line_key(body) not in hay.key:
+        return "missing"
+    if cls == "spaceless":
+        return "present"
+    if any(hay.index.contains(form) or hay.index2.contains(form) for form in token_forms(body)):
+        return "present"
+    return "glued"
+
+
 def conversion(candidate_md: str, reference: str, title: Optional[str], markdown: bool = True) -> Conv:
     """Every eligible reference line and every h1–h3 heading must be present: the key as a substring and
     the line's tokens — SOFT boundaries joined — as a contiguous sequence of the candidate's tokens, in the
@@ -679,11 +704,7 @@ def conversion(candidate_md: str, reference: str, title: Optional[str], markdown
     candidate (the DOM text) as it is: the link rewrites of `candidate_text` are for markdown, and prose that
     merely looks like a reference link (`out[r][min(cols)]`) must not be eaten (G16)."""
     lines = reference_lines(reference)
-    text = candidate_text(candidate_md) if markdown else candidate_md
-    cand_key = line_key(text)
-    index = _TokenIndex(tokens(text))
-    unmarked = _INTRAWORD_MARK.sub("", text)
-    index2 = _TokenIndex(tokens(unmarked)) if unmarked != text else index
+    hay = _Haystack(candidate_text(candidate_md) if markdown else candidate_md)
     title_key = line_key(title) if title else None
     missing, glued, headings_missing = [], [], []
     eligible = 0
@@ -693,15 +714,109 @@ def conversion(candidate_md: str, reference: str, title: Optional[str], markdown
             continue
         eligible += 1
         body = line[3:] if cls == "heading" else line
-        key = line_key(body)
-        if key not in cand_key:
+        verdict = _presence(body, cls, hay)
+        if verdict == "missing":
             (headings_missing if cls == "heading" else missing).append(plain(body))
-            continue
-        if cls == "spaceless":
-            continue
-        if not any(index.contains(form) or index2.contains(form) for form in token_forms(body)):
+        elif verdict == "glued":
             (headings_missing if cls == "heading" else glued).append(plain(body))
     return Conv(missing, glued, headings_missing, len(lines), eligible)
+
+
+# --- the reversed rule: the text of a source.md in its raw (capture layer A17) -------------------------------
+# The forward rule above asks whether the page's text survived in a candidate; the reversed rule asks whether
+# a published body's text occurs in the text its raw converts to now. The roles swap, so the body is projected
+# the way the reference is: markdown reduced to text as `candidate_text` reduces a candidate, images and the
+# sanitizer's figure markers dropped (an image is not page text — the reference never holds an alt), h1–h3
+# carried as `## ` and h4–h6 as plain lines (the DOM projection's form), quote, list and task markers removed
+# (the DOM text has none; a list number would be a token the page does not write), entities decoded after the
+# markup is gone (a `&lt;div&gt;` the page shows as text stays text), intraword markers removed. Eligibility is
+# the forward rule's `classify_line` unchanged — six words, a two-word heading, twenty spaceless characters,
+# the CHROME list on lines of ≤ 12 words — and a line equal to one of the titles is not required. Presence is
+# the forward rule's `_presence`, against the raw's text as markdown (`candidate_text`) and as it is: a line
+# is found when either form holds it.
+
+_SRC_FIGURE = re.compile(r"\*\[(?:img|inline figure omitted at capture): [^\[\]\n]{0,2000}\]\*")
+_SRC_QUOTE = re.compile(r"^[ \t]{0,20}(?:>[ \t]{0,4}){1,20}")
+_SRC_ATX = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]{1,20}|$)")
+_SRC_ITEM = re.compile(r"^[ \t]{0,40}(?:[-*+]|\d{1,9}[.)])[ \t]{1,20}(?:\[[ xX]\][ \t]{1,20})?")
+
+
+class Presence(NamedTuple):
+    not_found: List[str]        # the eligible lines of the body the raw's text does not hold, in order
+    eligible_count: int
+    line_count: int             # the body's non-empty lines after the projection
+
+
+def _outside_code_spans(text: str, fn) -> str:
+    """`fn` applied to the prose of one fence-free segment, its inline code spans kept as they are."""
+    pieces: List[str] = []
+    pos = 0
+    for start, end in _code_spans(text):
+        pieces.append(fn(text[pos:start]))
+        pieces.append(text[start:end])
+        pos = end
+    pieces.append(fn(text[pos:]))
+    return "".join(pieces)
+
+
+def _drop_figures(text: str) -> str:
+    return _SRC_FIGURE.sub(" ", _MD_IMAGE.sub(" ", text))
+
+
+def _source_line(line: str) -> str:
+    line = htmlmod.unescape(line)
+    line = _SRC_QUOTE.sub("", line)
+    m = _SRC_ATX.match(line)
+    if m:
+        rest = line[m.end():].rstrip()
+        bare = rest.rstrip("#")
+        if bare != rest and (not bare or bare[-1] in " \t"):     # a closing `##` sequence
+            rest = bare.rstrip()
+        line = ("## " + rest) if len(m.group(1)) <= 3 else rest
+    else:
+        line = _SRC_ITEM.sub("", line)
+    return _INTRAWORD_MARK.sub("", line).strip()
+
+
+def source_reference(source_md: str) -> List[str]:
+    """The body of a `source.md` (frontmatter already removed) projected as reference lines for the reversed
+    rule. Fenced blocks are kept line by line as they are, as `candidate_text` keeps them."""
+    out: List[str] = []
+    for in_code, seg in _fenced_segments(source_md):
+        if in_code:
+            out.extend(seg.split("\n"))
+            continue
+        seg = candidate_text(_outside_code_spans(seg, _drop_figures))
+        out.extend(_source_line(line) for line in seg.split("\n"))
+    return reference_lines("\n".join(out))
+
+
+def source_presence(source_md: str, raw_text: str, titles=()) -> Presence:
+    """The reversed rule (capture layer A17): every eligible line of a source.md body must occur in the text
+    of its raw, by the forward rule's presence test, in the raw's text read as markdown or as it is. `titles`
+    are the revision's own titles (frontmatter `title`, `video_title`, the converter's `<title>`): a line
+    equal to one is not required. A diagnostic like the forward rule: what it reports is a mismatch between
+    two texts, never its cause."""
+    lines = source_reference(source_md)
+    hays = [_Haystack(candidate_text(raw_text)), _Haystack(raw_text)]
+    title_keys = set()
+    for t in titles:
+        k = line_key(t) if t else ""
+        if k:
+            title_keys.add(k)
+    not_found: List[str] = []
+    eligible = 0
+    for line in lines:
+        cls = classify_line(line, None)
+        if cls is None:
+            continue
+        body = line[3:] if cls == "heading" else line
+        if line_key(body) in title_keys:
+            continue
+        eligible += 1
+        if not any(_presence(body, cls, hay) == "present" for hay in hays):
+            not_found.append(plain(body))
+    return Presence(not_found, eligible, len(lines))
 
 
 # --- inventory and outcome ---------------------------------------------------------------------------------
