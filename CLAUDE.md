@@ -45,6 +45,7 @@ Mnemon is the tool; the plugin is a thin door into it.
 # temp HOME — one with no `claude` on PATH, one against a logging stub `claude`
 tests/run-suites.sh            # every suite under the bash and python3 on PATH
 tests/run-suites.sh --both     # macOS: the current toolchain, then the legacy one
+tests/run-suites.sh --jobs 4   # up to 4 suites at once (or --jobs auto): the same rows, in order, and the same exit code
 
 # Dry-run a capture through the dispatcher against an explicit instance file
 ./bin/mnemon --config /path/to/instance.yaml add --url https://example.com --dry-run
