@@ -276,6 +276,18 @@ printf 'short\n' > "$rawm"
 run_gw --url "https://example.com/ri-moved"
 assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error raw-mismatch" "a duplicate of a raw with another size → integrity-error/raw-mismatch"
 cp "$TEST_TMPDIR/moved.keep" "$rawm"
+# the presence check never opens the raw (an evicted file of a synced folder would download): a raw
+# that cannot be opened answers by its metadata — present at its size; at another size, caught
+chmod 000 "$rawm"
+run_gw --url "https://example.com/ri-moved"
+assert_eq "$rc $(result status)" "0 skipped-duplicate" "a duplicate of a raw that cannot be opened (mode 000): present with its recorded size, from the metadata alone"
+chmod 600 "$rawm"
+python3 -c 'import sys; p=sys.argv[1]; d=open(p,"rb").read(); open(p,"wb").write(d[:-1])' "$rawm"
+chmod 000 "$rawm"
+run_gw --url "https://example.com/ri-moved"
+assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error raw-mismatch" "...and one byte short, still caught without opening it"
+chmod 600 "$rawm"
+cp "$TEST_TMPDIR/moved.keep" "$rawm"
 
 # ---------------------------------------------------------------------------------------------
 echo "--- 7. the state store and an exact origin ---"
