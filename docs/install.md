@@ -123,6 +123,8 @@ The engine selects an instance in this order — the first that applies wins, an
 
 `--config` and `--instance` on one command line exit 2 (`conflicting selectors`), and so do `$MNEMON_CONFIG` and `$MNEMON_INSTANCE` when they name different configs — a session that inherited `MNEMON_CONFIG` for one vault cannot be silently redirected by a stray `MNEMON_INSTANCE`; `mnemon --instance <name> …` or `mnemon --config <path> …` is the explicit way out. Put the selector before the command (`mnemon --instance work add …`, not `mnemon add --instance work`). `mnemon config dump` prints the resolved pair and `MNEMON_CONFIG_SOURCE`, the selector that won.
 
+**Resolved once per command.** The dispatcher loads the instance file once and exports the whole resolution with a stamp, `MNEMON_RESOLVED` — a digest over the loader itself, the config file's bytes, `HOME`, `XDG_STATE_HOME`, `XDG_CONFIG_HOME`, `MNEMON_CONFIG_DIR` and every exported value. What the command runs next — the gateway, the gateway again under the vault lock, `mnemon-search.py`, `archive-audit.py`, the doctor — reuses the environment as it is while the digest holds, and loads the file again the moment anything moved: a selector flag, another instance, an edited config file, a changed or missing variable, another engine's loader. An explicit `--config <path>` is always loaded. A nested `mnemon --instance other …` inside a command is therefore never answered from the outer command's resolution.
+
 Bind a vault to its instance so Claude Code sessions started there never need `--instance`: put this into the vault's `.claude/settings.json`:
 
 ```json

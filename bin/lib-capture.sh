@@ -279,6 +279,9 @@ elif cmd == "revision-candidates":
     # suffix, folder name); every candidate superseded by another = a cycle (no head).
     import subprocess
     sources, rsha, canon, fetch_cmd = a[0], a[1], a[2], a[3]
+    # one identity, or several comma-separated: a plain-text --file also matches the file-kind identity of
+    # the same bytes (capture contracts A14)
+    rshas = {x for x in rsha.split(",") if x}
     CAP = 256 * 1024
     literal = yaml_literal
     def header_of(path):
@@ -374,7 +377,7 @@ elif cmd == "revision-candidates":
     for f in folders:
         top = f["top"]
         managed = bool(top.get("resource_sha256"))
-        hit = (managed and top.get("resource_sha256") == rsha) or any(canon_of.get(u) == canon for u in f["aliases"] if canon)
+        hit = (managed and top.get("resource_sha256") in rshas) or any(canon_of.get(u) == canon for u in f["aliases"] if canon)
         if not hit:
             continue
         m = re.match(r"^\d{4}-\d{2}-\d{2}_[0-9a-f]{8}-(\d+)$", f["folder"])
@@ -1064,9 +1067,12 @@ cap_generate_capture_id() {   # <resource_id>
 # folder name). Candidates that all supersede each other (a cycle) never pass as "no resource":
 # integrity-error / supersedes-cycle, exit 1. The literal-URL grep of phase 1 is retired.
 cap_lookup_head() {   # uses RESOURCE_SHA256, CANONICAL_URL (empty for non-url kinds) → CAP_HEAD CAP_HEAD_MANAGED CAP_CANDIDATES
-  local canon=""
+  local canon="" rshas="$RESOURCE_SHA256"
   [[ "$RESOURCE_KIND" == "url" ]] && canon="${CANONICAL_URL:-}"
-  CAP_CANDIDATES="$(cap_py revision-candidates "$VAULT_PATH/Sources" "$RESOURCE_SHA256" "$canon" "$CAP_FETCH_CMD")"
+  # a plain-text --file on the exact-text route (capture contracts A14) is a text-kind resource; the same
+  # bytes captured before this rule as a file-kind resource are its earlier revisions (one resource per file)
+  [[ "${PLAIN_TEXT_FILE:-false}" == true && "$RESOURCE_KIND" == "text" ]] && rshas="$rshas,$(cap_sha256_str "file:$RESOURCE_KEY")"
+  CAP_CANDIDATES="$(cap_py revision-candidates "$VAULT_PATH/Sources" "$rshas" "$canon" "$CAP_FETCH_CMD")"
   CAP_HEAD="$(printf '%s' "$CAP_CANDIDATES" | jq -r '.head.folder // ""')"
   CAP_HEAD_MANAGED="$(printf '%s' "$CAP_CANDIDATES" | jq -r '.head.managed // false')"
   if [[ "$(printf '%s' "$CAP_CANDIDATES" | jq -r '.cycle')" == "true" ]]; then
@@ -1396,6 +1402,21 @@ cap_acquire_exact() {   # text / idea / --file-text / ref:vault
 }
 
 cap_detect_mime() { file -b --mime-type "$1" 2>/dev/null || echo application/octet-stream; }
+
+# A plain-text input file (capture contracts A14): the extension .txt or .text in any case, or no
+# extension and `file` types it text/plain. Such a --file takes the exact-text route of --file-text when
+# the origin is auto-detected; everything else (.md included) stays on the file route.
+cap_plain_text_file() {   # <path>
+  local name ext
+  [[ -f "$1" ]] || return 1
+  name="$(basename "$1")"; name="${name#.}"
+  if [[ "$name" == *.* ]]; then
+    ext="$(printf '%s' "${name##*.}" | tr 'A-Z' 'a-z')"
+    [[ "$ext" == txt || "$ext" == text ]]
+    return
+  fi
+  [[ "$(cap_detect_mime "$1")" == text/plain ]]
+}
 
 # ---------------------------------------------------------------------------------------------
 # The capture-layer seams (§4.2, §4.3): capture-fetch.py acquires, capture-text.py converts,

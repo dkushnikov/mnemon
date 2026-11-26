@@ -28,6 +28,6 @@ This is a pointer, not a second guide. The full developer guide is [`CLAUDE.md`]
 
 ## Working in this repository
 
-- Branch from `main`, run `tests/run-suites.sh` (every suite, one table, exit 1 on any failure; on a Mac `--both` adds the legacy toolchain — bash 3.2 and python 3.9 must keep working, CI's macOS job checks it otherwise), open a PR. `release` moves only through `mnemon release`.
+- Branch from `main`. While you work, run the suites your change touches: `tests/run-suites.sh <suite>…`. Before a pull request, run every suite once on the toolchain on PATH (`tests/run-suites.sh`) when the change touches a shared path: `bin/lib-capture.sh`, `bin/knowledge-gateway.sh`, `bin/mnemon`, `bin/mnemon-config.sh` or `bin/lib_config.py`. CI runs both toolchains on every pull request (`lint` and `suites` are required checks), so do not run `--both` on a branch. Run `tests/run-suites.sh --both` once, on `main`, before `mnemon release`.
 - Tests are hermetic: no network, no real `claude`, a temporary `HOME`/`XDG_*`; a test that would touch the real plugin registry, a real vault or `~/.config/mnemon` is a defect.
 - Specs carry their decisions and amendments; a change to a contract lands in the spec and the code in the same PR.

@@ -32,8 +32,11 @@ Actions:
 Options:
   --origin <type>       url|text|youtube|audio|pdf|file|book|idea|ref:vault|batch (book takes --file <document>)
   --url <url>           Source URL (auto-detected: .pdf → pdf, youtube → youtube)
-  --file <path>         Local file path (audio/pdf/file; auto-detected by extension)
-  --file-text <path>    Text content from a file (batch internal; the bytes are the capture-text)
+  --file <path>         Local file path (audio/pdf/file; auto-detected by extension). A plain-text file
+                        (.txt/.text in any case, or no extension and typed text/plain) takes the --file-text
+                        route: origin text, its bytes the capture-text; --origin file keeps the file route
+  --file-text <path>    A text file captured as its bytes, exactly (origin text, capture.method file-text,
+                        fidelity exact; invalid UTF-8 → failed/invalid-utf8); the path is the input locator
   --media-bundle <dir>  With a YouTube --url: the browser lane's bundle (media.json + the caption track a
                         producer acquired with its own browser cookies, `mnemon browser-lane youtube`); the
                         track is the raw (raw_kind captions), no media tool runs, the fetch chain is not entered
@@ -42,7 +45,8 @@ Options:
   --source-type <type>  article|video|podcast|book|paper|idea|conversation
   --context <ctx>       Capture context; must be declared in the instance charter (## Contexts);
                         default: personal when declared, else the first declared context
-  --session <name>      Session title (optional)
+  --session <name>      Session title (optional; without the flag $MNEMON_SESSION, else empty). A replay
+                        or --resume keeps the session its receipt recorded, never the caller's
   --intent <text>       Why this was captured (optional)
   --ref-path <path>     Vault note path (for origin=ref:vault)
   --capture-id <id>     Idempotent capture operation id from a feeder (--ref-id is an alias): a known
@@ -109,6 +113,7 @@ SOURCE_TYPE=""
 CONTEXT=""
 CONTEXT_GIVEN=false
 SESSION=""
+SESSION_GIVEN=false
 INTENT=""
 REF_PATH=""
 REF_SOURCE=""
@@ -140,6 +145,7 @@ SITE_PLAN_FILE=""
 ASSUME_COST=""
 DEPTH="auto"
 BOUND_GIVEN=false
+PLAIN_TEXT_FILE=false
 
 _need() { [[ $# -ge 2 ]] || { echo "ERROR: $1 requires a value" >&2; exit 2; }; }
 
@@ -154,7 +160,7 @@ while [[ $# -gt 0 ]]; do
     --author)        _need "$@"; AUTHOR="$2"; shift 2 ;;
     --source-type)   _need "$@"; SOURCE_TYPE="$2"; BOUND_GIVEN=true; shift 2 ;;
     --context)       _need "$@"; CONTEXT="$2"; CONTEXT_GIVEN=true; BOUND_GIVEN=true; shift 2 ;;
-    --session)       _need "$@"; SESSION="$2"; shift 2 ;;
+    --session)       _need "$@"; SESSION="$2"; SESSION_GIVEN=true; shift 2 ;;
     --intent)        _need "$@"; INTENT="$2"; shift 2 ;;
     --ref-path)      _need "$@"; REF_PATH="$2"; BOUND_GIVEN=true; shift 2 ;;
     --ref-source)    _need "$@"; REF_SOURCE="$2"; shift 2 ;;
@@ -189,6 +195,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$DEPTH" in auto|off|force) ;; *) echo "ERROR: --depth takes auto|off|force" >&2; exit 2 ;; esac
+# the session of the capture (capture contracts A13): an explicit --session (even an empty one) →
+# the caller's MNEMON_SESSION → empty. It is unbound metadata of the receipt; a replay and --resume
+# restore the receipt's value (cap_restore_from_receipt), never the retrying caller's.
+$SESSION_GIVEN || SESSION="${MNEMON_SESSION:-}"
 case "$TIER" in full|bookmark) ;; *) echo "ERROR: --tier takes full|bookmark" >&2; exit 2 ;; esac
 CANONICAL_URL_GIVEN="$(printf '%s' "$CANONICAL_URL_GIVEN" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
 if [[ -n "$CANONICAL_URL_GIVEN" && -n "$URL" ]]; then
@@ -250,6 +260,11 @@ if [[ -z "$ORIGIN" && "$AUTO_DETECT_ORIGIN" == "true" ]]; then
   elif [[ -n "$FILE_PATH" ]]; then
     if [[ "$FILE_PATH" =~ \.pdf$ ]]; then
       ORIGIN="pdf"
+    elif cap_plain_text_file "$FILE_PATH"; then
+      # capture contracts A14: a plain-text file is captured as its bytes on the exact-text route of
+      # --file-text (pandoc read .txt as Markdown and the text no longer matched the input); an explicit
+      # --origin file keeps the file route, and a known capture id replays as its receipt recorded it
+      ORIGIN="text"; FILE_TEXT="$FILE_PATH"; FILE_PATH=""; PLAIN_TEXT_FILE=true
     elif command -v ffprobe >/dev/null 2>&1 && \
        ffprobe -v quiet -show_entries format=format_name -of csv=p=0 "$FILE_PATH" 2>/dev/null | \
        grep -qiE 'mp3|wav|flac|ogg|aac|m4a|opus'; then
@@ -1127,7 +1142,7 @@ run_batch() {
     fi
 
     $CONTEXT_GIVEN             && item_args+=(--context "$CONTEXT")
-    [[ -n "$SESSION" ]]        && item_args+=(--session "$SESSION")
+    if $SESSION_GIVEN || [[ -n "$SESSION" ]]; then item_args+=(--session "$SESSION"); fi
     [[ -n "$INTENT" ]]         && item_args+=(--intent "$INTENT")
     [[ -n "$IMPORT_SOURCE" ]]  && item_args+=(--import-source "$IMPORT_SOURCE")
     [[ -n "$IMPORT_BATCH" ]]   && item_args+=(--import-batch "$IMPORT_BATCH")
@@ -1168,6 +1183,16 @@ run_batch() {
   echo "RESULT:batch_failed=$failed"
 
   [[ $failed -gt 0 ]] && return 1
+  return 0
+}
+
+# A plain-text --file auto-routed to the text origin (A14) that names a known capture id: the receipt is
+# authoritative. A receipt recorded before the rule (origin file) is bound and replayed as a --file of
+# origin file, the route the old auto-detection chose for every input the rule takes — never reinterpreted.
+cap_plain_text_receipt_route() {
+  $PLAIN_TEXT_FILE || return 0
+  [[ "$(cap_receipt_get "$CAPTURE_ID" '.request.origin // ""')" == "text" ]] && return 0
+  ORIGIN=file; FILE_PATH="$FILE_TEXT"; FILE_TEXT=""; PLAIN_TEXT_FILE=false
   return 0
 }
 
@@ -1215,6 +1240,7 @@ cap_main() {
 
   if $CAPTURE_ID_GIVEN && cap_receipt_exists "$CAPTURE_ID"; then
     cap_receipt_case_check "$CAPTURE_ID"
+    cap_plain_text_receipt_route
     cap_replay
   fi
   if [[ -z "$ORIGIN" ]]; then
