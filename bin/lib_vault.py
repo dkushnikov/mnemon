@@ -741,15 +741,23 @@ def scan_ledger(state_dir: Optional[str], snapshot: dict) -> dict:
         out["receipts"].append({"id": n[:-5], "capture_id": s("capture_id"), "state": s("state"),
                                 "revision": s("revision"), "text_sha256": s("text_sha256"),
                                 "resolved_to_revision": s("resolved_to_revision"),
-                                "resolved_to_capture_id": s("resolved_to_capture_id")})
+                                "resolved_to_capture_id": s("resolved_to_capture_id"),
+                                "error_class": s("error_class")})
     return out
 
 
 def scan_archive(archive_dir: Optional[str], snapshot: dict) -> dict:
-    out = {"dir": archive_dir or None, "configured": bool(archive_dir), "present": False, "entries": []}
+    # `staged`: the published name → its staged copies `.<name>.staging-<pid>` — a raw that a File
+    # Provider renamed back to its staged name is not lost (capture contracts A12)
+    out = {"dir": archive_dir or None, "configured": bool(archive_dir), "present": False, "entries": [], "staged": {}}
     if archive_dir and os.path.isdir(archive_dir):
         try:
-            out["entries"] = sorted(n for n in os.listdir(archive_dir) if not n.startswith("."))
+            names = os.listdir(archive_dir)
+            out["entries"] = sorted(n for n in names if not n.startswith("."))
+            for n in sorted(names):
+                m = re.match(r"^\.(.+)\.staging-[^/]+$", n)
+                if m:
+                    out["staged"].setdefault(m.group(1), []).append(n)
             out["present"] = True
         except OSError:
             snapshot["unreadable"] += 1
