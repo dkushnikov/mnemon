@@ -1397,6 +1397,12 @@ cap_acquire_exact() {   # text / idea / --file-text / ref:vault
   if [[ -n "$INPUT_SHA256" && "$(cap_sha256 "$ATTEMPT_DIR/capture.md")" != "$INPUT_SHA256" ]]; then
     FAIL_CLASS=input-missing; FAIL_MSG="input at $src changed since the request was recorded"; return 1
   fi
+  # a text with no character but whitespace has nothing to capture or extract (capture contracts A14): refused as
+  # no-text on every text door — stdin, --file-text, a plain-text --file, and a bookmark card of a text — before
+  # anything is published and before the extractor runs (Unicode whitespace and a BOM count as nothing)
+  if [[ "$ORIGIN" != "ref:vault" ]] && ! python3 -c 'import sys; sys.exit(0 if open(sys.argv[1], encoding="utf-8").read().replace("\ufeff", "").strip() else 1)' "$ATTEMPT_DIR/capture.md"; then
+    FAIL_CLASS=no-text; FAIL_MSG="the text is empty or whitespace only: nothing to capture"; return 1
+  fi
   FIDELITY=exact; RAW_KIND=none; RAW_STORE=none
   return 0
 }
