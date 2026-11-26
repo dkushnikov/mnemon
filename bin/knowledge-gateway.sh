@@ -32,8 +32,11 @@ Actions:
 Options:
   --origin <type>       url|text|youtube|audio|pdf|file|book|idea|ref:vault|batch (book takes --file <document>)
   --url <url>           Source URL (auto-detected: .pdf → pdf, youtube → youtube)
-  --file <path>         Local file path (audio/pdf/file; auto-detected by extension)
-  --file-text <path>    Text content from a file (batch internal; the bytes are the capture-text)
+  --file <path>         Local file path (audio/pdf/file; auto-detected by extension). A plain-text file
+                        (.txt/.text in any case, or no extension and typed text/plain) takes the --file-text
+                        route: origin text, its bytes the capture-text; --origin file keeps the file route
+  --file-text <path>    A text file captured as its bytes, exactly (origin text, capture.method file-text,
+                        fidelity exact; invalid UTF-8 → failed/invalid-utf8); the path is the input locator
   --media-bundle <dir>  With a YouTube --url: the browser lane's bundle (media.json + the caption track a
                         producer acquired with its own browser cookies, `mnemon browser-lane youtube`); the
                         track is the raw (raw_kind captions), no media tool runs, the fetch chain is not entered
@@ -142,6 +145,7 @@ SITE_PLAN_FILE=""
 ASSUME_COST=""
 DEPTH="auto"
 BOUND_GIVEN=false
+PLAIN_TEXT_FILE=false
 
 _need() { [[ $# -ge 2 ]] || { echo "ERROR: $1 requires a value" >&2; exit 2; }; }
 
@@ -256,6 +260,11 @@ if [[ -z "$ORIGIN" && "$AUTO_DETECT_ORIGIN" == "true" ]]; then
   elif [[ -n "$FILE_PATH" ]]; then
     if [[ "$FILE_PATH" =~ \.pdf$ ]]; then
       ORIGIN="pdf"
+    elif cap_plain_text_file "$FILE_PATH"; then
+      # capture contracts A15: a plain-text file is captured as its bytes on the exact-text route of
+      # --file-text (pandoc read .txt as Markdown and the text no longer matched the input); an explicit
+      # --origin file keeps the file route, and a known capture id replays as its receipt recorded it
+      ORIGIN="text"; FILE_TEXT="$FILE_PATH"; FILE_PATH=""; PLAIN_TEXT_FILE=true
     elif command -v ffprobe >/dev/null 2>&1 && \
        ffprobe -v quiet -show_entries format=format_name -of csv=p=0 "$FILE_PATH" 2>/dev/null | \
        grep -qiE 'mp3|wav|flac|ogg|aac|m4a|opus'; then
@@ -1177,6 +1186,16 @@ run_batch() {
   return 0
 }
 
+# A plain-text --file auto-routed to the text origin (A15) that names a known capture id: the receipt is
+# authoritative. A receipt recorded before the rule (origin file) is bound and replayed as a --file of
+# origin file, the route the old auto-detection chose for every input the rule takes — never reinterpreted.
+cap_plain_text_receipt_route() {
+  $PLAIN_TEXT_FILE || return 0
+  [[ "$(cap_receipt_get "$CAPTURE_ID" '.request.origin // ""')" == "text" ]] && return 0
+  ORIGIN=file; FILE_PATH="$FILE_TEXT"; FILE_TEXT=""; PLAIN_TEXT_FILE=false
+  return 0
+}
+
 # ---------------------------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------------------------
@@ -1221,6 +1240,7 @@ cap_main() {
 
   if $CAPTURE_ID_GIVEN && cap_receipt_exists "$CAPTURE_ID"; then
     cap_receipt_case_check "$CAPTURE_ID"
+    cap_plain_text_receipt_route
     cap_replay
   fi
   if [[ -z "$ORIGIN" ]]; then
