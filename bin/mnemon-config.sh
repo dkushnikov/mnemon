@@ -489,10 +489,11 @@ _mnemon_yaml_literal() {
 # `pwd -P` when it exists (else as given, absolute), trailing slashes stripped,
 # hashed. Printed, never created.
 mnemon_vault_state_dir() {
-  local vault="$1" phys
+  local vault="$1" phys sum
   phys="$(cd "$vault" 2>/dev/null && pwd -P)" || phys="$(_mnemon_abs_file "$vault")"
   while [[ "${#phys}" -gt 1 && "$phys" == */ ]]; do phys="${phys%/}"; done
-  printf '%s/mnemon/vaults/%s' "$(mnemon_state_home)" "$(printf '%s' "$phys" | shasum -a 256 | cut -c1-16)"
+  sum="$(printf '%s' "$phys" | shasum -a 256)" || true
+  printf '%s/mnemon/vaults/%s' "$(mnemon_state_home)" "${sum:0:16}"
 }
 
 # First non-empty, non-comment line of a `default` file (the default instance).
@@ -550,14 +551,19 @@ _mnemon_env_consistent() {
 # schema, the loader's sha256, the config file's sha256, the inputs, every export — hashed. The
 # Python mirror is bin/lib_config.py resolution_digest(). Prints nothing when the file is unreadable.
 _mnemon_resolution_digest() {
-  local v cfgsha
-  [[ -n "${_MNEMON_LOADER_SIG:-}" ]] || _MNEMON_LOADER_SIG="$(shasum -a 256 < "$_MNEMON_CONFIG_SH" | cut -c1-64)"
-  cfgsha="$(shasum -a 256 < "${MNEMON_CONFIG_FILE:-/nonexistent}" 2>/dev/null | cut -c1-64)"
+  local v cfgsha sum
+  if [[ -z "${_MNEMON_LOADER_SIG:-}" ]]; then
+    sum="$(shasum -a 256 < "$_MNEMON_CONFIG_SH")" || true
+    _MNEMON_LOADER_SIG="${sum:0:64}"
+  fi
+  cfgsha="$(shasum -a 256 < "${MNEMON_CONFIG_FILE:-/nonexistent}" 2>/dev/null)" || true
+  cfgsha="${cfgsha:0:64}"
   [[ -n "$cfgsha" ]] || return 1
-  {
+  sum="$({
     printf 'mnemon-resolution/1\0loader=%s\0config_sha256=%s\0' "$_MNEMON_LOADER_SIG" "$cfgsha"
     for v in $MNEMON_RESOLUTION_INPUTS $MNEMON_EXPORT_NAMES; do printf '%s=%s\0' "$v" "${!v-}"; done
-  } | shasum -a 256 | cut -c1-64
+  } | shasum -a 256)" || true
+  printf '%s\n' "${sum:0:64}"
 }
 
 # 0 when the inherited resolution can be reused as it is: MNEMON_RESOLVED set, every exported name
@@ -725,7 +731,9 @@ load_config() {
   # capture ledger is per vault (MNEMON_VAULT_STATE_DIR) and shared on purpose.
   if [[ -z "$MNEMON_STATE_DIR" ]]; then
     if [[ "$MNEMON_INSTANCE" == "$MNEMON_ADHOC_INSTANCE" ]]; then
-      MNEMON_STATE_DIR="$(mnemon_state_home)/mnemon/adhoc-$(printf '%s' "$MNEMON_CONFIG_FILE" | shasum -a 256 | cut -c1-8)"
+      local adhoc_sum
+      adhoc_sum="$(printf '%s' "$MNEMON_CONFIG_FILE" | shasum -a 256)"
+      MNEMON_STATE_DIR="$(mnemon_state_home)/mnemon/adhoc-${adhoc_sum:0:8}"
     else
       MNEMON_STATE_DIR="$(mnemon_state_home)/mnemon/$MNEMON_INSTANCE"
     fi

@@ -158,7 +158,7 @@ assert_eq "$split_bad" "" "fetch_timeout split: connect / read equal awk's %g fo
 # --- the property: one pass, no per-key process -----------------------------------------------------------
 echo "--- process starts of a full load ---"
 SHIMS="$TEST_TMPDIR/shims"; mkdir -p "$SHIMS"
-for tool in awk sed grep tr head python3; do
+for tool in awk sed grep cut tr head python3; do
   real="$(command -v "$tool" || true)"
   [[ -n "$real" ]] || continue
   printf '#!/bin/sh\nprintf "%%s\\n" %s >> "%s/starts.log"\nexec "%s" "$@"\n' "$tool" "$TEST_TMPDIR" "$real" > "$SHIMS/$tool"
@@ -168,7 +168,7 @@ printf 'instance: one\nvault_path: %s/vault\nsearch_provider: grep\nwriter_host:
 : > "$TEST_TMPDIR/starts.log"
 out="$(PATH="$SHIMS:$PATH" "$BASH" -c 'source "$1/bin/mnemon-config.sh" && load_config "$2" && printf "%s|%s|%s" "$MNEMON_INSTANCE" "$WRITER_HOST" "$FETCH_READ_TIMEOUT"' _ "$MNEMON_ROOT" "$TEST_TMPDIR/one.yaml")"
 assert_eq "$out" "one|h|45" "(setup) the instance loads through the shims"
-assert_eq "$(tr '\n' ' ' < "$TEST_TMPDIR/starts.log")" "" "a full load starts no awk, sed, grep, tr, head or python3 (one pass in the shell)"
+assert_eq "$(tr '\n' ' ' < "$TEST_TMPDIR/starts.log")" "" "a full load starts no awk, sed, grep, cut, tr, head or python3 (one pass in the shell)"
 : > "$TEST_TMPDIR/starts.log"
 out="$(PATH="$SHIMS:$PATH" "$BASH" -c 'source "$1/bin/mnemon-config.sh" && _parse_yaml_value vault_path "$2"' _ "$MNEMON_ROOT" "$TEST_TMPDIR/one.yaml")"
 assert_eq "$out $(tr '\n' ' ' < "$TEST_TMPDIR/starts.log")" "$TEST_TMPDIR/vault " "_parse_yaml_value starts no process either"
