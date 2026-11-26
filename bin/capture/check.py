@@ -725,15 +725,17 @@ def conversion(candidate_md: str, reference: str, title: Optional[str], markdown
 # --- the reversed rule: the text of a source.md in its raw (capture layer A17) -------------------------------
 # The forward rule above asks whether the page's text survived in a candidate; the reversed rule asks whether
 # a published body's text occurs in the text its raw converts to now. The roles swap, so the body is projected
-# the way the reference is: markdown reduced to text as `candidate_text` reduces a candidate, images and the
-# sanitizer's figure markers dropped (an image is not page text — the reference never holds an alt), h1–h3
-# carried as `## ` and h4–h6 as plain lines (the DOM projection's form), quote, list and task markers removed
-# (the DOM text has none; a list number would be a token the page does not write), entities decoded after the
-# markup is gone (a `&lt;div&gt;` the page shows as text stays text), intraword markers removed. Eligibility is
-# the forward rule's `classify_line` unchanged — six words, a two-word heading, twenty spaceless characters,
-# the CHROME list on lines of ≤ 12 words — and a line equal to one of the titles is not required. Presence is
-# the forward rule's `_presence`, against the raw's text as markdown (`candidate_text`) and as it is: a line
-# is found when either form holds it.
+# the way the reference is. One text projection serves both sides (`reversed_text`): markdown reduced to text
+# as `candidate_text` reduces a candidate, images and the sanitizer's figure markers dropped (an image is not
+# page text — the reference never holds an alt — and an inline image must leave the same gap on both sides),
+# entities decoded after the markup is gone and only outside inline code spans (a `&lt;div&gt;` the page shows
+# as text stays text; a literal `&amp;` in code stays code). The body's lines then lose what the DOM text never
+# has: h1–h3 carried as `## ` and h4–h6 as plain lines, quote, list and task markers removed (a list number
+# would be a token the page does not write), intraword markers removed. Eligibility is the forward rule's
+# `classify_line` unchanged — six words, a two-word heading, twenty spaceless characters, the CHROME list on
+# lines of ≤ 12 words — and a line equal to one of the titles is not required. Presence is the forward rule's
+# `_presence`, against the raw's text through the same projection and as it is (a plain text, G16): a line is
+# found when either form holds it.
 
 _SRC_FIGURE = re.compile(r"\*\[(?:img|inline figure omitted at capture): [^\[\]\n]{0,2000}\]\*")
 _SRC_QUOTE = re.compile(r"^[ \t]{0,20}(?:>[ \t]{0,4}){1,20}")
@@ -763,8 +765,21 @@ def _drop_figures(text: str) -> str:
     return _SRC_FIGURE.sub(" ", _MD_IMAGE.sub(" ", text))
 
 
+def reversed_text(md: str) -> str:
+    """The text projection both sides of the reversed rule go through: per fence-free segment, images and
+    figure markers dropped outside code spans, then `candidate_text`, then HTML entities decoded outside code
+    spans; fenced blocks kept as they are."""
+    out: List[str] = []
+    for in_code, seg in _fenced_segments(md):
+        if in_code:
+            out.append(seg)
+            continue
+        seg = candidate_text(_outside_code_spans(seg, _drop_figures))
+        out.append(_outside_code_spans(seg, htmlmod.unescape))
+    return "\n".join(out)
+
+
 def _source_line(line: str) -> str:
-    line = htmlmod.unescape(line)
     line = _SRC_QUOTE.sub("", line)
     m = _SRC_ATX.match(line)
     if m:
@@ -786,19 +801,19 @@ def source_reference(source_md: str) -> List[str]:
         if in_code:
             out.extend(seg.split("\n"))
             continue
-        seg = candidate_text(_outside_code_spans(seg, _drop_figures))
-        out.extend(_source_line(line) for line in seg.split("\n"))
+        out.extend(_source_line(line) for line in reversed_text(seg).split("\n"))
     return reference_lines("\n".join(out))
 
 
 def source_presence(source_md: str, raw_text: str, titles=()) -> Presence:
     """The reversed rule (capture layer A17): every eligible line of a source.md body must occur in the text
-    of its raw, by the forward rule's presence test, in the raw's text read as markdown or as it is. `titles`
+    of its raw, by the forward rule's presence test, in the raw's text through `reversed_text` — the body's own
+    projection — or as it is. `titles`
     are the revision's own titles (frontmatter `title`, `video_title`, the converter's `<title>`): a line
     equal to one is not required. A diagnostic like the forward rule: what it reports is a mismatch between
     two texts, never its cause."""
     lines = source_reference(source_md)
-    hays = [_Haystack(candidate_text(raw_text)), _Haystack(raw_text)]
+    hays = [_Haystack(reversed_text(raw_text)), _Haystack(raw_text)]
     title_keys = set()
     for t in titles:
         k = line_key(t) if t else ""

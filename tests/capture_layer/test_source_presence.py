@@ -56,6 +56,31 @@ class Projection(unittest.TestCase):
         p = C.source_presence(body, "<p>ignored</p>\nUse the <div> element & a class on every card of the grid.")
         self.assertEqual(p.not_found, [])
 
+    def test_an_entity_inside_a_code_span_stays_literal(self):
+        """Second reader, P2: the decoding ran inside code spans too, so an unchanged capture mismatched."""
+        line = "Write `&amp;` in the example to demonstrate the escaped entity."
+        self.assertEqual(C.source_reference(line + "\n"), [line])
+        self.assertEqual(C.source_presence(line + "\n", line).not_found, [])
+        self.assertEqual(C.source_presence(line + "\n", "Intro.\n\n" + line + "\n\nOutro.").not_found, [])
+
+    def test_entities_on_both_sides_decode_alike(self):
+        line = "Use the &lt;div&gt; element &amp; a class on every card of the grid."
+        self.assertEqual(C.source_presence(line + "\n", line).not_found, [])
+        encoded, decoded = "Fish &amp; chips are served on every Friday at noon.", "Fish & chips are served on every Friday at noon."
+        self.assertEqual(C.source_presence(decoded + "\n", encoded).not_found, [], "a decoded body against an encoded raw")
+        self.assertEqual(C.source_presence(encoded + "\n", decoded).not_found, [], "an encoded body against a decoded raw")
+
+    def test_an_inline_image_leaves_the_same_gap_on_both_sides(self):
+        """Second reader, P2: the body lost its inline image while the raw kept the alt, so identical texts
+        mismatched."""
+        for line in ("The page shows ![a cat](cat.png) in the middle of the main paragraph.",
+                     "The page shows *[img: a cat]* in the middle of the main paragraph.",
+                     "The page shows *[inline figure omitted at capture: a cat]* in the middle of the main paragraph."):
+            self.assertEqual(C.source_presence(line + "\n", line).not_found, [], line)
+        with_image = "The page shows ![a cat](cat.png) in the middle of the main paragraph."
+        self.assertEqual(C.source_presence("The page shows in the middle of the main paragraph.\n", with_image).not_found, [])
+        self.assertEqual(C.source_presence(with_image + "\n", "The page shows in the middle of the main paragraph.").not_found, [])
+
     def test_intraword_emphasis_is_one_word(self):
         p = C.source_presence("The *emph*asis falls on the second syllable of the word here.\n",
                               "The emphasis falls on the second syllable of the word here.")
