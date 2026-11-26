@@ -420,6 +420,8 @@ def check_archive(scan: dict, cfg: dict) -> Check:
     unarchivable = 0
     unresolved: List[str] = []
     missing_raw: List[str] = []
+    renamed_back: List[str] = []
+    staged = a.get("staged") or {}
     for r in scan["folders"]:
         if not r["has_source"] or r["source_state"] == "unreadable":
             continue
@@ -434,7 +436,14 @@ def check_archive(scan: dict, cfg: dict) -> Check:
                 owned.add(name)
             elif r["klass"] == "managed" and r["raw_store"] == "archive":
                 missing_raw.append(r["name"])
-                c.add("fail", item(r, "capture.raw_store is archive but %s is not in the archive" % name, "managed"))
+                if staged.get(name):
+                    # the file system renamed the published raw back to its staged name (contracts A12)
+                    renamed_back.append(r["name"])
+                    c.add("fail", item(r, "capture.raw_store is archive but %s is not in the archive; the staged copy %s is — "
+                                          "the file system renamed the published raw back (the next capture in this vault "
+                                          "renames it into place when it carries the recorded hash)" % (name, staged[name][0]), "managed"))
+                else:
+                    c.add("fail", item(r, "capture.raw_store is archive but %s is not in the archive" % name, "managed"))
             else:
                 unresolved.append(r["name"])
                 c.add("warn", item(r, "archive: %s does not resolve" % name, r["klass"]))
@@ -451,6 +460,8 @@ def check_archive(scan: dict, cfg: dict) -> Check:
     parts = ["%d references resolve (%d legacy suffix form, %d unarchivable)" % (resolved, legacy_form, unarchivable)]
     if missing_raw:
         parts.append("%d managed without raw (%s)" % (len(missing_raw), names(missing_raw)))
+    if renamed_back:
+        parts.append("%d of them renamed back to a staged name (%s)" % (len(renamed_back), names(renamed_back)))
     if unresolved:
         parts.append("%d unresolved (%s)" % (len(unresolved), names(unresolved)))
     parts.append("%d archive files unowned" % len(unowned) + (": %s" % names(unowned) if unowned else ""))
@@ -527,7 +538,14 @@ def check_ledger(scan: dict, cfg: dict) -> Check:
             # a terminal verdict of the engine (contracts §3.6): the published source was edited or
             # missing when it last looked — named, counted apart, never silently dropped
             integrity.append(rc["revision"] or rc["id"])
-            c.add("warn", {"id": rc["revision"] or rc["id"], "reason": "receipt %s in integrity-error (the engine found the published source.md edited or missing)" % rc["id"],
+            klass = rc.get("error_class") or ""
+            if klass in ("raw-missing", "raw-mismatch"):
+                why = "the engine found the published raw %s" % ("missing" if klass == "raw-missing" else "changed")
+            elif klass == "report-conflict":
+                why = "the engine found the archive sidecar different from the frozen report"
+            else:
+                why = "the engine found the published source.md edited or missing"
+            c.add("warn", {"id": rc["revision"] or rc["id"], "reason": "receipt %s in integrity-error%s (%s)" % (rc["id"], "/" + klass if klass else "", why),
                            "rating": None, "words": None})
             continue
         if state not in ("extracted", "source-published", "bookmarked") or not rc["revision"]:

@@ -192,10 +192,14 @@ def choose_track(tracks, original_language):
 # ---------------------------------------------------------------------------------------------
 
 class Timeout(Exception):
-    def __init__(self, stage, elapsed):
+    """A run past its budget. `stderr` is what the timed-out tool wrote before its process group was torn down
+    (bytes; empty when no tool was running) — the supervisor reads it before its temporary file closes, so a caller
+    that keeps diagnostics has the tool's last words (capture layer A18)."""
+    def __init__(self, stage, elapsed, stderr=b""):
         super().__init__(f"timeout in stage {stage} after {elapsed:.1f}s")
         self.stage = stage
         self.elapsed = elapsed
+        self.stderr = stderr or b""
 
 
 class Failed(Exception):
@@ -294,6 +298,22 @@ def _wall_line(data):
     return cands[-1][0] if cands else ""
 
 
+def error_line(data):
+    """The one line that names a tool's failure (capture layer A18): the line the wall classifier matched when it
+    names a wall (`_wall_line`, inside an ERROR block when there is one); else the first line of the first `ERROR:`
+    block — the tool's own terminal error, never a WARNING printed before or after it, never the last ERROR by
+    position; else the last non-empty line (a tool that printed no prefixed ERROR — a traceback's exception line);
+    empty for no output."""
+    text = _text_of(data)
+    if classify_wall(text):
+        return _wall_line(text)
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    for s in lines:
+        if s.split(":", 1)[0].upper() == "ERROR":
+            return s
+    return lines[-1] if lines else ""
+
+
 def fail(stage, message):
     """Print the error and raise Failed (main() writes error.json under --out-dir and exits 1)."""
     print(f"ERROR: {message}", file=sys.stderr)
@@ -370,7 +390,9 @@ class Supervisor:
                 proc.wait(timeout=self.remaining())
             except subprocess.TimeoutExpired:
                 self.teardown()
-                raise Timeout(stage, self.elapsed())
+                # what the tool wrote before the teardown, read while the temporary file is still open
+                err.seek(0)
+                raise Timeout(stage, self.elapsed(), stderr=err.read())
             finally:
                 self.children.pop(proc.pid, None)
             out.seek(0)

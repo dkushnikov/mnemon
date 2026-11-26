@@ -26,6 +26,18 @@
 # again from the environment lands on the same file: the dispatcher decides
 # once, children never re-decide.
 #
+# Resolve once per command (B7): beside the values load_config exports
+# MNEMON_RESOLVED, a digest (mnemon-resolution/1) over the loader itself (the
+# sha256 of this file), the config file's bytes, HOME, XDG_STATE_HOME,
+# XDG_CONFIG_HOME, MNEMON_CONFIG_DIR and every exported NAME=VALUE in
+# MNEMON_EXPORT_NAMES order. A later load_config without a path argument —
+# the gateway the dispatcher execs, the gateway re-executed under the vault
+# lock, a Python tool through bin/lib_config.py — reuses the environment as it
+# is when every name is set and the digest still matches; anything that moved
+# (a selector flag, another instance, an edited config file, a changed or
+# missing export, another engine's loader) fails the check and the file is
+# loaded again. A path argument is an explicit selection: always loaded.
+#
 # MNEMON_CONFIG_DIR defaults to ${XDG_CONFIG_HOME:-$HOME/.config}/mnemon.
 #
 # Exports: MNEMON_ROOT, MNEMON_CONFIG, MNEMON_CONFIG_FILE, MNEMON_CONFIG_SOURCE
@@ -63,6 +75,25 @@ MNEMON_ROOT="${MNEMON_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # MNEMON_INSTANCE=adhoc never selects an instance file, so an exported adhoc
 # can never break a child process that resolves config again.
 MNEMON_ADHOC_INSTANCE="adhoc"
+
+# This file, for the loader signature of the resolution digest (absolute, without a subprocess).
+_MNEMON_CONFIG_SH="${BASH_SOURCE[0]}"
+case "$_MNEMON_CONFIG_SH" in /*) ;; *) _MNEMON_CONFIG_SH="$PWD/$_MNEMON_CONFIG_SH" ;; esac
+
+# The resolved configuration: every name load_config exports (MNEMON_ROOT aside — each engine
+# derives its own), in one order. bin/lib_config.py EXPORTS is the same list in the same order;
+# tests/test_config.sh asserts it. The resolution digest is computed over these names.
+MNEMON_EXPORT_NAMES="MNEMON_CONFIG MNEMON_CONFIG_FILE MNEMON_CONFIG_SOURCE MNEMON_INSTANCE MNEMON_STATE_DIR
+VAULT_PATH READER_CONTEXT_PATH CHARTER_PATH SEARCH_PROVIDER QMD_COLLECTION DEFAULT_MODEL DEFAULT_LANGUAGE
+WHISPER_MODEL AUTO_DETECT_ORIGIN ARCHIVE_DIR WRITER_HOST MNEMON_VAULT_STATE_DIR
+EXTRACT_TIMEOUT EXTRACT_INLINE_MAX_BYTES EXTRACT_MAX_USD EXTERNAL_FETCH EXTERNAL_FETCHERS FETCH_USER_AGENT
+FETCH_TIMEOUT FETCH_CONNECT_TIMEOUT FETCH_READ_TIMEOUT FETCH_MAX_BYTES RENDER_TIMEOUT RENDER_MAX_BYTES
+ACQUIRE_TIMEOUT CONVERT_TIMEOUT TRANSCRIBE_TIMEOUT SITE_MAX_PAGES SITE_TIMEOUT THIN_WORDS EXTRACT_MAX_PARTS
+DOCTOR_THIN_WORDS DOCTOR_STUB_WORDS DOCTOR_ARXIV_WORDS DOCTOR_RATING_HI_SHARE
+DOCTOR_WIKI_PAGES_PER_COLLECTION DOCTOR_WIKI_WORDS
+RESEARCH_LOG_PATH RESEARCH_PACKAGE_MAX_BYTES RESEARCH_TIMEOUT RESEARCH_MAX_USD RESEARCH_RECUSAL_TAGS"
+# The environment inputs that shape the resolved values without being exported by the loader.
+MNEMON_RESOLUTION_INPUTS="HOME XDG_STATE_HOME XDG_CONFIG_HOME MNEMON_CONFIG_DIR"
 
 # --- Scalar keys with defaults (capture contracts §7, capture layer §5) --------
 # One table, `key|VAR|type|default` per line: the loader parses, validates and
@@ -370,9 +401,52 @@ _mnemon_env_consistent() {
   return 1
 }
 
+# The resolution digest of the current values (mnemon-resolution/1): NUL-terminated fields — the
+# schema, the loader's sha256, the config file's sha256, the inputs, every export — hashed. The
+# Python mirror is bin/lib_config.py resolution_digest(). Prints nothing when the file is unreadable.
+_mnemon_resolution_digest() {
+  local v cfgsha
+  [[ -n "${_MNEMON_LOADER_SIG:-}" ]] || _MNEMON_LOADER_SIG="$(shasum -a 256 < "$_MNEMON_CONFIG_SH" | cut -c1-64)"
+  cfgsha="$(shasum -a 256 < "${MNEMON_CONFIG_FILE:-/nonexistent}" 2>/dev/null | cut -c1-64)"
+  [[ -n "$cfgsha" ]] || return 1
+  {
+    printf 'mnemon-resolution/1\0loader=%s\0config_sha256=%s\0' "$_MNEMON_LOADER_SIG" "$cfgsha"
+    for v in $MNEMON_RESOLUTION_INPUTS $MNEMON_EXPORT_NAMES; do printf '%s=%s\0' "$v" "${!v-}"; done
+  } | shasum -a 256 | cut -c1-64
+}
+
+# 0 when the inherited resolution can be reused as it is: MNEMON_RESOLVED set, every exported name
+# set (an empty value counts), the config file readable and the digest equal.
+_mnemon_resolution_reusable() {
+  local v d
+  [[ -n "${MNEMON_RESOLVED:-}" ]] || return 1
+  for v in $MNEMON_EXPORT_NAMES; do [[ -n "${!v+x}" ]] || return 1; done
+  [[ -f "${MNEMON_CONFIG_FILE:-}" ]] || return 1
+  d="$(_mnemon_resolution_digest)" || return 1
+  [[ "$d" == "$MNEMON_RESOLVED" ]]
+}
+
+# Test hook (MNEMON_TEST_HOOKS=1 + MNEMON_TEST_LOADER_LOG=<file>): one line per load_config call,
+# `full <pid>` or `reuse <pid>` — how tests count the loads of one command.
+_mnemon_loader_trace() {
+  if [[ "${MNEMON_TEST_HOOKS:-}" == 1 && -n "${MNEMON_TEST_LOADER_LOG:-}" ]]; then
+    printf '%s %s sh\n' "$1" "$$" >> "$MNEMON_TEST_LOADER_LOG" 2>/dev/null || true
+  fi
+  return 0
+}
+
 load_config() {
   local config_file="${1:-}"
   local cfg_dir resolved_instance="" default_name="" source=""
+  # resolve once per command (B7): the inherited resolution, when nothing it depends on moved
+  if [[ -z "$config_file" ]] && _mnemon_resolution_reusable; then
+    _mnemon_loader_trace reuse
+    export MNEMON_ROOT MNEMON_RESOLVED
+    # shellcheck disable=SC2086
+    export $MNEMON_EXPORT_NAMES
+    return 0
+  fi
+  _mnemon_loader_trace full
   local env_config="${MNEMON_CONFIG:-}" env_instance="${MNEMON_INSTANCE:-}"
   cfg_dir="$(mnemon_config_dir)"
 
@@ -515,15 +589,11 @@ load_config() {
   # The pair a child re-resolves from — consistent by construction.
   MNEMON_CONFIG="$MNEMON_CONFIG_FILE"
 
-  export MNEMON_ROOT MNEMON_CONFIG MNEMON_CONFIG_FILE MNEMON_CONFIG_SOURCE MNEMON_INSTANCE MNEMON_STATE_DIR
-  export MNEMON_VAULT_STATE_DIR
-  export VAULT_PATH READER_CONTEXT_PATH CHARTER_PATH SEARCH_PROVIDER
-  export QMD_COLLECTION DEFAULT_MODEL DEFAULT_LANGUAGE WHISPER_MODEL AUTO_DETECT_ORIGIN ARCHIVE_DIR
-  export WRITER_HOST EXTRACT_TIMEOUT EXTRACT_INLINE_MAX_BYTES EXTRACT_MAX_USD
-  export EXTERNAL_FETCH EXTERNAL_FETCHERS FETCH_USER_AGENT FETCH_TIMEOUT FETCH_CONNECT_TIMEOUT FETCH_READ_TIMEOUT
-  export FETCH_MAX_BYTES RENDER_TIMEOUT RENDER_MAX_BYTES ACQUIRE_TIMEOUT CONVERT_TIMEOUT TRANSCRIBE_TIMEOUT
-  export SITE_MAX_PAGES SITE_TIMEOUT THIN_WORDS EXTRACT_MAX_PARTS
-  export DOCTOR_THIN_WORDS DOCTOR_STUB_WORDS DOCTOR_ARXIV_WORDS DOCTOR_RATING_HI_SHARE
-  export DOCTOR_WIKI_PAGES_PER_COLLECTION DOCTOR_WIKI_WORDS
-  export RESEARCH_LOG_PATH RESEARCH_PACKAGE_MAX_BYTES RESEARCH_TIMEOUT RESEARCH_MAX_USD RESEARCH_RECUSAL_TAGS
+  export MNEMON_ROOT
+  # shellcheck disable=SC2086
+  export $MNEMON_EXPORT_NAMES
+  # the stamp a child reuses the resolution by (B7); without a digest (an unreadable file) none
+  MNEMON_RESOLVED="$(_mnemon_resolution_digest || true)"
+  if [[ -n "$MNEMON_RESOLVED" ]]; then export MNEMON_RESOLVED; else unset MNEMON_RESOLVED; fi
+  return 0
 }
