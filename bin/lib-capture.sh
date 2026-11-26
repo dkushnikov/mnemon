@@ -913,8 +913,9 @@ cap_resource_kind() {   # <origin>
 # says on stderr (the warning about ignored test variables, §3.2) goes to the attempt's stderr.txt,
 # or to the gateway's own stderr before an attempt dir exists (--dry-run, identity) — never into
 # the JSON the parser reads.
+CAP_CANON_END="mnemon-canonical/1 end"
 cap_canonical_lookup() {   # <url> [canonical version — a replay binds under the one its receipt recorded]
-  local url="$1" ver="${2:-}" json rc=0 errf detail
+  local url="$1" ver="${2:-}" json rc=0 errf detail vals
   local -a vargs
   vargs=()
   [[ -n "$ver" ]] && vargs=(--canonical-version "$ver")
@@ -931,14 +932,32 @@ cap_canonical_lookup() {   # <url> [canonical version — a replay binds under t
     if [[ -n "${ATTEMPT_DIR:-}" && -d "$ATTEMPT_DIR" ]]; then cat "$errf" >> "$ATTEMPT_DIR/stderr.txt"; else cat "$errf" >&2; fi
   fi
   rm -f "$errf"
-  if [[ $rc -ne 0 ]] || ! printf '%s' "$json" | jq -e '.schema == "mnemon-canonical/1"' >/dev/null 2>&1; then
-    cap_die2 "invalid url '$url': ${detail:-capture-fetch.py --canonical-only exited $rc without an answer}"
+  # one jq reads the answer: the five fields one per line, then CAP_CANON_END — only for a single
+  # object of the schema whose five fields are scalars without a newline, so each line is one field
+  # and an empty line an empty field. Any other answer runs the validation and the five reads of
+  # before (one jq each), with their verdict and their values.
+  vals=""
+  if [[ $rc -eq 0 ]]; then
+    vals="$(printf '%s' "$json" | jq -n -r --arg eot "$CAP_CANON_END" '[inputs] | select(length == 1) | .[0]
+      | select(type == "object") | select(.schema == "mnemon-canonical/1")
+      | [.canonical_url, (.canonical_version // 1), (.fetch_url // .canonical_url), (.kind // "page"), (.requested_version // "")]
+      | select(length == 5 and all(.[]; type != "array" and type != "object"))
+      | map(if type == "string" then . else tojson end)
+      | select(all(.[]; explode | all(. != 10)))
+      | (.[], $eot)' 2>/dev/null)" || vals=""
   fi
-  CANONICAL_URL="$(printf '%s' "$json" | jq -r '.canonical_url')"
-  CANONICAL_VERSION="$(printf '%s' "$json" | jq -r '.canonical_version // 1')"
-  FETCH_URL="$(printf '%s' "$json" | jq -r '.fetch_url // .canonical_url')"
-  URL_KIND="$(printf '%s' "$json" | jq -r '.kind // "page"')"
-  REQUESTED_VERSION="$(printf '%s' "$json" | jq -r '.requested_version // ""')"
+  if [[ "$vals" == *$'\n'"$CAP_CANON_END" ]]; then
+    { IFS= read -r CANONICAL_URL; IFS= read -r CANONICAL_VERSION; IFS= read -r FETCH_URL; IFS= read -r URL_KIND; IFS= read -r REQUESTED_VERSION; } <<< "$vals"
+  else
+    if [[ $rc -ne 0 ]] || ! printf '%s' "$json" | jq -e '.schema == "mnemon-canonical/1"' >/dev/null 2>&1; then
+      cap_die2 "invalid url '$url': ${detail:-capture-fetch.py --canonical-only exited $rc without an answer}"
+    fi
+    CANONICAL_URL="$(printf '%s' "$json" | jq -r '.canonical_url')"
+    CANONICAL_VERSION="$(printf '%s' "$json" | jq -r '.canonical_version // 1')"
+    FETCH_URL="$(printf '%s' "$json" | jq -r '.fetch_url // .canonical_url')"
+    URL_KIND="$(printf '%s' "$json" | jq -r '.kind // "page"')"
+    REQUESTED_VERSION="$(printf '%s' "$json" | jq -r '.requested_version // ""')"
+  fi
   CAP_CANON_FOR="$url@$ver"
   return 0
 }
