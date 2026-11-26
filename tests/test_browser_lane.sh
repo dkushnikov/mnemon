@@ -78,6 +78,15 @@ if [[ " $* " == *" --dump-single-json "* ]]; then
         echo "WARNING: [youtube] $id: the tokenizer, the sidebar and the secretary stay; so does a cookie-consent banner"
         echo "WARNING: config echo ['--add-header', 'Authorization: Bearer synthetic-echo', '-v']"
       } >&2; exit 1 ;;
+    keyed)
+      {
+        echo "ERROR: Basic dXNlcjpwYXNz"
+        echo "WARNING: access-token=synthetic-hyphen-1"
+        echo "WARNING: x-api-key: synthetic-hyphen-2"
+        echo "WARNING: argv echo --password=synthetic-opt --quiet"
+        echo "WARNING: redirect https://example.com/cb#access_token=synthetic-frag&state=1 failed"
+        echo "WARNING: [youtube] $id: the format list is basic"
+      } >&2; exit 1 ;;
     creds-error) echo "ERROR: [youtube] $id: HTTP Error 403 on https://rr1.googlevideo.com/videoplayback?v=$id&sig=synthetic-sig-9; Authorization: Bearer synthetic-err-token" >&2; exit 1 ;;
   esac
   python3 - "$MEDIA_FIX/ytdlp-info-captions.json" "$id" "${STUB_YTDLP:-ok}" "${STUB_YTDLP_MANUAL:-}" <<'PY'
@@ -284,6 +293,22 @@ assert_contains "$kept" "WARNING: Authorization <redacted>" "...the same wording
 assert_contains "$kept" "WARNING: [youtube] abc123xyz00: the tokenizer, the sidebar and the secretary stay; so does a cookie-consent banner" "...a credential word inside a longer word (tokenizer, sidebar, secretary, cookie-consent) is not one: the line stays whole"
 assert_contains "$kept" "WARNING: config echo ['--add-header <redacted>']" "...an echoed config list is cut at --add-header and stays well-formed (its quote and bracket closed)"
 assert_not_contains "$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")" "synthetic" "...no credential value anywhere"
+# a credential key with its separator, and a bare `Basic <value>` (the second reader's P1 on the free-wording rule): a
+# hyphen on the left of the key, an option's `=` and a URL's fragment do not hide the field
+stub_reset
+STUB_YTDLP=keyed run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
+B="$(bundle_of abc123xyz00)"
+kept="$(cat "$B/stderr.txt")"
+assert_contains "$out" "failed abc123xyz00 — yt-dlp metadata failed: ERROR: Basic <redacted> · diagnostics:" "a bare 'Basic <value>': the value goes, on the terminal"
+assert_contains "$kept" "ERROR: Basic <redacted>" "...and in stderr.txt"
+assert_contains "$kept" "WARNING: access-token=<redacted>" "...a hyphenated key with '=': its last part is the credential word, the value goes"
+assert_contains "$kept" "WARNING: x-api-key: <redacted>" "...a hyphenated header name with ':'"
+assert_contains "$kept" "WARNING: argv echo --password=<redacted>" "...an option written --password=<value>"
+assert_contains "$kept" "WARNING: redirect https://example.com/cb#access_token=<redacted>" "...a field in a URL's fragment, where the query rule does not reach"
+assert_contains "$kept" "WARNING: [youtube] abc123xyz00: the format list is basic" "...the word 'basic' with nothing after it is prose: the line stays whole"
+leak="$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")"
+assert_not_contains "$leak" "synthetic" "...no credential value anywhere"
+assert_not_contains "$leak" "dXNlcjpwYXNz" "...nor the Basic value"
 stub_reset
 STUB_YTDLP=creds-error run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
 B="$(bundle_of abc123xyz00)"

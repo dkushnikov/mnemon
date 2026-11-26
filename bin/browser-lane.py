@@ -262,6 +262,18 @@ _CRED_WORD_RE = re.compile(
     r"[a-z0-9_]*sapisid(?:hash)?|apisid|hsid|ssid|sid|nid|__secure-[a-z0-9_-]*|__host-[a-z0-9_-]*|login_info|"
     r"visitor_info1_live|pref|ysc|[a-z0-9_]*tokens?|api[ _-]?keys?|apikey|passwords?|passwd|secrets?|credentials?|"
     r"session(?:id|_token)?)(?![A-Za-z0-9_-])(?P<sep>[\"']?\s*[:=])?")
+# a credential key with its separator — `key:` or `key=`, the key may be quoted. A separator makes it a field, so a
+# hyphen on its left does not hide it: the last part of a hyphenated name counts (`access-token=`, `x-api-key:`,
+# `--password=`), and so does a field inside a URL that the query rule did not reach (`#access_token=…`). The word
+# rule above cannot take these: without a separator a hyphen-joined word is prose or an option name
+_CRED_KEY_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])(?P<key>set-cookie|cookies?|proxy-authorization|authorization|x-goog-authuser|"
+    r"x-goog-visitor-id|x-youtube-identity-token|x-origin|[a-z0-9_-]*sapisid(?:hash)?|apisid|hsid|ssid|sid|nid|"
+    r"__secure-[a-z0-9_-]*|__host-[a-z0-9_-]*|login_info|visitor_info1_live|pref|ysc|[a-z0-9_-]*tokens?|"
+    r"api[ _-]?keys?|apikey|passwords?|passwd|secrets?|credentials?|session(?:[_-]?id|[_-]token)?)"
+    r"(?P<sep>[\"']?\s*[:=])(?!\s*<redacted>)")
+# the scheme word of a bare `Basic <value>`: it is common prose, so it counts only with a value after it
+_BASIC_RE = re.compile(r"(?i)(?<![A-Za-z0-9_-])basic(?=\s+\S)")
 # yt-dlp's own header option: whatever follows it is a header
 _ADD_HEADER_RE = re.compile(r"(?i)(?<![A-Za-z0-9_])--add-header(?![A-Za-z0-9_-])")
 _URL_RE = re.compile(r"(?i)https?://(?:<redacted>|[^\s'\"<>])+")   # a URL after the query rule ran
@@ -300,23 +312,36 @@ def _closers(prefix: str) -> str:
 
 def redact(line: str) -> str:
     """One line made safe to print or retain: URL query values first (the video id aside); then the rest of the line
-    after the first credential word outside a URL, or after `--add-header`, becomes <redacted> — the separator kept
-    when the word has one (`Authorization: <redacted>`, `SID=<redacted>`), whatever was left open closed; then
-    absolute and home-relative paths, and token-shaped strings."""
+    becomes <redacted> at the earliest of four cuts — a credential word outside a URL, a credential key with its
+    separator anywhere (a hyphenated name and a URL's fragment included), `Basic` with a value after it, and
+    `--add-header` — the separator kept when there is one (`Authorization: <redacted>`, `SID=<redacted>`), whatever
+    was left open closed; then absolute and home-relative paths, and token-shaped strings."""
     line = _QUERY_RE.sub(_redact_query, line)
     urls = [(m.start(), m.end()) for m in _URL_RE.finditer(line)]
-    cut = None
+
+    def outside(m) -> bool:
+        return not any(a <= m.start() < b for a, b in urls)
+
+    def after(sep) -> str:
+        return "<redacted>" if (sep or "").endswith("=") else " <redacted>"
+
+    cuts = []
     for m in _CRED_WORD_RE.finditer(line):
-        if not any(a <= m.start() < b for a, b in urls):
-            end = m.end("sep") if m.group("sep") else m.end("word")
-            cut = (end, "<redacted>" if (m.group("sep") or "").endswith("=") else " <redacted>")
+        if outside(m):
+            cuts.append((m.end("sep") if m.group("sep") else m.end("word"), after(m.group("sep"))))
             break
-    m = _ADD_HEADER_RE.search(line)
-    if m and not any(a <= m.start() < b for a, b in urls) and (cut is None or m.end() < cut[0]):
-        cut = (m.end(), " <redacted>")
-    if cut is not None:
-        prefix = line[:cut[0]]
-        line = prefix + cut[1] + _closers(prefix)
+    m = _CRED_KEY_RE.search(line)
+    if m:
+        cuts.append((m.end("sep"), after(m.group("sep"))))
+    for rx in (_BASIC_RE, _ADD_HEADER_RE):
+        for m in rx.finditer(line):
+            if outside(m):
+                cuts.append((m.end(), " <redacted>"))
+                break
+    if cuts:
+        end, tail = min(cuts)
+        prefix = line[:end]
+        line = prefix + tail + _closers(prefix)
     line = _PATH_RE.sub("<path>", line)
     return _TOKEN_RE.sub("<redacted>", line)
 
