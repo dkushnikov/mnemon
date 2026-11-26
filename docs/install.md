@@ -143,6 +143,7 @@ Working on the engine itself:
 git -C ~/Code/mnemon switch -c feat/p1-<slug>         # branch from main
 ~/Code/mnemon/tests/run-suites.sh                      # every suite: one table, exit 1 on any failure (-k: keep going after one)
 ~/Code/mnemon/tests/run-suites.sh --both               # macOS: again under the legacy toolchain (bash 3.2 + python 3.9); CI covers it elsewhere
+~/Code/mnemon/tests/run-suites.sh --both --jobs 6      # the same, six suites at once: same table, same order, a fraction of the time
 ~/Code/mnemon/bin/mnemon --config /path/to/test-instance.yaml status   # run the dev tree explicitly, against a test instance
 ```
 
