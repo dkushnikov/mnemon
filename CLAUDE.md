@@ -36,15 +36,21 @@ Mnemon is the tool; the plugin is a thin door into it.
 ## Development
 
 ```bash
-# Run every suite — one table (passed / failed / not run), exit 1 on any failure; -k keeps going
-# after a failing suite. On a Mac, --both runs everything again under the legacy toolchain (the
-# system bash 3.2 + python 3.9, PATH=/usr/bin:/bin first) — the oldest toolchain the engine
-# supports; elsewhere --both exits 2 and CI's macOS job covers that leg. The suites never touch
-# your Claude Code plugin registry: tests/test-helper.sh exports MNEMON_SKIP_PLUGIN=1 and setup.sh
-# skips its plugin step under it; the two tests of that step (tests/test_setup.sh) run it in a
-# temp HOME — one with no `claude` on PATH, one against a logging stub `claude`
-tests/run-suites.sh            # every suite under the bash and python3 on PATH
-tests/run-suites.sh --both     # macOS: the current toolchain, then the legacy one
+# Branch from main. While you work, run the suites your change touches: tests/run-suites.sh
+# <suite>… — one table (passed / failed / not run), exit 1 on any failure; -k keeps going after a
+# failing suite. Before a pull request, run every suite once on the toolchain on PATH
+# (tests/run-suites.sh) when the change touches a shared path: bin/lib-capture.sh,
+# bin/knowledge-gateway.sh, bin/mnemon, bin/mnemon-config.sh or bin/lib_config.py. CI runs both
+# toolchains on every pull request (lint and suites are required checks), so do not run --both on
+# a branch. Run tests/run-suites.sh --both once, on main, before mnemon release: on a Mac it runs
+# everything again under the legacy toolchain (the system bash 3.2 + python 3.9, PATH=/usr/bin:/bin
+# first) — the oldest toolchain the engine supports; elsewhere --both exits 2. The suites never
+# touch your Claude Code plugin registry: tests/test-helper.sh exports MNEMON_SKIP_PLUGIN=1 and
+# setup.sh skips its plugin step under it; the two tests of that step (tests/test_setup.sh) run it
+# in a temp HOME — one with no `claude` on PATH, one against a logging stub `claude`
+tests/run-suites.sh test_config.sh test_capture.sh   # while you work: the suites your change touches
+tests/run-suites.sh            # before a pull request that touches a shared path: every suite, the toolchain on PATH
+tests/run-suites.sh --both     # on main, once, before mnemon release (macOS): the current toolchain, then the legacy one
 
 # Dry-run a capture through the dispatcher against an explicit instance file
 ./bin/mnemon --config /path/to/instance.yaml add --url https://example.com --dry-run
