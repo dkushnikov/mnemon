@@ -172,6 +172,146 @@ else
   assert_eq "$rc" "2" "--legacy refuses it too"
 fi
 
+echo "--- --jobs: suites at once, one table in order ---"
+# rows_of: the table's suite column, in the order printed (one name per row, so a row printed twice shows)
+rows_of() { printf '%s\n' "$out" | grep -E '^(✓|✗|–) +(current|legacy) ' | awk '{ print $3 }' | tr '\n' ' ' | sed 's/ $//'; }
+# no_time: the output with the time column blanked — two runs of one table differ only there
+no_time() { printf '%s\n' "$1" | sed -E 's/ +[0-9]+s$/ Ns/'; }
+SYNC="$TEST_TMPDIR/sync"; mkdir -p "$SYNC"
+JOB="$TEST_TMPDIR/jobs"; mkdir -p "$JOB"
+# test_a.sh passes only when test_c.sh ran to its end while test_a.sh was running — the proof that
+# suites run at once; test_c.sh ends first, test_a.sh last, and the table must still read a, b, c
+cat > "$JOB/test_a.sh" <<'EOF'
+#!/usr/bin/env bash
+i=0; while [ ! -e "$SYNC_DIR/c.finished" ] && [ $i -lt $((${SYNC_WAIT:-10} * 20)) ]; do sleep 0.05; i=$((i + 1)); done
+if [ -e "$SYNC_DIR/c.finished" ]; then echo "  ✓ test_c.sh ran meanwhile"; echo "Results: 1 passed, 0 failed"
+else echo "  ✗ test_c.sh did not run meanwhile"; echo "Results: 0 passed, 1 failed"; exit 1; fi
+EOF
+printf '#!/usr/bin/env bash\necho "Results: 2 passed, 0 failed"\n' > "$JOB/test_b.sh"
+printf '#!/usr/bin/env bash\necho "Results: 3 passed, 0 failed"\n: > "$SYNC_DIR/c.finished"\n' > "$JOB/test_c.sh"
+rm -f "$SYNC"/*
+run env SYNC_DIR="$SYNC" "$RUNNER" --suites-dir "$JOB" --jobs 3 --logs "$TEST_TMPDIR/logs-j3"
+assert_eq "$rc" "0" "--jobs 3: exit 0 when every suite passed"
+assert_contains "$(row_of current test_a.sh)" "passed         1       0" "...test_a.sh saw test_c.sh run to its end meanwhile: the suites ran at once"
+assert_eq "$(rows_of)" "test_a.sh test_b.sh test_c.sh" "...and the table keeps the suites' order, each row once, although test_c.sh ended first"
+assert_contains "$out" "run-suites: 3 suite(s) × current · 3 jobs" "...the header names the jobs"
+assert_contains "$out" "run-suites: wall clock " "...a line gives the wall-clock time"
+assert_contains "$out" "run-suites: 3 suite run(s) · 3 passed · 0 failed · 0 not run · logs: $TEST_TMPDIR/logs-j3" "...the summary line is the sequential one"
+assert_eq "$(printf '%s\n' "$out" | tail -n 1 | cut -c1-12)" "run-suites: " "...and stays the last line"
+assert_file_exists "$TEST_TMPDIR/logs-j3/current.test_b.sh.log" "...each suite's log is kept as with one job"
+assert_eq "$(/bin/ls -A "$TEST_TMPDIR/logs-j3" | tr '\n' ' ' | sed 's/ $//')" "current.test_a.sh.log current.test_b.sh.log current.test_c.sh.log" "...and the logs dir holds the logs only: no row or status file of the runner is left"
+rm -f "$SYNC"/*
+run env SYNC_DIR="$SYNC" "$RUNNER" --suites-dir "$JOB" -j 8
+assert_eq "$rc" "0" "-j 8 over 3 suites: more jobs than suites is fine"
+assert_eq "$(rows_of)" "test_a.sh test_b.sh test_c.sh" "...three rows, in order"
+assert_contains "$out" "· 8 jobs" "...-j is the short form of --jobs"
+rm -f "$SYNC"/*
+run env SYNC_DIR="$SYNC" SYNC_WAIT=1 "$RUNNER" --suites-dir "$JOB" --jobs 1
+assert_eq "$rc" "1" "--jobs 1 runs one suite after another: test_a.sh waits for test_c.sh in vain"
+assert_contains "$(row_of current test_a.sh)" "failed         0       1" "...and fails"
+assert_contains "$(row_of current test_c.sh)" "not run" "...test_c.sh is not run after it"
+assert_eq "$(printf '%s\n' "$out" | head -n 1)" "run-suites: 3 suite(s) × current" "...the header names no jobs with one"
+assert_not_contains "$out" "wall clock" "...and no wall-clock line is printed"
+
+echo "--- --jobs 1 is the sequential runner ---"
+run "$RUNNER" --suites-dir "$MID" -k --logs "$TEST_TMPDIR/logs-seq"
+seq_out="$out"; seq_rc="$rc"
+rm -rf "$TEST_TMPDIR/logs-seq"
+run "$RUNNER" --suites-dir "$MID" -k --jobs 1 --logs "$TEST_TMPDIR/logs-seq"
+assert_eq "$rc" "$seq_rc" "--jobs 1 exits as the default does"
+assert_eq "$(no_time "$out")" "$(no_time "$seq_out")" "...and prints the same output, byte for byte but the time column"
+
+echo "--- --jobs: a failure in the middle ---"
+MIDJ="$TEST_TMPDIR/midj"; mkdir -p "$MIDJ"
+# test_a.sh is still running when test_b.sh fails: it ends a second after test_b.sh did
+printf '#!/usr/bin/env bash\ni=0; while [ ! -e "$SYNC_DIR/b.finished" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i + 1)); done\nsleep 1\necho "  ✓ ok"\necho "Results: 3 passed, 0 failed"\n' > "$MIDJ/test_a.sh"
+printf '#!/usr/bin/env bash\necho "  ✗ bad 1: expected x, got y"\necho "Results: 2 passed, 1 failed"\n: > "$SYNC_DIR/b.finished"\nexit 1\n' > "$MIDJ/test_b.sh"
+mk_suite "$MIDJ" test_c.sh 1 0; mk_suite "$MIDJ" test_d.sh 4 0
+rm -f "$SYNC"/*
+run env SYNC_DIR="$SYNC" "$RUNNER" --suites-dir "$MIDJ" --jobs 2 --logs "$TEST_TMPDIR/logs-midj"
+assert_eq "$rc" "1" "--jobs 2 without -k: exit 1 when a suite failed"
+assert_contains "$(row_of current test_a.sh)" "passed         3       0" "...the suite that was running when the failure came finishes and keeps its row"
+assert_contains "$(row_of current test_b.sh)" "failed         2       1" "...the failing suite: failed, with its counts"
+assert_contains "$out" "|   ✗ bad 1: expected x, got y" "...and its failed assertions quoted"
+assert_contains "$(row_of current test_c.sh)" "not run" "...no new suite starts after the failure"
+assert_contains "$(row_of current test_d.sh)" "not run" "...every later one is not run"
+assert_eq "$(rows_of)" "test_a.sh test_b.sh test_c.sh test_d.sh" "...in the table's order"
+assert_contains "$out" "run-suites: 4 suite run(s) · 1 passed · 1 failed · 2 not run" "...and counted as not run"
+[[ -e "$TEST_TMPDIR/logs-midj/current.test_c.sh.log" ]] && fail "a not-run suite was not started under --jobs" "log exists" || pass "a not-run suite was not started under --jobs (no log)"
+rm -f "$SYNC"/*
+run env SYNC_DIR="$SYNC" "$RUNNER" --suites-dir "$MIDJ" --jobs 2 -k
+assert_eq "$rc" "1" "--jobs 2 -k: exit 1 too"
+assert_contains "$(row_of current test_c.sh)" "passed         1       0" "...the suites after the failure run"
+assert_contains "$(row_of current test_d.sh)" "passed         4       0" "...all of them"
+assert_eq "$(rows_of)" "test_a.sh test_b.sh test_c.sh test_d.sh" "...in the table's order"
+assert_contains "$out" "run-suites: 4 suite run(s) · 3 passed · 1 failed · 0 not run" "...nothing is not run"
+run "$RUNNER" --suites-dir "$MID" --jobs 3 -k
+assert_contains "$(row_of current test_d.sh)" "failed       —     —" "--jobs: a suite that died before its Results line is failed, no counts"
+assert_contains "$out" 'exit 127 and no "Results:" line — the suite did not finish' "...with the exit status and the log's tail"
+
+echo "--- --jobs: a suite that writes into its working directory ---"
+CALLER2="$TEST_TMPDIR/caller2"; mkdir -p "$CALLER2"
+run bash -c 'cd "$1" && "$2" --suites-dir "$3" --logs "$4" -k --jobs 2' _ "$CALLER2" "$RUNNER" "$LEAK" "$TEST_TMPDIR/logs-leakj"
+assert_eq "$rc" "1" "--jobs 2: a suite that leaves files in its working directory fails the run"
+assert_contains "$(row_of current test_b.sh)" "failed         1       0" "...its row is failed"
+assert_contains "$out" "the suite left file(s) in its working directory (kept in $TEST_TMPDIR/logs-leakj/cwd.current.test_b.sh): -v scratch.tmp" "...naming the files and where they were kept"
+assert_eq "$(/bin/ls -A "$CALLER2" | wc -l | tr -d ' ')" "0" "...and the caller's working directory stays untouched"
+
+echo "--- every suite gets a private TMPDIR ---"
+TMPS="$TEST_TMPDIR/tmps"; mkdir -p "$TMPS"
+printf '#!/usr/bin/env bash\necho "tmpdir=$TMPDIR"\n: > "$TMPDIR/a-was-here"\necho "Results: 1 passed, 0 failed"\n' > "$TMPS/test_a.sh"
+printf '#!/usr/bin/env bash\necho "tmpdir=$TMPDIR"\n: > "$TMPDIR/b-was-here"\necho "  ✗ bad"\necho "Results: 0 passed, 1 failed"\nexit 1\n' > "$TMPS/test_b.sh"
+for j in 1 2; do
+  L="$TEST_TMPDIR/logs-tmp$j"
+  run "$RUNNER" --suites-dir "$TMPS" -k --jobs "$j" --logs "$L"
+  assert_contains "$(cat "$L/current.test_a.sh.log")" "tmpdir=$L/tmp.current.test_a.sh" "--jobs $j: a suite's TMPDIR is its own directory under the logs dir"
+  assert_contains "$(cat "$L/current.test_b.sh.log")" "tmpdir=$L/tmp.current.test_b.sh" "...another suite's is another one"
+  [[ -e "$L/tmp.current.test_a.sh" ]] && fail "--jobs $j: a passing suite's TMPDIR is removed" "still there" || pass "...a passing suite's TMPDIR is removed"
+  assert_file_exists "$L/tmp.current.test_b.sh/b-was-here" "...a failing suite's TMPDIR is kept, with what the suite left there"
+done
+
+echo "--- --jobs: an interrupt stops the running suites ---"
+INTR="$TEST_TMPDIR/intr"; mkdir -p "$INTR"
+# each suite records its pid and a child's, then waits on the child; neither ends by itself
+for s in a b; do
+  printf '#!/usr/bin/env bash\nsleep 60 &\necho "$$ $!" > "$SYNC_DIR/%s.pids"\nwait\n' "$s" > "$INTR/test_$s.sh"
+done
+mk_suite "$INTR" test_c.sh 1 0
+rm -f "$SYNC"/*
+env SYNC_DIR="$SYNC" "$RUNNER" --suites-dir "$INTR" --jobs 2 --logs "$TEST_TMPDIR/logs-intr" >"$TEST_TMPDIR/intr.out" 2>&1 &
+runner_pid=$!
+wait_file "$SYNC/a.pids"; wait_file "$SYNC/b.pids"
+kill -TERM "$runner_pid"
+rc=0; wait "$runner_pid" || rc=$?
+assert_eq "$rc" "130" "SIGTERM to the runner: exit 130"
+assert_contains "$(cat "$TEST_TMPDIR/intr.out")" "run-suites: interrupted — 2 running suite(s) stopped" "...it says how many running suites it stopped"
+left=""
+for p in $(cat "$SYNC/a.pids" "$SYNC/b.pids"); do
+  i=0; while kill -0 "$p" 2>/dev/null && [[ $i -lt 100 ]]; do sleep 0.05; i=$((i + 1)); done
+  kill -0 "$p" 2>/dev/null && { left="$left $p"; kill -KILL "$p" 2>/dev/null || true; }
+done
+assert_eq "$left" "" "...and the suites and their children are gone: each job's whole process group was stopped"
+[[ -e "$TEST_TMPDIR/logs-intr/current.test_c.sh.log" ]] && fail "no suite starts after an interrupt" "test_c.sh ran" || pass "no suite starts after an interrupt"
+
+echo "--- --jobs: usage ---"
+run "$RUNNER" --suites-dir "$ALL" --jobs 0
+assert_eq "$rc" "2" "--jobs 0 is a usage error"
+run "$RUNNER" --suites-dir "$ALL" --jobs many
+assert_eq "$rc" "2" "--jobs many is a usage error"
+assert_contains "$out" "--jobs takes a positive number or auto" "...named"
+run "$RUNNER" --suites-dir "$ALL" --jobs
+assert_eq "$rc" "2" "--jobs without a value is a usage error"
+cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"; [[ $cores -le 8 ]] || cores=8
+run "$RUNNER" --suites-dir "$ALL" --jobs auto
+assert_eq "$rc" "0" "--jobs auto runs"
+if [[ $cores -gt 1 ]]; then
+  assert_contains "$out" "· $cores jobs" "...with the host's cores, at most 8 ($cores here)"
+else
+  assert_eq "$(printf '%s\n' "$out" | head -n 1)" "run-suites: 3 suite(s) × current" "...with one core: one job, the sequential runner"
+fi
+run "$RUNNER" --help
+assert_contains "$out" "--jobs" "--help documents --jobs"
+
 echo "--- one real suite through the runner ---"
 run "$RUNNER" --logs "$TEST_TMPDIR/logs-real" test_hygiene.sh
 assert_eq "$rc" "0" "the repository's hygiene suite passes through the runner"
