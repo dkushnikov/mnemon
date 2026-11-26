@@ -73,7 +73,8 @@ Commands:
                              Consume mnemon-envelope/1 files from an inbox directory under
                              the vault lock; one result record per envelope (docs/inbox.md)
   browser-lane youtube <url>… [--browser safari] [--out <dir>] [--no-add] [--context <ctx>]
-               [--intent <text>] [--recapture] [--pause <s>] [--timeout <s>] [--dry-run] [--json]
+               [--intent <text>] [--session <name>] [--recapture] [--pause <s>] [--timeout <s>]
+               [--dry-run] [--json]
                              The browser lane's media form: one caption track per video through
                              yt-dlp and the reader's own browser cookies (one call per video, in
                              order), a bundle per video, then `add --url <video> --media-bundle

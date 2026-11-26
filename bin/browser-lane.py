@@ -2,7 +2,7 @@
 """browser-lane.py — the browser lane's media form: YouTube captions through the reader's own browser session.
 
     browser-lane.py youtube <url>… [--browser safari] [--out <dir>] [--no-add] [--context <ctx>] [--intent <text>]
-                    [--recapture] [--pause <s>] [--timeout <s>] [--dry-run] [--json] [--mnemon <path>]
+                    [--session <name>] [--recapture] [--pause <s>] [--timeout <s>] [--dry-run] [--json] [--mnemon <path>]
 
 YouTube answers a host it distrusts with a bot wall, and the engine's media path does not try to pass it — no
 cookies, no proxies (docs/capture.md §7). This producer does what the engine must not: it runs yt-dlp with
@@ -210,6 +210,15 @@ def render_argv(argv) -> str:
     return " ".join(out)
 
 
+def session_of(args):
+    """The session the lane hands to `add` (capture contracts A14): --session as given (an empty value too), else
+    the caller's MNEMON_SESSION, else None. Resolved here, not left to the inherited environment, so the executed
+    add and every PRINTED command (a retry runs in the reader's shell) name the same session."""
+    if args.session is not None:
+        return args.session
+    return os.environ.get("MNEMON_SESSION") or None
+
+
 def add_argv(mnemon: str, canonical: str, bundle: str, track: dict, args) -> list:
     argv = [mnemon] + selector_argv() + ["add", "--url", canonical, "--media-bundle", bundle,
                                          "--import-source", PRODUCER_ID, "--producer-fidelity", fidelity_of(track)]
@@ -217,6 +226,9 @@ def add_argv(mnemon: str, canonical: str, bundle: str, track: dict, args) -> lis
         argv += ["--context", args.context]
     if args.intent:
         argv += ["--intent", args.intent]
+    session = session_of(args)
+    if session is not None:
+        argv += ["--session", session]
     if args.recapture:
         argv.append("--recapture")
     return argv
@@ -378,6 +390,7 @@ def main() -> int:
     yt.add_argument("--no-add", action="store_true", help="write the bundle and print the mnemon add argv; do not capture")
     yt.add_argument("--context", default=None, help="passed to mnemon add --context")
     yt.add_argument("--intent", default=None, help="passed to mnemon add --intent")
+    yt.add_argument("--session", default=None, help="passed to mnemon add --session (default: $MNEMON_SESSION when set)")
     yt.add_argument("--recapture", action="store_true", help="passed to mnemon add (a new revision of a video already in the vault)")
     yt.add_argument("--pause", type=float, default=DEFAULT_PAUSE, help="seconds between videos (default %g)" % DEFAULT_PAUSE)
     yt.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="budget in seconds for one video's yt-dlp calls (default %g)" % DEFAULT_TIMEOUT)

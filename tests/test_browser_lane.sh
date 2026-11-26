@@ -261,6 +261,24 @@ assert_contains "$out" "$STUBS/mnemon --config /some/dir/work.yaml add --url" ".
 stub_reset
 MNEMON_INSTANCE=work STUB_ADD=captured run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
 assert_contains "$out" "finish with: $STUBS/mnemon --instance work add --resume 2026-11-05_abcd1234" "...and the --resume hint carries the instance and the dispatcher's path"
+# the session (capture contracts A14): --session as given, else the caller's MNEMON_SESSION — resolved by the lane, so
+# the executed add and a printed command name the same one
+stub_reset
+run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0 --session "Lane session"
+assert_eq "$(calls mnemon-calls)" "add --url $URL1 --media-bundle $(bundle_of abc123xyz00) --import-source browser-lane --producer-fidelity model-transcribed --session Lane session" "--session reaches the executed add"
+stub_reset
+MNEMON_SESSION="Env lane" run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0 --no-add
+assert_contains "$out" "--producer-fidelity model-transcribed --session 'Env lane'" "without the flag, MNEMON_SESSION reaches the printed add (a retry runs in the reader's shell)"
+stub_reset
+MNEMON_SESSION="Env lane" run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0 --session "Flag lane"
+assert_contains "$(calls mnemon-calls)" "--session Flag lane" "...the flag outranks the environment"
+assert_not_contains "$(calls mnemon-calls)" "Env lane" "...and the environment's value is not passed beside it"
+stub_reset
+run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
+assert_not_contains "$(calls mnemon-calls)" "--session" "no flag, no MNEMON_SESSION: no --session on the add"
+stub_reset
+run_lane youtube "$URL1" --out "$OUT" --dry-run --mnemon "$STUBS/mnemon" --session "Plan session"
+assert_contains "$out" "--session 'Plan session'" "the dry-run plan carries the session"
 stub_reset
 run_lane youtube "$URL1" --out "$OUT" --dry-run --mnemon "$STUBS/mnemon" --intent "two words"
 assert_contains "$out" "--intent 'two words'" "the dry-run plan quotes a two-word intent"
