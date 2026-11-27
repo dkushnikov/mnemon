@@ -125,6 +125,88 @@ class AddressChecks(PolicyBase):
             self.assertEqual(ctx.exception.kind, "ssrf-blocked")
 
 
+class Nat64(PolicyBase):
+    """A19 (D3 amended): an address of the NAT64 well-known prefix `64:ff9b::/96` — what a DNS64 network
+    answers for a host without native IPv6 — is judged by its embedded IPv4 address alone; every other check
+    stays: all answers of a resolution, every redirect hop, the pinned connection."""
+
+    PUBLIC = "64:ff9b::808:808"          # 8.8.8.8
+    PRIVATE = "64:ff9b::a00:1"           # 10.0.0.1
+
+    def test_public_embedded_address_passes(self):
+        for a in (self.PUBLIC, "64:ff9b::8.8.8.8", "64:ff9b::101:101", "64:FF9B::808:808"):
+            self.assertIsNone(P.address_problem(a), a)
+
+    def test_every_non_global_embedded_address_is_refused(self):
+        for embedded in ("10.0.0.1", "172.16.0.1", "192.168.1.9", "100.64.0.1", "127.0.0.1", "169.254.1.1", "0.0.0.0",
+                         "224.0.0.1", "240.0.0.1", "255.255.255.255", "192.0.0.8", "192.0.2.1", "198.18.0.1",
+                         "203.0.113.9"):
+            a = "64:ff9b::" + embedded
+            problem = P.address_problem(a)
+            self.assertIsNotNone(problem, a)
+            self.assertIn("embedded in the NAT64 address 64:ff9b::", problem)
+
+    def test_an_embedded_loopback_is_refused_even_under_the_loopback_hook(self):
+        self.assertIsNone(P.address_problem("127.0.0.1", loopback_ok=True))
+        self.assertIn("loopback address 127.0.0.1", P.address_problem("64:ff9b::7f00:1", loopback_ok=True))
+
+    def test_only_the_well_known_slash_96_is_unwrapped(self):
+        for a in ("64:ff9b:1::808:808",       # the local-use prefix of RFC 8215
+                  "64:ff9b::1:808:808",       # inside 64:ff9b::/80, outside the /96
+                  "64:ff9a::808:808"):
+            problem = P.address_problem(a)
+            self.assertIsNotNone(problem, a)
+            self.assertNotIn("NAT64", problem)
+
+    def test_check_returns_the_public_nat64_address(self):
+        with mock.patch.object(socket, "getaddrinfo", return_value=addrinfo(self.PUBLIC)):
+            self.assertEqual(self.policy().check("https://v4only.test/page"), self.PUBLIC)
+
+    def test_the_connection_is_pinned_to_the_public_nat64_address(self):
+        seen = []
+
+        def connect(conn):
+            seen.append((conn._pin_family, conn._pin_sockaddr))
+            raise OSError("stop before any byte")
+
+        with mock.patch.object(socket, "getaddrinfo", return_value=addrinfo(self.PUBLIC)), \
+                mock.patch.object(P._PinnedConnection, "connect", connect):
+            with self.assertRaises(P.PolicyError) as ctx:
+                self.policy().get("http://v4only.test/x")
+        self.assertEqual(ctx.exception.kind, "connection", ctx.exception.message)
+        self.assertEqual(seen, [(socket.AF_INET6, (self.PUBLIC, 80, 0, 0))])
+
+    def test_one_public_and_one_private_answer_is_refused(self):
+        for answer in ([self.PUBLIC, self.PRIVATE], [self.PRIVATE, self.PUBLIC], [self.PUBLIC, "10.0.0.1"],
+                       ["8.8.8.8", "64:ff9b::7f00:1"], [self.PUBLIC, "64:ff9b::6440:1"]):
+            with mock.patch.object(socket, "getaddrinfo", return_value=addrinfo(*answer)), \
+                    mock.patch.object(P._PinnedConnection, "connect", side_effect=AssertionError("socket opened")):
+                with self.assertRaises(P.PolicyError) as ctx:
+                    self.policy().get("http://mixed.test/x")
+                self.assertEqual(ctx.exception.kind, "ssrf-blocked", answer)
+                self.assertFalse(ctx.exception.retryable)
+                with self.assertRaises(P.PolicyError) as ctx:
+                    self.policy().check("http://mixed.test/x")
+                self.assertEqual(ctx.exception.kind, "ssrf-blocked", answer)
+
+    def test_a_redirect_to_a_private_nat64_address_is_refused_at_the_hop(self):
+        self.server.add("/r", "", status=302, headers=[("Location", "http://nat64-private.test/secret")])
+        self.server.add("/secret", "<html><body>secret</body></html>")
+        real = socket.getaddrinfo
+
+        def resolve(host, port, *a, **kw):
+            if host == "nat64-private.test":
+                return addrinfo(self.PRIVATE)
+            return real(host, port, *a, **kw)
+
+        with mock.patch.object(socket, "getaddrinfo", side_effect=resolve):
+            with self.assertRaises(P.PolicyError) as ctx:
+                self.policy().get(self.server.url("/r"))
+        self.assertEqual(ctx.exception.kind, "ssrf-redirect")
+        self.assertIn("embedded in the NAT64 address", ctx.exception.message)
+        self.assertEqual(self.server.count("/secret"), 0)
+
+
 class Redirects(PolicyBase):
     def test_five_redirects_followed_sixth_refused(self):
         for i in range(1, 8):

@@ -77,6 +77,9 @@ if [[ " $* " == *" --dump-single-json "* ]]; then
         echo "WARNING: Authorization header was: Bearer synthetic-free-token"
         echo "WARNING: [youtube] $id: the tokenizer, the sidebar and the secretary stay; so does a cookie-consent banner"
         echo "WARNING: config echo ['--add-header', 'Authorization: Bearer synthetic-echo', '-v']"
+        echo "WARNING: login failed for password synthetic9value"
+        echo "WARNING: [youtube] $id: The provided YouTube account cookies are no longer valid. They have likely been rotated in the browser as a security measure."
+        echo "WARNING: [youtube] $id: ios client https formats require a GVS PO Token which was not provided. They will be skipped."
       } >&2; exit 1 ;;
     keyed)
       {
@@ -86,7 +89,27 @@ if [[ " $* " == *" --dump-single-json "* ]]; then
         echo "WARNING: argv echo --password=synthetic-opt --quiet"
         echo "WARNING: redirect https://example.com/cb#access_token=synthetic-frag&state=1 failed"
         echo "WARNING: [youtube] $id: the format list is basic"
+        echo "WARNING: see (https://example.com/p)Bearer synthetic-glued-1"
+        echo "WARNING: https://example.com/p,Basic synthetic-glued-2"
+        echo "WARNING: auth-Basic synthetic-glued-3"
+        echo "WARNING: https://example.com/p#--add-header synthetic-glued-4"
+        echo "WARNING: client_secret=synthetic-prefixed"
+        echo "WARNING: proxy http://reader:synthetic-userinfo@proxy.example.com:8080 refused the connection"
+        echo "WARNING: https://sid:synthetic-userkey@proxy.example.com/p then a note synthetic-tail"
+        echo "WARNING: upstream http://reader:synthetic-pw-pwd=x@proxy.example.com"
+        echo "WARNING: relay http://reader:synthetic-at@sign@proxy.example.com:8080 refused"
+        echo "WARNING: port 8080http://reader:synthetic-glued-url@proxy.example.com refused"
       } >&2; exit 1 ;;
+    long)
+      python3 - "$id" >&2 <<'PYLONG'
+import sys
+vid = sys.argv[1]
+print("ERROR: [youtube] %s: a long line " % vid + "word " * 900 + "Cookie: synthetic-far-cookie")
+print("WARNING: " + "a-" * 50000 + " token=synthetic-after-run")
+print("WARNING: " + "x " * 1990 + "synthetic0123456789abcdefghij0123456789ABCDEFGHIJ end")
+print("WARNING: Cookie: synthetic-early-cookie " + "y " * 3000)
+PYLONG
+      exit 1 ;;
     creds-error) echo "ERROR: [youtube] $id: HTTP Error 403 on https://rr1.googlevideo.com/videoplayback?v=$id&sig=synthetic-sig-9; Authorization: Bearer synthetic-err-token" >&2; exit 1 ;;
   esac
   python3 - "$MEDIA_FIX/ytdlp-info-captions.json" "$id" "${STUB_YTDLP:-ok}" "${STUB_YTDLP_MANUAL:-}" <<'PY'
@@ -261,7 +284,7 @@ STUB_YTDLP=leaky run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" 
 B="$(bundle_of abc123xyz00)"
 assert_contains "$out" "blocked abc123xyz00 — bot-wall: ERROR: [youtube] abc123xyz00: Sign in to confirm you’re not a bot" "a wall behind a debug run's lines: blocked, the classifier's line"
 assert_contains "$(cat "$B/stderr.txt")" "Sign in to confirm you’re not a bot" "...stderr.txt keeps the wall's line"
-assert_contains "$(cat "$B/stderr.txt")" "WARNING: [youtube] abc123xyz00: cookies <redacted>" "...a kept WARNING loses everything after its first credential word (the path and the session value with it)"
+assert_contains "$(cat "$B/stderr.txt")" "WARNING: [youtube] abc123xyz00: cookies file <path> <redacted>" "...a kept WARNING keeps its prose up to the value: the path is <path>, the session value goes"
 assert_contains "$(cat "$B/stderr.txt")" "7 other line(s) not kept" "...the debug, cookie-store, traffic and traceback lines are counted, not kept"
 leak="$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")"
 for needle in sekret /Users/reader "Extracting cookies" "Extracted 42" "[debug]" "Set-Cookie" Traceback; do
@@ -280,8 +303,8 @@ assert_contains "$kept" "WARNING: [youtube] abc123xyz00: extra headers --add-hea
 assert_contains "$kept" "videoplayback?v=abc123xyz00&sig=<redacted>&token=<redacted>#t=1 (retrying)" "...a URL keeps the video id; sig= and token= lose their values"
 assert_contains "$kept" "WARNING: [youtube] abc123xyz00: po_token <redacted>" "...a token word: the rest of the line goes"
 assert_contains "$kept" "WARNING: [youtube] abc123xyz00: challenge <redacted> was rejected" "...a token-shaped string without a credential word goes on its own"
-assert_contains "$kept" "ERROR: [youtube] abc123xyz00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication." "...and the wall's own sentence survives up to its first credential word (the option names --cookies and --cookies-from-browser are not one)"
-assert_contains "$kept" "FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies <redacted>" "...a URL's fragment is not a credential word; the prose 'pass cookies' is, and the rest of the line goes"
+assert_contains "$kept" "ERROR: [youtube] abc123xyz00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication." "...and the wall's own sentence survives (the option names --cookies and --cookies-from-browser are not a credential word)"
+assert_contains "$kept" "FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies" "...to its end: 'pass cookies' with no value after it is prose, and a URL's fragment is not a credential word"
 assert_not_contains "$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")" "synthetic" "...no credential value in stderr.txt, error.json or any printed line"
 stub_reset
 STUB_YTDLP=freeform run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
@@ -289,7 +312,10 @@ B="$(bundle_of abc123xyz00)"
 kept="$(cat "$B/stderr.txt")"
 assert_contains "$out" "failed abc123xyz00 — yt-dlp metadata failed: ERROR: Cookie <redacted> · diagnostics:" "free wording 'Cookie header was: a=1; b=2': the line ends at the credential word, on the terminal"
 assert_contains "$kept" "ERROR: Cookie <redacted>" "...and in stderr.txt"
-assert_contains "$kept" "WARNING: Authorization <redacted>" "...the same wording with Authorization"
+assert_contains "$kept" "WARNING: Authorization header was: Bearer <redacted>" "...the same wording with Authorization: the scheme's value goes"
+assert_contains "$kept" "WARNING: login failed for password <redacted>" "...a credential word with a value-shaped next word (it holds a digit)"
+assert_contains "$kept" "WARNING: [youtube] abc123xyz00: The provided YouTube account cookies are no longer valid. They have likely been rotated in the browser as a security measure." "...a credential word in plain prose is no value: yt-dlp's own warning stays whole"
+assert_contains "$kept" "WARNING: [youtube] abc123xyz00: ios client https formats require a GVS PO Token which was not provided. They will be skipped." "...and so does its PO Token warning"
 assert_contains "$kept" "WARNING: [youtube] abc123xyz00: the tokenizer, the sidebar and the secretary stay; so does a cookie-consent banner" "...a credential word inside a longer word (tokenizer, sidebar, secretary, cookie-consent) is not one: the line stays whole"
 assert_contains "$kept" "WARNING: config echo ['--add-header <redacted>']" "...an echoed config list is cut at --add-header and stays well-formed (its quote and bracket closed)"
 assert_not_contains "$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")" "synthetic" "...no credential value anywhere"
@@ -306,9 +332,35 @@ assert_contains "$kept" "WARNING: x-api-key: <redacted>" "...a hyphenated header
 assert_contains "$kept" "WARNING: argv echo --password=<redacted>" "...an option written --password=<value>"
 assert_contains "$kept" "WARNING: redirect https://example.com/cb#access_token=<redacted>" "...a field in a URL's fragment, where the query rule does not reach"
 assert_contains "$kept" "WARNING: [youtube] abc123xyz00: the format list is basic" "...the word 'basic' with nothing after it is prose: the line stays whole"
+assert_contains "$kept" "WARNING: see (https://example.com/p)Bearer <redacted>" "...a scheme glued to a URL's bracket"
+assert_contains "$kept" "WARNING: https://example.com/p,Basic <redacted>" "...glued to a URL by a comma"
+assert_contains "$kept" "WARNING: auth-Basic <redacted>" "...and with a hyphen on its left"
+assert_contains "$kept" "WARNING: https://example.com/p#--add-header <redacted>" "...--add-header glued to a URL"
+assert_contains "$kept" "WARNING: client_secret=<redacted>" "...a secret field with a prefix in its name"
+assert_contains "$kept" "WARNING: proxy http://<redacted>@proxy.example.com:8080 refused the connection" "...the user and password of a URL go, the rest of the line stays"
+assert_contains "$kept" "WARNING: https://<redacted>" "...a key as the user name of a URL: the cut takes the whole user part and the rest of the line"
+assert_contains "$kept" "WARNING: upstream http://<redacted>" "...a field name inside the password: no piece of the user part is kept"
+assert_contains "$kept" "WARNING: relay http://<redacted>@proxy.example.com:8080 refused" "...a raw @ in the password: the user part runs to the last @"
+assert_contains "$kept" "WARNING: port 8080http://<redacted>@proxy.example.com refused" "...a URL glued to the text before it has a user part too"
 leak="$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")"
 assert_not_contains "$leak" "synthetic" "...no credential value anywhere"
 assert_not_contains "$leak" "dXNlcjpwYXNz" "...nor the Basic value"
+assert_not_contains "$leak" "reader:" "...nor the user name of a URL"
+# a line is read up to 4000 characters (the rules rescan a long run with no space in it; the limit bounds that):
+# the word that the limit splits goes with the rest, a note counts what was not read, and a field before the limit
+# is still cut
+stub_reset
+STUB_YTDLP=long run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
+assert_eq "$rc" "1" "four long lines: the lane ends (exit 1), it does not hang on them"
+B="$(bundle_of abc123xyz00)"
+kept="$(cat "$B/stderr.txt")"
+assert_eq "$(printf '%s\n' "$kept" | grep -c .)" "4" "...four lines kept"
+assert_contains "$kept" "ERROR: [youtube] abc123xyz00: a long line word word" "...a line of 4500 characters keeps its start"
+assert_contains "$kept" "WARNING: <100027 character(s) of the line not read>" "...a run of 100000 characters with no space: nothing of it is read, the note counts it"
+assert_contains "$kept" "WARNING: Cookie: <redacted> <" "...a field before the limit is cut as on a short line, and the note follows"
+assert_eq "$(printf '%s\n' "$kept" | awk '{ if (length($0) > 2000) n++ } END { print n + 0 }')" "0" "...and no kept line is longer than 2000 characters"
+leak="$(cat "$B/stderr.txt" "$B/error.json"; printf '%s\n' "$out$err")"
+assert_not_contains "$leak" "synthetic" "...no credential: not the field beyond the limit, not the token the limit splits, not the one after the run"
 stub_reset
 STUB_YTDLP=creds-error run_lane youtube "$URL1" --out "$OUT" --mnemon "$STUBS/mnemon" --pause 0
 B="$(bundle_of abc123xyz00)"

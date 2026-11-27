@@ -3,7 +3,8 @@
 `Policy.get(url)` is the only way the capture layer talks HTTP: `http`/`https` only, no userinfo, every
 hop's host resolved and **every** returned address checked (private, loopback, link-local, reserved,
 multicast, unspecified, and anything else that is not globally reachable — the RFC 6598 shared space of a
-tailnet or a carrier NAT included → `ssrf-blocked` on the first hop, `ssrf-redirect` after a redirect), the connection
+tailnet or a carrier NAT included → `ssrf-blocked` on the first hop, `ssrf-redirect` after a redirect; an address of the
+NAT64 well-known prefix `64:ff9b::/96` is judged by the IPv4 address it carries, spec §20, A19), the connection
 pinned to the checked address (the socket is opened on the resolved sockaddr — never a second lookup — and
 TLS is verified against the host name with SNI = host; the `Host` header is the host name), at most
 `max_redirects` redirects each re-checked before it is followed, a byte cap measured on the decoded body
@@ -160,17 +161,28 @@ def rewrite_url(url: str) -> str:
 _NON_GLOBAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
     "0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24",
     "203.0.113.0/24", "240.0.0.0/4", "100::/64", "2001:db8::/32", "2001:10::/28", "2001:2::/48"))
+# The NAT64 well-known prefix (RFC 6052 §2.1): on a DNS64 network a host without native IPv6 resolves to
+# `64:ff9b::<its IPv4 address>`, and the translator forwards to that IPv4 address. Only this /96 — not the
+# local-use `64:ff9b:1::/48` (RFC 8215), not a network-specific prefix — is unwrapped (D3, A19).
+_NAT64_WKP = ipaddress.ip_network("64:ff9b::/96")
 
 
 def address_problem(address: str, loopback_ok: bool = False) -> Optional[str]:
     """Why an address is refused (private, loopback, link-local, reserved, multicast, unspecified, or any
     address that is not globally reachable — RFC 6598 shared space included), or None. An IPv6 address that
-    embeds an IPv4 one (mapped, 6to4, Teredo, NAT64) is judged by the embedded address too."""
+    embeds an IPv4 one (mapped, 6to4, Teredo) is judged by the embedded address too. An address of the NAT64
+    well-known prefix `64:ff9b::/96` is judged by its embedded IPv4 address alone (A19): the wrapper is the
+    translator's, not the destination — `ipaddress` calls the prefix reserved, and a DNS64 network returns
+    it for every IPv4-only host — while the embedded address goes through every check, a loopback one
+    refused even under the loopback test hook (it is the translator's loopback, never the test server)."""
     text = address.split("%", 1)[0]
     try:
         ip = ipaddress.ip_address(text)
     except ValueError:
         return "unparseable address %r" % address
+    if ip.version == 6 and ip in _NAT64_WKP:
+        problem = _problem([ipaddress.ip_address(int(ip) & 0xFFFFFFFF)], False)
+        return "%s (embedded in the NAT64 address %s)" % (problem, ip) if problem else None
     candidates = [ip]
     if ip.version == 6:
         for embedded in (ip.ipv4_mapped, ip.sixtofour):
@@ -179,8 +191,10 @@ def address_problem(address: str, loopback_ok: bool = False) -> Optional[str]:
         teredo = ip.teredo
         if teredo is not None:
             candidates.append(teredo[1])
-        if ip in ipaddress.ip_network("64:ff9b::/96"):
-            candidates.append(ipaddress.ip_address(int(ip) & 0xFFFFFFFF))
+    return _problem(candidates, loopback_ok)
+
+
+def _problem(candidates, loopback_ok: bool) -> Optional[str]:
     for cand in candidates:
         if cand.is_loopback:
             if loopback_ok:
