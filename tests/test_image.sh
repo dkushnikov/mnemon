@@ -56,6 +56,11 @@ cfg_with() {   # <name> <yaml line>… → prints the path of a config with thos
   printf '%s\n' "$@" >> "$f"
   printf '%s' "$f"
 }
+# contract K5: the source-add skill branches on two phrases of the engine's message — «the image is kept» after
+# the raw is published, «nothing was kept» before it — and says nothing about the image when the message has neither
+says_kept() { assert_contains "$err" "the image is kept" "$1: the message says the image is kept"; assert_not_contains "$err" "nothing was kept" "$1: ...and never that nothing was kept"; }
+says_none_kept() { assert_contains "$err" "nothing was kept" "$1: the message says nothing was kept"; assert_not_contains "$err" "the image is kept" "$1: ...and never that the image is kept"; }
+says_neither() { assert_not_contains "$err" "the image is kept" "$1: the message says nothing about the image being kept"; assert_not_contains "$err" "nothing was kept" "$1: ...nor that nothing was kept"; }
 STUB_TEXT_SHA="$(python3 - "$MNEMON_ROOT" "$IMGFIX/stub-text.txt" <<'PY'
 import hashlib, sys
 sys.path.insert(0, sys.argv[1] + "/bin")
@@ -244,6 +249,7 @@ n0="$(ls "$ARCHIVE" | wc -l | tr -d ' ')"
 run_gw --origin image --file "$pre" --capture-id i-pre
 assert_eq "$rc" "3" "a probe record without image-reader: an image capture exits 3"
 assert_eq "$(result error_class)" "fence-unprobed" "...fence-unprobed"
+says_neither "fence-unprobed before any raw"
 assert_eq "$(result retryable)" "true" "...retryable"
 assert_contains "$err" "mnemon fence-probe" "...the message names the command"
 assert_eq "$(ls "$ARCHIVE" | wc -l | tr -d ' ')" "$n0" "...before any raw"
@@ -283,6 +289,7 @@ write_probe_record     # the record without the entry image-reader
 r0="$(reader_calls)"; t0="$(tess_calls)"
 run_gw --capture-id i-prk
 assert_eq "$rc $(result status) $(result error_class)" "3 failed fence-unprobed" "the replay of a kept image without the reader's probe entry: exit 3, fence-unprobed"
+says_neither "i-prk (fence-unprobed on the replay of a kept image)"
 assert_contains "$err" "mnemon fence-probe" "...the message names the command"
 assert_eq "$(( $(reader_calls) - r0 )) $(( $(tess_calls) - t0 ))" "0 0" "...no reader call, no witness run"
 assert_eq "$(rget i-prk '.raw_path') $(sha_of "$prk_raw")" "$prk_raw $(sha_of "$prk")" "...the image still kept, unchanged"
@@ -304,6 +311,7 @@ run_cfg "$small" --origin image --file "$big" --capture-id i-big
 assert_eq "$rc" "1" "an input over image_max_bytes exits 1"
 assert_eq "$(result error_class) $(result retryable) $(result acquisition)" "too-large false too-large" "...too-large, not retryable, RESULT:acquisition=too-large"
 assert_contains "$(rget i-big '.error')" "image_max_bytes=100" "...the receipt's error names the cap"
+says_none_kept "i-big (over image_max_bytes, before the copy)"
 assert_contains "$(rget i-big '.error')" "$(wc -c < "$big" | tr -d ' ') bytes" "...and the size"
 assert_eq "$(ls "$ARCHIVE" | wc -l | tr -d ' ')" "$n0" "...no raw"
 assert_eq "$(rget i-big '.capture_report.text') $(rget i-big '.read_history // [] | length')" "null 0" "...no report, no reading"
@@ -318,6 +326,7 @@ n0="$(ls -a "$ARCHIVE" | wc -l | tr -d ' ')"
 MNEMON_TEST_IMAGE_SWAP_INPUT="$other" run_gw --origin image --file "$swap" --capture-id i-swap
 assert_eq "$rc" "1" "an input that changes before the copy exits 1"
 assert_eq "$(result error_class) $(result retryable)" "input-missing false" "...input-missing"
+says_none_kept "i-swap (the input changed before the copy)"
 assert_eq "$(ls -a "$ARCHIVE" | wc -l | tr -d ' ')" "$n0" "...no raw and no staged copy left"
 assert_eq "$(rget i-swap '.raw_path') $(rget i-swap '.raw_staged_path') $(rget i-swap '.raw_sha256')" "null null null" "...the raw intent cleared"
 assert_eq "$(tess_calls) $(reader_calls)" "0 0" "...nothing was read"
@@ -333,6 +342,7 @@ envi="$(mkimg env.png)"
 OCR_CMD="$TEST_TMPDIR/no-tesseract-here" run_gw --origin image --file "$envi" --capture-id i-env
 assert_eq "$rc" "3" "no tesseract: exit 3"
 assert_eq "$(result status) $(result error_class) $(result retryable)" "failed environment true" "...failed/environment, retryable"
+says_kept "i-env (no tesseract after the raw is published)"
 assert_contains "$err" "mnemon add --capture-id i-env" "...the message names the replay"
 assert_eq "$(rget i-env '.raw_published')" "true" "...after the raw is published"
 assert_file_exists "$(rget i-env '.raw_path')" "...the image is kept"
@@ -411,6 +421,7 @@ map2="$(mkimg map-timeout.png)"
 MNEMON_TEST_READER_MODE=hang run_cfg "$quick" --origin image --file "$map2" --capture-id i-map2
 assert_eq "$rc" "1" "the deadline: exit 1"
 assert_eq "$(result error_class) $(result retryable)" "timeout false" "...timeout, never retried automatically"
+says_kept "i-map2 (the deadline)"
 assert_eq "$(rget i-map2 '.read_history[0] | "\(.outcome) \(.failure_class)"')" "timeout timeout" "...outcome timeout"
 assert_eq "$(rget i-map2 '.stage')" "reader" "...the stage reached, from the worker's progress"
 assert_eq "$(rget i-map2 '.capture_report.text.failure.reason')" "deadline" "...the supervisor's report in the receipt"
@@ -418,6 +429,7 @@ map3="$(mkimg map-fault.png)"
 MNEMON_TEST_TESSERACT_MODE=hang MNEMON_TEST_IMAGE_WORKER_CRASH=1 run_gw --origin image --file "$map3" --capture-id i-map3
 assert_eq "$rc" "1" "a worker that crashes with a live recognizer: exit 1"
 assert_eq "$(result error_class) $(result retryable)" "convert true" "...convert, retryable: a fault that says nothing about the image"
+says_kept "i-map3 (the supervisor's worker-fault report)"
 assert_eq "$(rget i-map3 '.read_history[0] | "\(.outcome) \(.failure_class)"') $(rget i-map3 '.stage')" "worker-fault convert worker" "...outcome worker-fault, stage worker"
 
 # ---------------------------------------------------------------------------------------------
@@ -522,6 +534,7 @@ row() {
   assert_eq "$(result revision)$(result path)" "" "$id: no revision in RESULT"
   assert_eq "$(rget "$id" '.source_published')" "false" "$id: nothing published"
   assert_eq "$(stub_calls)" "0" "$id: the extractor was never called"
+  says_kept "$id"
 }
 cp "$IMGFIX/text-named.png" "$TEST_TMPDIR/t-wrong.png"
 row t-wrong 1 unsupported false wrong-format envelope yes run_gw --origin image --file "$TEST_TMPDIR/t-wrong.png" --capture-id t-wrong
@@ -597,7 +610,7 @@ assert_eq "$(capfm "$onechar" witness_missing_words) $(capfm "$onechar" compared
 cat > "$TEST_TMPDIR/fake-worker.sh" <<'FAKE'
 #!/usr/bin/env bash
 # a fake image worker: writes the report FAKE_REPORT names (a key of the fixture image.json, or none),
-# a capture-text when FAKE_TEXT=yes, and exits FAKE_RC
+# a capture-text when FAKE_TEXT=yes (an empty one when FAKE_TEXT=empty), and exits FAKE_RC
 out=""; report=""; prev=""
 for a in "$@"; do
   case "$prev" in --out) out="$a" ;; --report) report="$a" ;; esac
@@ -605,6 +618,7 @@ for a in "$@"; do
 done
 if [[ "${FAKE_REPORT:-none}" != "none" ]]; then jq --arg k "$FAKE_REPORT" '.[$k]' "$FAKE_FIXTURE" > "$report"; fi
 [[ "${FAKE_TEXT:-no}" == "yes" ]] && printf 'a reading\n' > "$out"
+[[ "${FAKE_TEXT:-no}" == "empty" ]] && : > "$out"
 exit "${FAKE_RC:-0}"
 FAKE
 chmod +x "$TEST_TMPDIR/fake-worker.sh"
@@ -621,6 +635,13 @@ jq '.done.witness.version = "5.10" | .done.reader.claude_code = "2.10"' "$REPORT
 FAKE_FIXTURE="$TEST_TMPDIR/image-510.json" fake f-510 0 done yes
 assert_eq "$rc" "0" "a report with witness version 5.10: published"
 assert_eq "$(capfm "$(src_of f-510)" witness_version) $(capfm "$(src_of f-510)" reader_claude_code)" '"5.10" "2.10"' "...witness_version and reader_claude_code quoted: they read back as strings"
+# a model id outside the pattern (contracts A15 §3.3): the message says «nothing is published» and nothing about the image
+jq '.done.method = "read:not a model id"' "$REPORTS/image.json" > "$TEST_TMPDIR/image-badid.json"
+FAKE_FIXTURE="$TEST_TMPDIR/image-badid.json" fake f-badid 0 done yes
+assert_eq "$rc $(result error_class) $(result retryable)" "1 convert true" "a report whose model id fails the pattern: convert, retryable"
+assert_contains "$err" "nothing is published" "...the message says nothing is published"
+says_neither "f-badid (no usable model id)"
+assert_eq "$(rget f-badid '.source_published')" "false" "...nothing published"
 # the NOTE lists at most twenty unconfirmed numbers (capture layer §21.10)
 jq '.done.comparison.unconfirmed_numbers = 25 | .done.comparison.unconfirmed.numbers = [range(101; 126) | tostring]' "$REPORTS/image.json" > "$TEST_TMPDIR/image-25.json"
 FAKE_FIXTURE="$TEST_TMPDIR/image-25.json" fake f-25 0 done yes
@@ -646,10 +667,17 @@ fake f-notext 0 done no
 assert_eq "$rc $(result error_class) $(result retryable) $(rget f-notext '.stage')" "1 convert true worker" "exit 0 with a right report and no capture.md: the worker's fault — convert, retryable, stage worker"
 assert_eq "$(rget f-notext '.source_published') $(rget f-notext '.text_sha256')" "false null" "...nothing published, no text hash taken"
 assert_eq "$(rget f-notext '.read_history[0].outcome')" "worker-fault" "...outcome worker-fault"
+# contract K1, the «or empty» arm: an empty capture.md is checked before it is hashed, like a missing one
+fake f-emptytext 0 done empty
+assert_eq "$rc $(result error_class) $(result retryable) $(rget f-emptytext '.stage')" "1 convert true worker" "exit 0 with a right report and an empty capture.md: the worker's fault — convert, retryable, stage worker"
+assert_eq "$(rget f-emptytext '.source_published') $(rget f-emptytext '.text_sha256')" "false null" "...nothing published, no text hash taken"
+assert_eq "$(rget f-emptytext '.read_history[0].outcome')" "worker-fault" "...outcome worker-fault"
+[[ -d "$VAULT/Sources/$(rget f-emptytext '.revision')" ]] && fail "f-emptytext: no source folder" "exists" || pass "...no source folder"
 for pair in "0 compare yes" "0 none yes" "1 done yes" "1 none no" "1 probe no" "1 timeout no" "3 done yes" "3 compare no" "3 none no" "143 none no" "2 none no" "9 done yes"; do
   set -- $pair
   fake "f-$1-$2" "$1" "$2" "$3"
   assert_eq "$rc $(result error_class) $(result retryable) $(rget "f-$1-$2" '.stage')" "1 convert true worker" "worker exit $1 with report '$2': the gateway's own worker fault (convert, retryable, stage worker)"
+  says_kept "f-$1-$2 (the gateway's own worker fault)"
   assert_eq "$(rget "f-$1-$2" '.read_history[0] | "\(.outcome) \(.failure_class)"')" "worker-fault convert" "...outcome worker-fault"
   assert_eq "$(rget "f-$1-$2" '.source_published')" "false" "...nothing published"
 done
@@ -685,6 +713,30 @@ OCR_CMD="$TEST_TMPDIR/no-tesseract-here" run_gw --origin image --file "$dry" --d
 assert_eq "$rc" "0" "the dry run with no witness exits 0"
 assert_contains "$out" "Witness: NOT ready" "...and says that the run would exit 3"
 assert_contains "$out" "no-tesseract" "...with the reason"
+# the three probe reasons of contract K2, read by the dry run as by the doctor (capture layer §21.10: exit 0, the
+# exit 3 the run would take printed with its reason)
+for mode in langs-fail langs-no-dir; do
+  MNEMON_TEST_TESSERACT_MODE="$mode" run_gw --origin image --file "$dry" --dry-run
+  assert_eq "$rc" "0" "the dry run with the stub's $mode (no language model directory) exits 0"
+  assert_contains "$out" "Witness: NOT ready — the run would exit 3 after the image is kept (environment: model-directory; missing: model-directory)" "...and prints the exit 3 the run would take: model-directory"
+done
+printf 'model rus\n' > "$TESSDATA/rus.traineddata"
+chmod 0 "$TESSDATA/rus.traineddata"
+if [[ -r "$TESSDATA/rus.traineddata" ]]; then
+  echo "  (model-unreadable not checked: a file of mode 000 is readable to this user)"
+else
+  run_gw --origin image --file "$dry" --ocr-languages rus+eng --dry-run
+  assert_eq "$rc" "0" "the dry run with an unreadable language model exits 0"
+  assert_contains "$out" "Witness: NOT ready — the run would exit 3 after the image is kept (environment: model-unreadable; missing: lang:rus)" "...and prints the exit 3 the run would take: model-unreadable"
+fi
+chmod 644 "$TESSDATA/rus.traineddata"; rm -f "$TESSDATA/rus.traineddata"
+# an executable whose interpreter does not exist: it resolves, and it cannot be started
+printf '#!/nonexistent/interpreter\n' > "$TEST_TMPDIR/unstartable-tesseract"
+chmod 755 "$TEST_TMPDIR/unstartable-tesseract"
+OCR_CMD="$TEST_TMPDIR/unstartable-tesseract" run_gw --origin image --file "$dry" --dry-run
+assert_eq "$rc" "0" "the dry run with a tesseract that cannot be started exits 0"
+assert_contains "$out" "Witness: NOT ready — the run would exit 3 after the image is kept (environment: tesseract-start; missing: tesseract)" "...and prints the exit 3 the run would take: tesseract-start"
+assert_eq "$(reader_calls) $(tess_runs)" "0 0" "...no dry run read the image or called the model"
 write_probe_record
 run_gw --origin image --file "$dry" --dry-run
 assert_eq "$rc" "0" "the dry run without the reader's probe entry exits 0"
