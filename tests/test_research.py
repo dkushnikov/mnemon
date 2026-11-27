@@ -13,6 +13,7 @@ Test classes
 - GrammarTests            — the `## Items` table of the interface, line by line
 - SchemaTests             — required keys, enums, dates, lists, sections
 - FixtureVaultTests       — the compatibility vault through lib_research, lib_vault, reindex, search
+- RecognizedTextTests     — capture.fidelity: recognized from source.md to the doctor's research document (interface v1.5)
 - ResearchOperationTests  — bin/mnemon-research.py on a temporary copy of the vault with a stub claude (docs/research.md §11)
 """
 
@@ -1079,6 +1080,140 @@ class WikiValidatorTests(unittest.TestCase):
             finally:
                 os.chmod(self.v.root / "Wiki" / "P.md", 0o644)
             self.assertEqual((p["state"], p["severity"], p["not_probed"], p["usable"]), ("unreadable", None, ["unreadable"], False))
+
+
+# ---------------------------------------------------------------------------
+# Recognized text (interface v1.5; capture layer A20 §21.13; capture contracts A15 §3.3) — a revision
+# whose capture.fidelity is `recognized` reaches research end to end: source.md → scan_vault →
+# research_context → validate_wiki → the doctor's research document. A unit test on a hand-made
+# context alone could pass while the field never reaches it, so every step reads the real vault.
+# ---------------------------------------------------------------------------
+
+REV_I = "2026-06-04_44444444"       # an image revision: text a recognizer read off pixels
+IMAGE_BODY = "# Alpha\n\nThe recognized text about trust, read off a screenshot.\n"
+IMAGE_PAGE = ("# Page\n\n## State of evidence\n\n- A claim — [[Sources/%s/source#Alpha]].\n"
+              "> \"recognized text about trust\" — [[Sources/%s/source]]\n" % (REV_I, REV_I))
+DOCTOR = BIN_DIR / "vault-doctor.py"
+
+
+def image_source(body: str, completeness: str = "unknown", fidelity: str | None = "recognized", capture_sha: str | None = None) -> str:
+    """A `source.md` of the image origin in the shape of capture contracts A15 §3.3 (stand-in values)."""
+    fid = ("  fidelity: %s\n" % fidelity) if fidelity is not None else ""
+    return ("---\ntype: source\nsource_type: article\ncontent_format: text\norigin: image\norigin_path: \"shot.png\"\n"
+            "captured: 2026-06-04\ncaptured_by: agent\ncapture_id: cap-image-1\nresource_kind: file\nresource_sha256: %s\n"
+            "resource_id: \"44444444\"\nrevision: \"%s\"\narchive: \"%s.png\"\n"
+            "capture:\n  method: \"read:stub-reader\"\n%s  raw_store: archive\n  raw_kind: image\n  raw_sha256: \"%s\"\n"
+            "  raw_bytes: 1024\n  text_sha256: %s\n  text_bytes: %d\n  converter: image-reader\n  completeness: %s\n"
+            "  image_format: png\n  image_pixels: \"100x200\"\n  reader_adapter: \"image-reader/1\"\n  witness_backend: tesseract\n"
+            "  witness_adapter: \"ocr-tesseract/1\"\n  witness_languages: \"eng\"\n  compare_rule: \"mnemon-read-compare/1\"\n"
+            "  witness_share: 100.0\n  witness_missing_words: 0\n  compared_words: 9\n  unconfirmed_words: 0\n  unconfirmed_numbers: 0\n"
+            "---\n%s"
+            % ("4" * 64, REV_I, REV_I, fid, "4" * 64, capture_sha or sha(body), len(body.encode("utf-8")), completeness, body))
+
+
+class RecognizedTextTests(unittest.TestCase):
+    INFO = "%s: completeness unknown (recognized text)" % REV_I
+
+    def setUp(self):
+        self.v = _Vault()
+        self.v.collection("Dossier", "- [[Sources/%s/extract]] — **item** — x\n" % REV_I)
+        self.home = tempfile.mkdtemp()
+
+    def tearDown(self):
+        self.v.close()
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def _vault_with(self, source_text: str) -> None:
+        self.v.source(REV_I, source_text)
+        self.v.wiki("P", wiki_page("P", [(REV_I, sha(IMAGE_BODY), "capture")], IMAGE_PAGE))
+
+    def _context(self) -> dict:
+        scan = lv.scan_vault(str(self.v.root), state_dir=self.v.state)
+        return lv.research_context(scan)
+
+    def _doctor(self) -> dict:
+        """The doctor's research document on the temporary vault, as a separate process (no config,
+        a temporary HOME, the clock fixed)."""
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": self.home, "PYTHONIOENCODING": "utf-8"}
+        p = subprocess.run([sys.executable, str(DOCTOR), "--vault", str(self.v.root), "--state-dir", self.v.state,
+                            "--today", "2026-11-27", "--json", "--research"], capture_output=True, env=env)
+        self.assertEqual(p.returncode in (0, 1), True, p.stderr.decode("utf-8", "replace"))
+        doc = json.loads(p.stdout.decode("utf-8"))
+        self.assertEqual(doc["schema"], "mnemon-doctor-research/1")
+        return doc
+
+    @staticmethod
+    def _evidence(doc: dict) -> dict:
+        return [c for c in doc["checks"] if c["name"] == "research/wiki-evidence"][0]
+
+    def _page_outcome(self, source_text: str) -> tuple:
+        """(validator: severity, states, usable, cited — doctor: the page's severity, states, usable)."""
+        self._vault_with(source_text)
+        p = self.v.page("P")
+        d = [q for q in self._doctor()["pages"] if q["name"] == "P"][0]
+        return (p["severity"], p["states"], p["usable"], p["cited"]), (d["severity"], d["states"], d["usable"])
+
+    def test_the_folder_record_and_the_context_carry_fidelity(self):
+        self._vault_with(image_source(IMAGE_BODY))
+        scan = lv.scan_vault(str(self.v.root), state_dir=self.v.state)
+        rec = [r for r in scan["folders"] if r["name"] == REV_I][0]
+        self.assertEqual((rec["fidelity"], rec["completeness"], rec["origin"]), ("recognized", "unknown", "image"))
+        self.assertEqual(lv.research_context(scan)["revisions"][REV_I]["fidelity"], "recognized")
+
+    def test_a_source_without_the_key_has_fidelity_none(self):
+        self.v.source(REV_I, image_source(IMAGE_BODY, fidelity=None))
+        self.v.source(REV_M, managed_source("# M\n"))
+        revs = self._context()["revisions"]
+        self.assertIsNone(revs[REV_I]["fidelity"], "the key absent: null, never a default")
+        self.assertIsNone(revs[REV_M]["fidelity"])
+        self.assertIn("fidelity", revs[REV_M], "the key is additive: every revision carries it")
+        self.v.source(REV_I, image_source(IMAGE_BODY, fidelity="converted"))
+        self.assertEqual(self._context()["revisions"][REV_I]["fidelity"], "converted", "the value is read as written")
+
+    def test_recognized_unknown_is_an_info_reason_end_to_end(self):
+        self._vault_with(image_source(IMAGE_BODY))
+        self.assertEqual(self._context()["revisions"][REV_I]["fidelity"], "recognized")
+        p = self.v.page("P")
+        self.assertEqual(p["reasons"].get("info"), [self.INFO])
+        self.assertNotIn("weak-evidence", p["states"])
+        self.assertNotIn("weak-evidence", p["reasons"])
+        self.assertEqual([(l["form"], l["verified"]) for l in p["locators"]], [("heading", True), ("quote", True)],
+                         "the locators match the published recognized text")
+        doc = self._doctor()
+        page = [q for q in doc["pages"] if q["name"] == "P"][0]
+        self.assertEqual((page["severity"], page["states"], page["usable"]), ("ok", [], True))
+        ev = self._evidence(doc)
+        self.assertIn({"id": "Wiki/P", "reason": "info: " + self.INFO}, [{"id": i["id"], "reason": i["reason"]} for i in ev["items"]])
+        self.assertEqual((ev["status"], ev["counts"]["weak_evidence"], ev["counts"]["uncited"]), ("ok", 0, 0),
+                         "an info reason never raises the check")
+        self.assertFalse(any("weak-evidence" in (i.get("reason") or "") for i in ev["items"]))
+
+    def test_the_page_states_and_severity_are_those_of_a_complete_source(self):
+        recognized = self._page_outcome(image_source(IMAGE_BODY))
+        complete = self._page_outcome(image_source(IMAGE_BODY, completeness="complete"))
+        self.assertEqual(recognized, complete)
+        self.assertEqual(recognized[0], ("ok", [], True, [REV_I]))
+
+    def test_recognized_partial_or_blocked_is_weak_evidence(self):
+        for comp in ("partial", "blocked"):
+            self._vault_with(image_source(IMAGE_BODY, completeness=comp))
+            p = self.v.page("P")
+            self.assertEqual((p["severity"], p["states"], p["reasons"]["weak-evidence"]),
+                             ("warn", ["weak-evidence"], ["%s: completeness %s" % (REV_I, comp)]), comp)
+            self.assertNotIn("info", p["reasons"], comp)
+        self._vault_with(image_source(IMAGE_BODY, completeness="partial"))
+        doc = self._doctor()
+        page = [q for q in doc["pages"] if q["name"] == "P"][0]
+        self.assertEqual((page["severity"], page["states"]), ("warn", ["weak-evidence"]))
+        ev = self._evidence(doc)
+        self.assertEqual((ev["status"], ev["counts"]["weak_evidence"]), ("warn", 1))
+        self.assertFalse(any((i.get("reason") or "").startswith("info:") for i in ev["items"]))
+
+    def test_recognized_with_an_integrity_error_is_weak_evidence(self):
+        self._vault_with(image_source(IMAGE_BODY + "edited\n", capture_sha=sha(IMAGE_BODY)))
+        p = self.v.page("P")
+        self.assertIn("weak-evidence", p["states"])
+        self.assertIn("%s: integrity error" % REV_I, p["reasons"]["weak-evidence"])
 
 
 # ---------------------------------------------------------------------------

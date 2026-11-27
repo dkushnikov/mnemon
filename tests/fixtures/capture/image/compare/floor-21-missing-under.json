@@ -1,0 +1,30 @@
+{
+  "name": "floor-21-missing-under",
+  "what": "21 words missing at a share under the floor: the witness of floor-20-missing-under plus 'oak' (41). Found 20, missing 21, share 2000/41 = 48.78 -> 48.8; 100*20 = 2000 < 90*41 = 3690: loss.",
+  "reading": "amber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\n",
+  "witness": "amber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\noak.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "loss",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 41,
+    "found": 20,
+    "missing": 21,
+    "share": 48.8,
+    "reading_words": 20,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

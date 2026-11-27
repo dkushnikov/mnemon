@@ -395,5 +395,60 @@ assert_eq "$(result error_class)" "raw-missing" "(the replay records integrity-e
 vdoc --list store/ledger
 assert_contains "$out" "receipt ri-doc in integrity-error/raw-missing (the engine found the published raw missing)" "store/ledger names the raw class of an integrity error"
 
+# ---------------------------------------------------------------------------------------------
+echo "--- 10. an image raw is guarded as every raw is (contracts A15 §3.6) ---"
+# images are captured through the real worker here: the helper's probe stub (MNEMON_CAPTURE_IMAGE_CMD) is set
+# aside for this section and restored after it
+PROBE_STUB="${MNEMON_CAPTURE_IMAGE_CMD:-}"
+unset MNEMON_CAPTURE_IMAGE_CMD
+IMGFIX="$FIX/image"
+mkdir -p "$TEST_TMPDIR/ri-tessdata"; printf 'model eng\n' > "$TEST_TMPDIR/ri-tessdata/eng.traineddata"
+export MNEMON_TEST_HOOKS=1 OCR_CMD="$IMGFIX/stub-tesseract.py" MNEMON_TEST_TESSDATA_DIR="$TEST_TMPDIR/ri-tessdata"
+export MNEMON_TEST_TESSERACT_CALLS="$STUB_DIR/tesseract-calls" MNEMON_TEST_READER_CALLS="$STUB_DIR/reader-calls"
+printf '{"9.9.9-stub (Claude Code)": {"pass": true, "date": "2026-11-27", "probes": {"no-tools": true, "image-reader": true}}}\n' > "$XDG_STATE_HOME/mnemon/fence-probes.json"
+ri_img() { cat "$IMGFIX/base.png" > "$TEST_TMPDIR/$1.png"; printf 'ri %s' "$1" >> "$TEST_TMPDIR/$1.png"; printf '%s' "$TEST_TMPDIR/$1.png"; }
+img_loss() {   # <boundary> <mode> <capture id>: one image capture with a raw loss injected at the boundary
+  stub_reset
+  MNEMON_TEST_RAW_LOSS_AT="$1" MNEMON_TEST_RAW_LOSS="$2" run_gw --origin image --file "$(ri_img "$3")" --capture-id "$3"
+}
+readings() { local n; n="$(grep -c '^read$' "$STUB_DIR/reader-calls" 2>/dev/null)" || true; echo "${n:-0}"; }
+# before the publication — after the reading here: the raw is verified before the source names it
+img_loss after-convert delete ri-img-conv
+assert_eq "$rc $(result status) $(result error_class)" "1 failed evidence-mismatch" "an image raw gone after the reading → failed/evidence-mismatch, nothing published"
+assert_eq "$(readings) $(rget ri-img-conv '.source_published')" "1 false" "...the reading was made, the source was not published"
+img_loss after-convert tamper ri-img-conv-t
+assert_eq "$rc $(result status) $(result error_class)" "1 failed evidence-mismatch" "an image raw changed after the reading → failed/evidence-mismatch"
+img_loss after-convert revert ri-img-conv-r
+assert_eq "$rc $(result status)" "0 extracted" "an image raw renamed back after the reading is restored and the capture finished"
+assert_eq "$(rget ri-img-conv-r '.raw_restored | length') $(staging_left)" "1 0" "...raw_restored recorded, nothing staged left"
+assert_file_exists "$(rget ri-img-conv-r '.raw_path')" "...the raw in place"
+# after the publication: integrity-error, the revision kept
+img_loss after-source-published delete ri-img-sp
+assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error raw-missing" "an image raw gone after the source publication → integrity-error/raw-missing"
+assert_file_exists "$VAULT/Sources/$(rget ri-img-sp '.revision')/source.md" "...the revision is kept"
+img_loss after-source-published tamper ri-img-sp-t
+assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error raw-mismatch" "an image raw changed after the source publication → integrity-error/raw-mismatch"
+img_loss after-source-published revert ri-img-sp-r
+assert_eq "$rc $(result status) $(rget ri-img-sp-r '.raw_restored | length')" "0 extracted 1" "an image raw renamed back during the extraction is restored at the finalization"
+img_loss after-extract-published delete ri-img-fin
+assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error raw-missing" "an image raw gone before the final receipt → integrity-error/raw-missing"
+stub_reset
+run_gw --capture-id ri-img-fin
+assert_eq "$rc $(result status)" "1 integrity-error" "...the replay answers integrity-error again"
+assert_eq "$(readings)" "0" "...and reads nothing: no reading after publication"
+# a duplicate of the same bytes with the raw gone
+stub_reset
+dupimg="$(ri_img ri-img-dup)"
+run_gw --origin image --file "$dupimg" --capture-id ri-img-dup
+assert_eq "$rc $(result status)" "0 extracted" "(an image captured)"
+rm -f "$(rget ri-img-dup '.raw_path')"
+stub_reset
+run_gw --origin image --file "$dupimg"
+assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error raw-missing" "a duplicate of an image whose raw is gone → integrity-error, never skipped-duplicate"
+assert_eq "$(readings)" "0" "...and nothing is read again"
+unset MNEMON_TEST_HOOKS OCR_CMD MNEMON_TEST_TESSDATA_DIR MNEMON_TEST_TESSERACT_CALLS MNEMON_TEST_READER_CALLS
+write_probe_record
+[[ -n "$PROBE_STUB" ]] && export MNEMON_CAPTURE_IMAGE_CMD="$PROBE_STUB"
+
 cleanup_capture_test
 summary

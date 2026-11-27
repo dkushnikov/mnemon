@@ -1,0 +1,36 @@
+{
+  "name": "edge-none-matched-loss-holds",
+  "what": "Edge row 6: both have words and none is matched - the witness the 10-word line 3 times (30), the reading 5 other words. The condition of loss holds (missing 30 > 20, share 0.0), and no-confirmation comes first.",
+  "reading": "copper silver nickel cobalt zinc.\n",
+  "witness": "amber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "no-confirmation",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 30,
+    "found": 0,
+    "missing": 30,
+    "share": 0.0,
+    "reading_words": 5,
+    "unconfirmed_words": 5,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [
+        "copper",
+        "silver",
+        "nickel",
+        "cobalt",
+        "zinc"
+      ],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

@@ -30,7 +30,8 @@ Actions:
   status        Show pipeline status
 
 Options:
-  --origin <type>       url|text|youtube|audio|pdf|file|book|idea|ref:vault|batch (book takes --file <document>)
+  --origin <type>       url|text|youtube|audio|pdf|file|book|image|idea|ref:vault|batch (book takes --file <document>;
+                        image takes --file <PNG or JPEG screenshot> and is never auto-detected)
   --url <url>           Source URL (auto-detected: .pdf → pdf, youtube → youtube)
   --file <path>         Local file path (audio/pdf/file; auto-detected by extension). A plain-text file
                         (.txt/.text in any case, or no extension and typed text/plain) takes the --file-text
@@ -40,6 +41,10 @@ Options:
   --media-bundle <dir>  With a YouTube --url: the browser lane's bundle (media.json + the caption track a
                         producer acquired with its own browser cookies, `mnemon browser-lane youtube`); the
                         track is the raw (raw_kind captions), no media tool runs, the fetch chain is not entered
+  --ocr-languages <seq> With --origin image: the languages of the local recognizer that witnesses the
+                        model's reading — tesseract codes joined by +, the main language first (eng,
+                        rus+eng); bound in the request; default: the instance's ocr_languages. The image
+                        is sent once to the model that `claude` uses; tesseract reads it on this machine
   --title <title>       Source title (optional, acquired from the page/PDF/media if not given)
   --author <author>     Source author (optional)
   --source-type <type>  article|video|podcast|book|paper|idea|conversation
@@ -89,7 +94,8 @@ Options:
 Exit codes: 0 extracted / bookmarked / skipped-duplicate / replay · 1 failed or integrity-error · 2 usage or
 contract (unknown context, ref:mcp, writer_host, capture-id reuse with a different request, an
 invalid URL, a refused site plan) · 3 extractor or capture-layer environment missing before
-publication · 4 source published, extract not · 75 lock held
+publication (for an image: also a missing tesseract, language model or login, after the image is kept —
+replay the id) · 4 source published, extract not · 75 lock held
 USAGE
   exit 1
 }
@@ -144,6 +150,10 @@ SITE_MODE=""
 SITE_PLAN_FILE=""
 ASSUME_COST=""
 DEPTH="auto"
+DEPTH_GIVEN=false
+OCR_LANGUAGES_FLAG=""
+OCR_FLAG_GIVEN=false
+OCR_SEQUENCE=""
 BOUND_GIVEN=false
 PLAIN_TEXT_FILE=false
 
@@ -188,7 +198,8 @@ while [[ $# -gt 0 ]]; do
     --no-external)   NO_EXTERNAL=true; BOUND_GIVEN=true; shift ;;
     --site)          _need "$@"; if [[ "$2" == "auto" ]]; then SITE_MODE=auto; else SITE_MODE=file; SITE_PLAN_FILE="$2"; fi; BOUND_GIVEN=true; shift 2 ;;
     --assume-cost)   _need "$@"; ASSUME_COST="$2"; shift 2 ;;
-    --depth)         _need "$@"; DEPTH="$2"; BOUND_GIVEN=true; shift 2 ;;
+    --depth)         _need "$@"; DEPTH="$2"; DEPTH_GIVEN=true; BOUND_GIVEN=true; shift 2 ;;
+    --ocr-languages) _need "$@"; OCR_LANGUAGES_FLAG="$2"; OCR_FLAG_GIVEN=true; BOUND_GIVEN=true; shift 2 ;;
     -h|--help)       usage ;;
     *)               echo "Unknown option: $1" >&2; usage ;;
   esac
@@ -229,6 +240,11 @@ load_config "$CONFIG_PATH"
 # Flags override config values
 MODEL="${MODEL_FLAG:-$DEFAULT_MODEL}"
 [[ -n "$WHISPER_MODEL_FLAG" ]] && WHISPER_MODEL="$WHISPER_MODEL_FLAG"
+# The witness's language sequence of this capture (capture layer §21.8): the flag, else the instance's
+# ocr_languages; a replay takes the receipt's (cap_restore_from_receipt). It is a variable of its own:
+# the exported OCR_LANGUAGES stays the instance's value, which the resolution stamp covers.
+OCR_SEQUENCE="${OCR_LANGUAGES:-eng}"
+$OCR_FLAG_GIVEN && OCR_SEQUENCE="$OCR_LANGUAGES_FLAG"
 
 # --- Libraries: L1 archive helpers (RENDER_URL_CMD, backfill) and the capture contract ---
 source "$SCRIPT_DIR/lib-archive.sh"
@@ -286,6 +302,7 @@ if [[ -z "$SOURCE_TYPE" ]]; then
     youtube)    SOURCE_TYPE="video" ;;
     audio)      SOURCE_TYPE="podcast" ;;
     pdf)        SOURCE_TYPE="paper" ;;
+    image)      SOURCE_TYPE="article" ;;
     book)       SOURCE_TYPE="book" ;;
     idea)       SOURCE_TYPE="idea" ;;
     text)       SOURCE_TYPE="article" ;;
@@ -312,6 +329,27 @@ cap_contract_checks() {
     esac
     [[ -z "$SITE_MODE" ]] || cap_die2 "--tier bookmark and --site are exclusive (a site capture is a full capture of the landing)"
     [[ -z "$RESUME" ]] || cap_die2 "--tier bookmark and --resume are exclusive (a bookmark has no extraction to finish)"
+  fi
+  # the image origin (capture contracts A15 §3.1): one explicit file input and nothing of another kind —
+  # refused before any write, and before the checks below could read a URL for it. An image has no URL
+  # form: the document a screenshot shows is captured by its own URL, as its own resource.
+  if $OCR_FLAG_GIVEN; then
+    [[ "$ORIGIN" != "batch" && -z "$MANIFEST" ]] || cap_die2 "--ocr-languages is per capture: in a batch give an image item its own ocr_languages key"
+    [[ "$ORIGIN" == "image" ]] || cap_die2 "--ocr-languages goes with --origin image (origin ${ORIGIN:-not given})"
+    mnemon_config_check ocr_languages "$OCR_LANGUAGES_FLAG" --ocr-languages || exit 2
+  fi
+  if [[ "$ORIGIN" == "image" ]]; then
+    [[ -z "$MANIFEST" ]] || cap_die2 "--origin image and --manifest are exclusive (an image is an item of a batch: {\"origin\": \"image\", \"file\": …})"
+    [[ -z "$FILE_TEXT" ]] || cap_die2 "--origin image takes --file <image>, not --file-text (the engine reads the image itself; a transcription by the caller is --origin text)"
+    [[ -z "$REF_PATH" ]] || cap_die2 "--origin image takes --file <image>, not --ref-path"
+    [[ -z "$URL" ]] || cap_die2 "--origin image takes no --url (an image by URL is not supported; the document a screenshot shows is captured by its own URL: mnemon add --url <url>)"
+    [[ -z "$CANONICAL_URL_GIVEN" ]] || cap_die2 "--origin image takes no --canonical-url (a screenshot is never an alias of a document: capture the document by its own URL)"
+    [[ -z "$SITE_MODE" ]] || cap_die2 "--origin image and --site are exclusive"
+    [[ -z "$MEDIA_BUNDLE" ]] || cap_die2 "--origin image and --media-bundle are exclusive"
+    if $RENDER || $NO_RENDER || $NO_EXTERNAL || $DEPTH_GIVEN; then
+      cap_die2 "--origin image takes no flag of URL acquisition (--render, --no-render, --no-external, --depth)"
+    fi
+    [[ -n "$FILE_PATH" ]] || cap_die2 "--origin image takes --file <image> (an upright PNG or JPEG screenshot)"
   fi
   # the declared identity of a file or text (B3): --canonical-url names the document the bytes
   # came from; the resource is that URL's canonical form, the bytes stay the input
@@ -414,6 +452,7 @@ cap_dry_run() {
     youtube) if [[ -n "$MEDIA_BUNDLE" ]]; then raw_ext=vtt; else raw_ext=txt; fi ;;
     audio)   raw_ext="<audio ext>" ;;
     file|book) raw_ext="$(cap_ext_of "$FILE_PATH" bin)" ;;
+    image)   raw_ext="$(cap_image_signature "$FILE_PATH")"; [[ -n "$raw_ext" ]] || raw_ext="$(cap_ext_of "$FILE_PATH" bin)" ;;
   esac
   [[ "$TIER" == "bookmark" ]] && raw_ext="" raw_note="none (a card has no raw)"
   if [[ -n "$raw_ext" ]]; then
@@ -460,6 +499,7 @@ cap_dry_run() {
       esac
     fi
   fi
+  [[ "$ORIGIN" == "image" ]] && cap_dry_run_image
   echo "Vault state: $MNEMON_VAULT_STATE_DIR"
   if [[ "$TIER" == "bookmark" ]]; then
     echo "=== BOOKMARK CARD ==="
@@ -508,6 +548,34 @@ cap_dry_run() {
   return 0
 }
 
+# The image part of the dry run (capture layer §21.10): the bound sequence, the witness's probe read
+# from `capture-image.py --probe` (10 s), the reader's preflight. No reading, no model call, no write;
+# a check that would end the run with exit 3 is printed with its reason — the dry run itself exits 0.
+cap_dry_run_image() {
+  local doc="" prc=0 sig
+  sig="$(cap_image_signature "$FILE_PATH")"
+  echo "Image: ${sig:-not a PNG or JPEG by signature — the run would publish the raw and fail unsupported} · witness languages $OCR_SEQUENCE (bound in the request as ocr_languages)"
+  echo "Image limits: ${IMAGE_MAX_BYTES:-7000000} bytes, ${IMAGE_MAX_PIXELS:-50000000} pixels, long edge ${IMAGE_MAX_EDGE:-8000} px, deadline ${IMAGE_TIMEOUT:-120}s; floor ${IMAGE_MIN_WITNESS_SHARE:-90} % and ${IMAGE_MISS_ALLOWANCE:-20} words"
+  doc="$("$CAP_IMAGE_CMD" --probe --languages "$OCR_SEQUENCE" --timeout 10 2>/dev/null)" || prc=$?
+  if [[ -n "$doc" ]] && printf '%s' "$doc" | jq -e '.schema == "mnemon-ocr-probe/1"' >/dev/null 2>&1; then
+    printf '%s' "$doc" | jq -r --arg seq "$OCR_SEQUENCE" '
+      . as $d
+      | "Witness: tesseract \(.version // "(no version)") — language models in \(.tessdata_dir // "(no directory)")",
+        (($seq | split("+"))[] as $c | "  \($c): \(if (($d.present // []) | index($c)) != null then "present" else "missing" end)"),
+        (if .ok then "Witness: ready (whether a language model loads, only a run shows)"
+         else "Witness: NOT ready — the run would exit 3 after the image is kept (environment: \(.reason // "unknown"); missing: \((.missing // []) | join(", ")))" end)'
+  else
+    echo "Witness: NOT ready — the probe answered nothing (exit $prc); the run would exit 3 after the image is kept (environment)"
+  fi
+  if cap_preflight_extractor && cap_preflight_image_reader; then
+    echo "Reader: model ${IMAGE_READER_MODEL:-haiku}, effort ${IMAGE_READER_EFFORT:-high}, cap \$${IMAGE_READER_MAX_USD:-0.05} — fence probe for images: pass (Claude Code $CLAUDE_VERSION)"
+  else
+    echo "Reader: NOT ready — the run would exit 3 before the image is kept (${PREFLIGHT_CLASS:-fence-unprobed}): ${PREFLIGHT_MSG:-}"
+  fi
+  echo "The image is sent once per attempt to the model that claude uses, after the witness has run; tesseract reads it on this machine. Nothing is sent by a dry run."
+  return 0
+}
+
 # ---------------------------------------------------------------------------------------------
 # Replay / recovery for a known capture_id (§3.4 recovery table, binding rules of §3.1)
 # ---------------------------------------------------------------------------------------------
@@ -535,7 +603,7 @@ cap_restore_from_receipt() {   # globals from the receipt's request + metadata (
     "REQUEST_SCHEMA=" + s(.request.schema // "mnemon-request/1"), "CANONICAL_URL=" + s(.canonical_url), "CANONICAL_VERSION=" + s(.canonical_version),
     "REQ_RENDER=" + s(.request.render), "REQ_EXTERNAL=" + s(.request.external), "REQ_SITE=" + s(.request.site),
     "REQUESTED_VERSION=" + s(.request.requested_version), "SITE_PLAN_SHA256=" + s(.site_plan_sha256), "REPORT_STATE=" + s(.report_state),
-    "TIER=" + s(.request.tier // "full")' "$r")"
+    "TIER=" + s(.request.tier // "full"), "REQ_OCR=" + s(.request.ocr_languages)' "$r")"
   eval "$assignments"
   # the input is located by the receipt, before any kind is derived from the globals: a file-kind
   # origin (pdf · audio · file · book) with a recorded input hash was a --file (cap_resource_kind
@@ -543,8 +611,10 @@ cap_restore_from_receipt() {   # globals from the receipt's request + metadata (
   # --canonical-url capture is a url-kind resource whose input is the file or the text (B3)
   FILE_PATH=""
   case "$ORIGIN" in
-    pdf|audio|file|book) [[ -n "$INPUT_SHA256" && -n "$INPUT_PATH" ]] && FILE_PATH="$INPUT_PATH" ;;
+    pdf|audio|file|book|image) [[ -n "$INPUT_SHA256" && -n "$INPUT_PATH" ]] && FILE_PATH="$INPUT_PATH" ;;
   esac
+  # an image witnesses with the sequence its request bound (contracts A15 §3.1), whatever the instance says now
+  [[ "$ORIGIN" == "image" && -n "$REQ_OCR" ]] && OCR_SEQUENCE="$REQ_OCR"
   CANONICAL_URL_GIVEN=""
   if [[ "$RESOURCE_KIND" == "url" && "$(cap_input_kind)" != "url" ]]; then CANONICAL_URL_GIVEN="$URL"; fi
   # a youtube request with a recorded input hash came from the browser lane: the input locator is the
@@ -816,6 +886,8 @@ cap_recover_acquire() {
     cap_finish_bookmarked true "$KEEP_LOCATOR"
   fi
   if ! cap_preflight_extractor; then cap_fail_exit "$PREFLIGHT_CLASS" "$PREFLIGHT_MSG"; fi
+  # an image is read again from its raw on this path: the reader's probe entry is needed (A15 §4)
+  if [[ "$ORIGIN" == "image" ]] && ! cap_preflight_image_reader; then cap_fail_exit "$PREFLIGHT_CLASS" "$PREFLIGHT_MSG"; fi
   if [[ "$RAW_STORE" != "none" && -n "$RAW_PATH" ]]; then
     RAW_DIR="$(dirname "$RAW_PATH")"
     if [[ "$RAW_PUBLISHED" == "true" ]]; then
@@ -1041,6 +1113,8 @@ cap_fresh() {
     cap_finish_bookmarked false "$KEEP_LOCATOR"
   fi
   if ! cap_preflight_extractor; then cap_fail_exit "$PREFLIGHT_CLASS" "$PREFLIGHT_MSG"; fi
+  # S1 of an image capture (contracts A15 §3.4): the reader's probe entry too — exit 3 before any raw
+  if [[ "$ORIGIN" == "image" ]] && ! cap_preflight_image_reader; then cap_fail_exit "$PREFLIGHT_CLASS" "$PREFLIGHT_MSG"; fi
   cap_acquire_fresh
   cap_publish_source || cap_fail_exit "$FAIL_CLASS" "$FAIL_MSG"
   if cap_extract; then cap_finish_extracted false "$KEEP_LOCATOR"; else cap_finish_extract_failed false; fi
@@ -1151,6 +1225,7 @@ run_batch() {
   local i
   for i in $(seq 0 $((total - 1))); do
     local item_origin item_url item_title item_source_type item_ref_path item_file item_capture_id has_content item_tier item_canonical
+    local item_ocr item_bad
     item_origin=$(jq -r ".[$i].origin // empty" "$MANIFEST")
     item_url=$(jq -r ".[$i].url // empty" "$MANIFEST")
     item_tier=$(jq -r ".[$i].tier // empty" "$MANIFEST")
@@ -1162,8 +1237,25 @@ run_batch() {
     item_capture_id=$(jq -r ".[$i].capture_id // .[$i].ref_id // empty" "$MANIFEST")
     has_content=$(jq -r "if (.[$i].content // null) == null then \"no\" else \"yes\" end" "$MANIFEST")
 
+    item_ocr=$(jq -r ".[$i].ocr_languages // empty" "$MANIFEST")
+
     local label="${item_title:-${item_url:-item $((i+1))}}"
     echo "[$((i+1))/$total] $label" >&2
+
+    # an image item (capture contracts A15 §3.1) takes `file` and, optionally, `ocr_languages`. A key of
+    # another input is refused here, before dispatch, by its presence — whatever its value: the child
+    # never sees these keys as given (an empty value is dropped below, `content` becomes another input,
+    # `tier: full` is a flag a direct image capture accepts). The batch counts the item failed and goes on.
+    if [[ "$item_origin" == "image" ]]; then
+      item_bad="$(jq -r ".[$i] | (\"url\", \"ref_path\", \"content\", \"canonical_url\", \"tier\") as \$k | select(has(\$k)) | \$k" "$MANIFEST" 2>/dev/null | head -1)"
+      if [[ -n "$item_bad" ]]; then
+        echo "ERROR: item $((i+1)): origin image takes no $item_bad" >&2
+        ((failed++)) || true
+        errors+="  [$((i+1))] $label: exit 2 (origin image takes no $item_bad)"$'\n'
+        echo "" >&2
+        continue
+      fi
+    fi
 
     local -a item_args
     item_args=(source-add)
@@ -1177,6 +1269,7 @@ run_batch() {
     # the item's tier outranks the batch's --tier; a canonical_url is per item only (B1, B3)
     if [[ -n "$item_tier" ]]; then item_args+=(--tier "$item_tier"); elif [[ "$TIER" != "full" ]]; then item_args+=(--tier "$TIER"); fi
     [[ -n "$item_canonical" ]]   && item_args+=(--canonical-url "$item_canonical")
+    [[ -n "$item_ocr" ]]         && item_args+=(--ocr-languages "$item_ocr")
     if [[ "$has_content" == "yes" ]]; then
       if $DRY_RUN; then
         item_args+=(--origin "${item_origin:-text}")

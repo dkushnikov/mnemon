@@ -1,0 +1,30 @@
+{
+  "name": "hyphen-witness-broken",
+  "what": "A word broken at a line end in the witness and whole in the reading: 'infor-', spaces and a tab, the line end, leading spaces, 'mation' is a pair; the reading holds 'information' once and the witness, as written, never, so the pair is joined (1). Witness words the information here = 3, reading the same: all matched.",
+  "reading": "The information is here.\n",
+  "witness": "The infor- \t\n  mation is here.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 3,
+    "found": 3,
+    "missing": 0,
+    "share": 100.0,
+    "reading_words": 3,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 1,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

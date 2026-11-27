@@ -1,0 +1,7 @@
+Sample Author @sample · 2h
+Three notes on AI this week. First, AI agents are moving from demos to daily work, and most AI teams now ship weekly.
+Second, the cost of AI inference keeps falling. An AI model that needed a cluster last year runs on a laptop today. AI-native companies plan around that curve.
+Third, AI safety is a product question. If your AI makes a decision, a person must be able to read why. Good AI is legible AI.
+My friend Al disagrees. Al says the alloy of Al and Cu matters more than any AI lab, and that Alabama will outlast the AI boom.
+What I read: the AI index report, a paper on AI evaluation, and a thread on how AI changes hiring. Is AI overhyped? In AI, as always, both things are true.
+AI. AI, AI: AI? (AI) "AI" AI/ML GenAI OpenAI AI's

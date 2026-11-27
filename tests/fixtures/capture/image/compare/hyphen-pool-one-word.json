@@ -1,0 +1,30 @@
+{
+  "name": "hyphen-pool-one-word",
+  "what": "Two pairs with one joined word in the other text: the reading holds 'notebook' once, so the witness's first pair is joined (1) and the second, counting the pair already joined, is not: its halves note and book stay words. Witness words notebook and note book = 4; found notebook, and = 2; missing 2; share 50.0. Reading words notebook and = 2, both matched.",
+  "reading": "notebook and\n",
+  "witness": "note-\nbook and note-\nbook\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 4,
+    "found": 2,
+    "missing": 2,
+    "share": 50.0,
+    "reading_words": 2,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 1,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

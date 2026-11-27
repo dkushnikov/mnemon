@@ -1,0 +1,10 @@
+{
+  "name": "edge-empty-reading",
+  "what": "Edge row 1 of section 21.5: an empty reading is no-text before the comparison; the comparison refuses to run on it (ValueError) and expects no comparison object.",
+  "reading": "",
+  "witness": "amber birch cedar\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": null,
+  "raises": "ValueError"
+}

@@ -123,7 +123,7 @@ Each skill runs the installed engine's dispatcher. From the shell, the same and 
 | `mnemon release [--dry-run] [--now] [--drain-timeout <s>] [--rollback <ref>]` | Maintainers: lock → drain → fast-forward `main` → `release` → smoke → push; `--rollback` resets the engine under the same lock |
 | `mnemon version` | Engine version, branch, commit and root |
 | `mnemon ingest <inbox-dir> [--dry-run] [--only <id>] [--limit N] [--max-attempts N] [--retry <id>] [--json]` | Capture the `mnemon-envelope/1` files of a directory, one result record per envelope ([inbox.md](inbox.md)) |
-| `mnemon fence-probe` | Probe the extractor fence of the installed Claude Code (five real runs, ≈ $0.20) and record a pass for its version — once per version |
+| `mnemon fence-probe` | Probe the extractor fence and the image reader's fence of the installed Claude Code (six real `claude` runs: ≈ $0.20 for probes 1–5, about one cent for probe 6) and record a pass for its version, with the sixth probe's own verdict beside it — once per version; the sixth probe gates image captures alone |
 | `mnemon scan \| monitor` | Reserved (program phase 4) |
 
 ## Configuration

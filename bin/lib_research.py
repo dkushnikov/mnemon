@@ -1247,8 +1247,8 @@ def validate_wiki(rec: dict, ctx: dict) -> dict:
     `severity` (fail · warn · ok · None when not probed or the schema failed), `usable` (false when
     search and research-ask must not rest on it) and `cited` (the revisions its verified locators
     cite). `ctx` is the research context of the vault (lib_vault.research_context): `revisions`
-    (rev → has_source · klass · capture_sha256 · body_sha256 · completeness · superseded ·
-    source_type · unreadable), `graph_complete`, `source_text(rev)`, `collections` (name → record),
+    (rev → has_source · klass · capture_sha256 · body_sha256 · completeness · fidelity ·
+    superseded · source_type · unreadable), `graph_complete`, `source_text(rev)`, `collections` (name → record),
     `charter_sha256`, `local_exists(path)`, `budget_words`."""
     reasons: Dict[str, List[str]] = {}
     not_probed: List[str] = []
@@ -1364,6 +1364,10 @@ def validate_wiki(rec: dict, ctx: dict) -> dict:
         comp = r.get("completeness")
         if comp in ("partial", "blocked"):
             add("weak-evidence", "%s: completeness %s" % (e["rev"], comp))
+        elif comp == "unknown" and r.get("fidelity") == "recognized":
+            # v1.5: text a recognizer read off an image has no reference to be checked against —
+            # an info reason, never a state; partial, blocked and an integrity error stay weak above
+            reasons.setdefault("info", []).append("%s: completeness unknown (recognized text)" % e["rev"])
         elif comp == "unknown" and (r.get("source_type") or "") in ("pdf", "video", "podcast", "audio"):
             reasons.setdefault("info", []).append("%s: completeness unknown (%s)" % (e["rev"], r["source_type"]))
 

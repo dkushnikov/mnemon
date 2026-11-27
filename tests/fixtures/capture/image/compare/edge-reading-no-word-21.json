@@ -1,0 +1,30 @@
+{
+  "name": "edge-reading-no-word-21",
+  "what": "Edge row 5: the reading has no word, the witness has 21 (the line twice and 'oak'): missing 21 > 20, share 0.0 under the floor: loss.",
+  "reading": "OK\n",
+  "witness": "amber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\noak.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "loss",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 21,
+    "found": 0,
+    "missing": 21,
+    "share": 0.0,
+    "reading_words": 0,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

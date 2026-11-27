@@ -1,0 +1,30 @@
+{
+  "name": "quote-card-junk",
+  "what": "A short text with three junk words: a quote card of 10 words (simple things done well make quiet life worth the effort) and the interface's junk ssa, eee, nnm in the witness (Oo and a are short runs): 13 witness words. Found 10, missing 3, share 10/13 = 76.92 -> 76.9, under the floor, but 3 missing is within the allowance: agree.",
+  "reading": "Simple things done well\nmake a quiet life\nworth the effort\n",
+  "witness": "Ssa\nSimple things done well\nmake a quiet life\nworth the effort\neee Oo\nnnm\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 13,
+    "found": 10,
+    "missing": 3,
+    "share": 76.9,
+    "reading_words": 10,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

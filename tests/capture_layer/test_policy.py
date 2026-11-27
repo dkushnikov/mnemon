@@ -491,6 +491,9 @@ class HooksOff(unittest.TestCase):
             env["MNEMON_TEST_WORKER_START_DELAY"] = "1"   # the conversion worker's start delay and its handshake file
             env["MNEMON_TEST_WORKER_START_FILE"] = "/dev/null"
             env["MNEMON_TEST_SITE_PACE_S"] = "0"          # ...and the site capture's pacing control
+            env["OCR_CMD"] = "/bin/false"                 # the image witness's replacement (capture layer A20, I2)
+            env["MNEMON_TEST_IMAGE_WORKER_CRASH"] = "1"   # ...and the image worker's two hooks
+            env["MNEMON_TEST_IMAGE_ENVELOPE_HANG"] = "1"
             code = ("import sys; sys.path.insert(0, %r)\n"
                     "from capture import policy as P\n"
                     "try:\n    P.Policy().get(%r)\nexcept P.PolicyError as e:\n    print(e.kind)\n") % (BIN, server.url("/x"))

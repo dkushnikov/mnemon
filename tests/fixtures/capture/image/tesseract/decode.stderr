@@ -1,0 +1,5 @@
+libpng error: IDAT: invalid stored block lengths
+Error in pixReadStreamPng: internal png error
+Error in pixReadStream: png: no pix returned
+Leptonica Error in pixRead: pix not read: idat-broken.png
+Error during processing.

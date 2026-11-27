@@ -1,0 +1,33 @@
+{
+  "name": "edge-witness-no-word",
+  "what": "Edge row 2: the witness text has no word (a, ok are short runs; 12 is a number), the reading has hello there (2): no-confirmation, share null. The number 12 stands in both.",
+  "reading": "Hello there 12\n",
+  "witness": "a 12 ok |\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "no-confirmation",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 0,
+    "found": 0,
+    "missing": 0,
+    "share": null,
+    "reading_words": 2,
+    "unconfirmed_words": 2,
+    "reading_numbers": 1,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [
+        "Hello",
+        "there"
+      ],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

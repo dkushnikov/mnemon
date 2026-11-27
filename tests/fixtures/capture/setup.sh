@@ -36,6 +36,11 @@ unset MNEMON_POLICY_ALLOW_LOOPBACK MNEMON_FETCH_URL_REWRITE MNEMON_EXTERNAL_FETC
 unset MNEMON_CAPTURE_FETCH_CMD MNEMON_CAPTURE_SITE_CMD MNEMON_CAPTURE_CAPTIONS_CMD MNEMON_DEPTH_FOLD_CMD MEDIA_EXTRACT_CMD RENDER_URL_CMD
 unset STUB_SITE STUB_SITE_CONVERT_FAIL STUB_DEPTH STUB_MEDIA STUB_YT STUB_FETCH_HOOK STUB_CURL_HOOK STUB_FETCH_EXT STUB_FETCH_PUBLISHED
 unset STUB_FIXTURE_PART STUB_FIXTURE_PART_BAD STUB_PART_BAD_CALLS STUB_FAIL_CALLS STUB_COST STUB_COST_NULL
+# MNEMON_CAPTURE_IMAGE_CMD stays: tests/test-helper.sh points it at the probe stub (a hermetic doctor and dry run);
+# the suites that capture images unset it for those sections
+unset OCR_CMD MNEMON_TEST_TESSERACT_MODE MNEMON_TEST_READER_MODE MNEMON_TEST_IMAGE_WORKER_CRASH MNEMON_TEST_IMAGE_ENVELOPE_HANG
+unset MNEMON_TEST_TESSERACT_CALLS MNEMON_TEST_TESSDATA_DIR MNEMON_TEST_READER_CALLS MNEMON_TEST_READER_FACTS MNEMON_TEST_IMAGE_SWAP_INPUT MNEMON_TEST_REPORT_FREEZE_FAIL
+unset TESSDATA_PREFIX   # the probe prefers it to the stub tesseract's model directory (capture layer §21.3)
 echo "toolchain: bash $BASH_VERSION · $(python3 --version 2>&1)"   # the running bash, never the PATH-resolved one (G30)
 # the legacy run (PATH=/usr/bin:/bin:$PATH, §7.16 / A12): when the system bash is first on PATH
 # the suite must really be running bash 3.2 and python 3.9 — asserted, not assumed
@@ -429,6 +434,9 @@ export RENDER_URL_CMD="$STUBS/render-url.sh" MEDIA_EXTRACT_CMD="$STUBS/media-ext
 export MEDIA_FIX="$MNEMON_ROOT/tests/fixtures/capture/media"
 export MNEMON_CAPTURE_FETCH_CMD="$STUBS/capture-fetch.py" MNEMON_CAPTURE_SITE_CMD="$STUBS/capture-site.py"
 export STUB_DIR STUB_VAULT="$VAULT" STUB_FIXTURE="$FIX/extract-good.json" STUB_FIXTURE_PART="$FIX/extract-part-good.json"
+# the image origin (capture layer A20): the stub `claude` hands a reading call to the image stub; the stub
+# tesseract and the hooks are set by the suite that captures images (tests/test_image.sh)
+export STUB_CLAUDE_IMAGE="$FIX/image/stub-claude-image.py"
 
 # probe record for the stub's version (D13)
 write_probe_record() {

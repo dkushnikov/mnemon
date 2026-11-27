@@ -1,0 +1,30 @@
+{
+  "name": "hyphen-reading-broken",
+  "what": "The reverse, with a soft hyphen (U+00AD) at the line end of the reading: the reading's pair is joined against the witness's 'information' (1). 3 words each, all matched.",
+  "reading": "The infor\u00ad\nmation is here.\n",
+  "witness": "The information is here.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 3,
+    "found": 3,
+    "missing": 0,
+    "share": 100.0,
+    "reading_words": 3,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 1,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

@@ -557,5 +557,96 @@ assert_contains "$output" "Superseded: $((s0 + 3))" "status counts the folders n
 assert_contains "$output" "Chunked: $((c0 + 1))" "...and the extract.md files with extraction: chunked (+1)"
 rm -rf "$VAULT/Sources/2026-04-04_aaaa0001" "$VAULT/Sources/2026-04-05_aaaa0001" "$VAULT/Sources/2026-04-06_bbbb0002" "$VAULT/Sources/2026-04-07_cccc0003"
 
+echo "--- the image origin (contracts A15 §3.1): one explicit file input, refused with anything else ---"
+IMGFIX="$FIX/image"
+img="$TEST_TMPDIR/gw-shot.png"
+cp "$IMGFIX/base.png" "$img"
+printf 'some text\n' > "$TEST_TMPDIR/gw-text.txt"
+mkdir -p "$TEST_TMPDIR/gw-bundle"
+receipts_now() { ls "$VSTATE/captures" 2>/dev/null | wc -l | tr -d ' '; }
+r0="$(receipts_now)"; a0="$(ls -a "$ARCHIVE" | wc -l | tr -d ' ')"
+# refused <what> <args…>: exit 2 on the run and on the dry run, with a message, before any write
+refused() {
+  local what="$1"; shift
+  run_gw "$@"
+  assert_eq "$rc" "2" "$what → exit 2"
+  assert_contains "$err" "ERROR:" "...with a message"
+  assert_eq "$(result status)" "" "...and no RESULT block (a usage error)"
+  run_gw "$@" --dry-run
+  assert_eq "$rc" "2" "...the dry run refuses the same"
+}
+refused "--origin image without --file" --origin image
+refused "--origin image with --file-text" --origin image --file-text "$TEST_TMPDIR/gw-text.txt"
+refused "--origin image with --file and --file-text" --origin image --file "$img" --file-text "$TEST_TMPDIR/gw-text.txt"
+refused "--origin image with --ref-path" --origin image --file "$img" --ref-path "$VAULT/reader-context.md"
+refused "--origin image with --manifest" --origin image --file "$img" --manifest "$TEST_TMPDIR/test-manifest.json"
+refused "--origin image with --url" --origin image --file "$img" --url "https://example.com/doc"
+refused "--origin image with --canonical-url" --origin image --file "$img" --canonical-url "https://example.com/doc"
+refused "--origin image with --site" --origin image --file "$img" --site auto
+refused "--origin image with --media-bundle" --origin image --file "$img" --media-bundle "$TEST_TMPDIR/gw-bundle"
+refused "--origin image with --render" --origin image --file "$img" --render
+refused "--origin image with --no-render" --origin image --file "$img" --no-render
+refused "--origin image with --no-external" --origin image --file "$img" --no-external
+refused "--origin image with --depth" --origin image --file "$img" --depth off
+refused "--origin image with --tier bookmark" --origin image --file "$img" --tier bookmark
+refused "--ocr-languages with another origin" --url "https://example.com/ocr" --ocr-languages eng
+refused "--ocr-languages with a text origin" --origin text --file-text "$TEST_TMPDIR/gw-text.txt" --ocr-languages eng
+refused "--ocr-languages at the batch level" --manifest "$TEST_TMPDIR/test-manifest.json" --ocr-languages eng
+refused "--ocr-languages outside the grammar" --origin image --file "$img" --ocr-languages english
+refused "--ocr-languages with a repeated code" --origin image --file "$img" --ocr-languages eng+eng
+refused "--ocr-languages empty" --origin image --file "$img" --ocr-languages ""
+refused "--ocr-languages with nine codes" --origin image --file "$img" --ocr-languages aaa+bbb+ccc+ddd+eee+fff+ggg+hhh+iii
+assert_eq "$(receipts_now) $(ls -a "$ARCHIVE" | wc -l | tr -d ' ')" "$r0 $a0" "the refusals wrote no receipt and no raw"
+run_gw --origin image --file "$TEST_TMPDIR/no-such-image.png"
+assert_eq "$rc $(result error_class)" "1 input-missing" "a missing --file is input-missing, as for every file origin"
+run_gw --file "$img" --dry-run
+assert_contains "$out" "Origin: file" "a --file without --origin is never an image (the origin detector is unchanged)"
+run_gw --origin image --file "$img" --dry-run
+assert_eq "$rc" "0" "an image capture's dry run exits 0"
+assert_contains "$out" "Source type: article" "...source_type defaults to article"
+assert_contains "$out" "Resource: file — sha256 of $img" "...a file-kind resource keyed by its bytes"
+assert_not_contains "$out" "Canonical URL" "...with no URL identity"
+
+echo "--- the image origin: batch items are validated before dispatch ---"
+# the valid item is captured through the real worker: the helper's probe stub (MNEMON_CAPTURE_IMAGE_CMD) is set
+# aside for this section and restored after it; the refusals above keep it (their dry runs only probe)
+PROBE_STUB="${MNEMON_CAPTURE_IMAGE_CMD:-}"
+unset MNEMON_CAPTURE_IMAGE_CMD
+export MNEMON_TEST_HOOKS=1 OCR_CMD="$IMGFIX/stub-tesseract.py" MNEMON_TEST_TESSDATA_DIR="$TEST_TMPDIR/gw-tessdata"
+export MNEMON_TEST_TESSERACT_CALLS="$STUB_DIR/tesseract-calls" MNEMON_TEST_READER_CALLS="$STUB_DIR/reader-calls"
+mkdir -p "$MNEMON_TEST_TESSDATA_DIR"; printf 'model eng\n' > "$MNEMON_TEST_TESSDATA_DIR/eng.traineddata"; printf 'model rus\n' > "$MNEMON_TEST_TESSDATA_DIR/rus.traineddata"
+printf '{"9.9.9-stub (Claude Code)": {"pass": true, "date": "2026-11-27", "probes": {"no-tools": true, "image-reader": true}}}\n' > "$XDG_STATE_HOME/mnemon/fence-probes.json"
+for n in 1 2 3 4 5 6 7 8; do cp "$IMGFIX/base.png" "$TEST_TMPDIR/gw-item-$n.png"; printf 'item %s' "$n" >> "$TEST_TMPDIR/gw-item-$n.png"; done
+IMG_MANIFEST="$TEST_TMPDIR/image-manifest.json"
+jq -n --arg d "$TEST_TMPDIR" '[
+  {origin: "image", file: ($d + "/gw-item-1.png"), capture_id: "gwb-1", url: "https://example.com/x"},
+  {origin: "image", file: ($d + "/gw-item-2.png"), capture_id: "gwb-2", url: ""},
+  {origin: "image", file: ($d + "/gw-item-3.png"), capture_id: "gwb-3", url: null},
+  {origin: "image", file: ($d + "/gw-item-4.png"), capture_id: "gwb-4", content: "x"},
+  {origin: "image", file: ($d + "/gw-item-5.png"), capture_id: "gwb-5", tier: "full"},
+  {origin: "image", file: ($d + "/gw-item-6.png"), capture_id: "gwb-6", canonical_url: "https://example.com/doc"},
+  {origin: "image", file: ($d + "/gw-item-7.png"), capture_id: "gwb-7", ref_path: "note.md"},
+  {origin: "image", file: ($d + "/gw-item-8.png"), capture_id: "gwb-8", ocr_languages: "rus+eng", title: "A valid image item"}
+]' > "$IMG_MANIFEST"
+stub_reset
+run_gw --manifest "$IMG_MANIFEST"
+assert_eq "$rc" "1" "a batch with refused image items exits 1"
+assert_eq "$(result batch_total) $(result batch_passed) $(result batch_failed)" "8 1 7" "...seven items refused, the batch going on to the valid one"
+for pair in "1 url" "2 url" "3 url" "4 content" "5 tier" "6 canonical_url" "7 ref_path"; do
+  set -- $pair
+  assert_contains "$err" "ERROR: item $1: origin image takes no $2" "item $1: refused by the presence of the key $2, whatever its value"
+  [[ -f "$(receipt "gwb-$1")" ]] && fail "item $1: no child started" "a receipt exists" || pass "item $1: no child started (no receipt)"
+done
+assert_contains "$err" "exit 2 (origin image takes no url)" "...counted failed with exit 2 in the summary"
+assert_eq "$(rget gwb-8 '.state') $(rget gwb-8 '.request.ocr_languages')" "extracted rus+eng" "the valid item ran as --origin image with its ocr_languages"
+assert_eq "$(grep -c '^read$' "$STUB_DIR/reader-calls")" "1" "...one reading for the whole batch"
+run_gw --manifest "$IMG_MANIFEST" --dry-run
+assert_eq "$(result batch_total) $(result batch_passed) $(result batch_failed)" "8 1 7" "under --dry-run the same seven items are refused before dispatch"
+assert_eq "$(printf '%s\n' "$out" | grep -c '^=== DRY RUN ===$')" "1" "...and only the valid item's child printed a plan"
+assert_contains "$err" "ERROR: item 4: origin image takes no content" "...content is refused, never turned into a second input"
+unset MNEMON_TEST_HOOKS OCR_CMD MNEMON_TEST_TESSDATA_DIR MNEMON_TEST_TESSERACT_CALLS MNEMON_TEST_READER_CALLS
+write_probe_record
+[[ -n "$PROBE_STUB" ]] && export MNEMON_CAPTURE_IMAGE_CMD="$PROBE_STUB"
+
 cleanup_capture_test
 summary

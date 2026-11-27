@@ -1,0 +1,32 @@
+{
+  "name": "hyphen-space-before",
+  "what": "A hyphen with a space before it makes no pair: witness words the infor mation here = 4; found the, here = 2; missing 2; share 50.0. Reading words the information here = 3; 'information' unconfirmed. Missing 2 is within the allowance of 20: agree.",
+  "reading": "The information is here.\n",
+  "witness": "The infor -\nmation is here.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 4,
+    "found": 2,
+    "missing": 2,
+    "share": 50.0,
+    "reading_words": 3,
+    "unconfirmed_words": 1,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [
+        "information"
+      ],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

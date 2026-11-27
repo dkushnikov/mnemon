@@ -1,0 +1,30 @@
+{
+  "name": "fold-before-length",
+  "what": "Fold first, then the length test: the run of U+0130 and 'x' has two letters, and its fold (lower) has three code points (i, U+0307, x), so it is a word in both texts: 1 witness word, found. 'ok' is a short run.",
+  "reading": "İx ok\n",
+  "witness": "İx\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 1,
+    "found": 1,
+    "missing": 0,
+    "share": 100.0,
+    "reading_words": 1,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

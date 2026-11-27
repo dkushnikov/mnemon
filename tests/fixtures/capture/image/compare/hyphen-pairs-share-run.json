@@ -1,0 +1,32 @@
+{
+  "name": "hyphen-pairs-share-run",
+  "what": "Two pairs that would share a run, both joinable: sun-/set-/ter in the witness, sunset and setter in the reading. The left pair is joined (1) and takes 'set'; 'ter' stays a word of its own. Witness words sunset ter = 2; found sunset; missing 1; share 50.0. Reading words sunset setter = 2; 'setter' unconfirmed.",
+  "reading": "sunset setter\n",
+  "witness": "sun-\nset-\nter\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 2,
+    "found": 1,
+    "missing": 1,
+    "share": 50.0,
+    "reading_words": 2,
+    "unconfirmed_words": 1,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 1,
+    "unconfirmed": {
+      "words": [
+        "setter"
+      ],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

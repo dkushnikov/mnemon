@@ -1,0 +1,33 @@
+{
+  "name": "fold-i-l",
+  "what": "The I/l pair: the witness writes 'OpenAl' and 'lnternet', the reading 'OpenAI' and 'Internet'; both fold to 'openai', 'internet'. Witness words openai met the internet = 4, all found. Reading words openai met the internet openai said = 6; the second 'OpenAI' (a later occurrence) and 'said' are unconfirmed, spelled as the reading spells them.",
+  "reading": "OpenAI met the Internet. OpenAI said so.\n",
+  "witness": "OpenAl met the lnternet.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 4,
+    "found": 4,
+    "missing": 0,
+    "share": 100.0,
+    "reading_words": 6,
+    "unconfirmed_words": 2,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [
+        "OpenAI",
+        "said"
+      ],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

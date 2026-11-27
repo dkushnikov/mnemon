@@ -1,0 +1,30 @@
+{
+  "name": "hyphen-kept-in-line",
+  "what": "The reading keeps the hyphen inside its line ('data-base', no line end: no pair) while 'database' stands elsewhere in both texts. The witness's pair data-/base is not joined: the reading holds 'database' once, as the witness does. The halves answer for each other. Words the data base keeps the database = 6 in each, all matched; nothing joined.",
+  "reading": "The data-base keeps the database.\n",
+  "witness": "The data-\nbase keeps the database.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 6,
+    "found": 6,
+    "missing": 0,
+    "share": 100.0,
+    "reading_words": 6,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

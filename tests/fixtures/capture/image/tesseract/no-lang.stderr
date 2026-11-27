@@ -1,0 +1,5 @@
+Error opening data file tessdata/rus.traineddata
+Please make sure the TESSDATA_PREFIX environment variable is set to your "tessdata" directory.
+Failed loading language 'rus'
+Tesseract couldn't load any languages!
+Could not initialize tesseract.

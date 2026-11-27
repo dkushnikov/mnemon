@@ -33,7 +33,7 @@ PJ="$MNEMON_ROOT/plugins/mnemon/plugin.json"
 python3 -m json.tool "$MP" >/dev/null 2>&1 && pass "marketplace.json is valid JSON" || fail "marketplace.json is valid JSON" "python3 -m json.tool failed"
 python3 -m json.tool "$PJ" >/dev/null 2>&1 && pass "plugin.json is valid JSON" || fail "plugin.json is valid JSON" "python3 -m json.tool failed"
 jq_() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2]))' "$1" "$2"; }
-assert_eq "$(jq_ "$PJ" 'd["version"]')" "0.4.3" "plugin.json version is 0.4.3"
+assert_eq "$(jq_ "$PJ" 'd["version"]')" "0.4.4" "plugin.json version is 0.4.4"
 assert_eq "$(jq_ "$PJ" 'd["name"]')" "mnemon" "plugin.json name is mnemon"
 assert_eq "$(jq_ "$MP" 'd["name"]')" "mnemon" "marketplace name is mnemon"
 assert_eq "$(jq_ "$MP" 'len(d["plugins"])')" "1" "marketplace lists one plugin"
@@ -156,5 +156,35 @@ else
   fail "tests/fixtures/capture/reports/generate.py runs" "python3 generate.py failed in $GEN_TMP"
 fi
 rm -rf "$GEN_TMP"
+
+# --- 8. the image envelope fixtures (tests/fixtures/capture/image/: the *.png and *.jpg files, heads/ and
+#        expected.json) equal generate.py's output — byte surgery on a base pair, done by the generator and
+#        never by hand (capture layer §21.13). The directory's other files belong to other generators.
+echo "--- image envelope fixtures ---"
+IMAGES="$MNEMON_ROOT/tests/fixtures/capture/image"
+GEN_TMP="$(mktemp -d -t mnemon-images-XXXX)"
+cp "$IMAGES/generate.py" "$GEN_TMP/"
+if python3 "$GEN_TMP/generate.py" >/dev/null 2>&1; then
+  n_same=0
+  for f in $(cd "$GEN_TMP" && find . -type f ! -name generate.py | sed 's#^\./##' | sort); do
+    if cmp -s "$GEN_TMP/$f" "$IMAGES/$f"; then
+      n_same=$((n_same + 1))
+    else
+      fail "tests/fixtures/capture/image/$f equals generate.py's output" "differs — edit generate.py and run: python3 tests/fixtures/capture/image/generate.py"
+    fi
+  done
+  [[ $n_same -ge 34 ]] && pass "every image envelope fixture ($n_same files) equals generate.py's output" || fail "every image envelope fixture equals generate.py's output" "only $n_same compared"
+  stray="$( (cd "$IMAGES" && find . -maxdepth 1 -type f \( -name '*.png' -o -name '*.jpg' \) && find ./heads -type f 2>/dev/null) | sed 's#^\./##' | sort | comm -23 - <(cd "$GEN_TMP" && find . -type f | sed 's#^\./##' | sort))"
+  assert_eq "$stray" "" "no envelope fixture outside generate.py's output"
+else
+  fail "tests/fixtures/capture/image/generate.py runs" "python3 generate.py failed in $GEN_TMP"
+fi
+rm -rf "$GEN_TMP"
+
+# --- the shared test environment: what the witness reads from the environment never reaches a suite
+#     (capture layer §21.13) — the probe prefers an inherited TESSDATA_PREFIX to the stub's model directory
+echo "--- the shared test environment ---"
+kept="$(TESSDATA_PREFIX=/nonexistent-tessdata bash -c 'source "$1"; printf "%s" "${TESSDATA_PREFIX+kept}"' _ "$MNEMON_ROOT/tests/test-helper.sh" 2>&1)"
+assert_eq "$kept" "" "tests/test-helper.sh clears an inherited TESSDATA_PREFIX"
 
 summary

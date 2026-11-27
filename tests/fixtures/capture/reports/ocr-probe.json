@@ -1,0 +1,97 @@
+{
+ "present": {
+  "schema": "mnemon-ocr-probe/1",
+  "ok": true,
+  "adapter": "ocr-tesseract/1",
+  "backend": "tesseract",
+  "version": "5.5.4",
+  "detail": "leptonica-1.87.0",
+  "tessdata_dir": "/opt/tessdata",
+  "languages": "rus+eng",
+  "available": [
+   "eng",
+   "osd",
+   "rus"
+  ],
+  "present": [
+   "rus",
+   "eng"
+  ],
+  "missing": [],
+  "reason": null,
+  "error": null
+ },
+ "no-tesseract": {
+  "schema": "mnemon-ocr-probe/1",
+  "ok": false,
+  "adapter": "ocr-tesseract/1",
+  "backend": "tesseract",
+  "version": null,
+  "detail": null,
+  "tessdata_dir": null,
+  "languages": "rus+eng",
+  "available": null,
+  "present": [],
+  "missing": [
+   "tesseract"
+  ],
+  "reason": "no-tesseract",
+  "error": "tesseract is not on PATH"
+ },
+ "version-old": {
+  "schema": "mnemon-ocr-probe/1",
+  "ok": false,
+  "adapter": "ocr-tesseract/1",
+  "backend": "tesseract",
+  "version": "3.05",
+  "detail": null,
+  "tessdata_dir": null,
+  "languages": "rus+eng",
+  "available": null,
+  "present": [],
+  "missing": [
+   "version"
+  ],
+  "reason": "version",
+  "error": "tesseract 3.05 is older than 4"
+ },
+ "model-missing": {
+  "schema": "mnemon-ocr-probe/1",
+  "ok": false,
+  "adapter": "ocr-tesseract/1",
+  "backend": "tesseract",
+  "version": "5.5.4",
+  "detail": "leptonica-1.87.0",
+  "tessdata_dir": "/opt/tessdata",
+  "languages": "rus+eng",
+  "available": [
+   "eng",
+   "osd"
+  ],
+  "present": [
+   "eng"
+  ],
+  "missing": [
+   "lang:rus"
+  ],
+  "reason": "model-missing",
+  "error": "the language model rus.traineddata is not in /opt/tessdata"
+ },
+ "probe-timeout": {
+  "schema": "mnemon-ocr-probe/1",
+  "ok": false,
+  "adapter": "ocr-tesseract/1",
+  "backend": "tesseract",
+  "version": null,
+  "detail": null,
+  "tessdata_dir": null,
+  "languages": "rus+eng",
+  "available": null,
+  "present": [],
+  "missing": [
+   "version"
+  ],
+  "reason": "probe-timeout",
+  "error": "tesseract --version exceeded 10 s"
+ }
+}

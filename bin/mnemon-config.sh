@@ -47,7 +47,7 @@
 #   DEFAULT_MODEL, DEFAULT_LANGUAGE, WHISPER_MODEL, AUTO_DETECT_ORIGIN, ARCHIVE_DIR,
 #   WRITER_HOST, EXTRACT_TIMEOUT, EXTRACT_INLINE_MAX_BYTES, EXTRACT_MAX_USD and
 #   MNEMON_VAULT_STATE_DIR, plus the capture-layer keys of MNEMON_CONFIG_KEYS below
-#   (docs/specs/2026-10-15-capture-layer.md §5) in upper case with their defaults
+#   (docs/specs/2026-10-15-capture-layer.md §5, the image origin's §21.8) in upper case with their defaults
 #   applied, and the fetch_timeout split FETCH_CONNECT_TIMEOUT / FETCH_READ_TIMEOUT.
 #   MNEMON_SELECTED_BY (set by the dispatcher/gateway when a flag chose the
 #   instance) only labels MNEMON_CONFIG_SOURCE.
@@ -89,20 +89,27 @@ WHISPER_MODEL AUTO_DETECT_ORIGIN ARCHIVE_DIR WRITER_HOST MNEMON_VAULT_STATE_DIR
 EXTRACT_TIMEOUT EXTRACT_INLINE_MAX_BYTES EXTRACT_MAX_USD EXTERNAL_FETCH EXTERNAL_FETCHERS FETCH_USER_AGENT
 FETCH_TIMEOUT FETCH_CONNECT_TIMEOUT FETCH_READ_TIMEOUT FETCH_MAX_BYTES RENDER_TIMEOUT RENDER_MAX_BYTES
 ACQUIRE_TIMEOUT CONVERT_TIMEOUT TRANSCRIBE_TIMEOUT SITE_MAX_PAGES SITE_TIMEOUT THIN_WORDS EXTRACT_MAX_PARTS
+OCR_LANGUAGES IMAGE_READER_MODEL IMAGE_READER_EFFORT IMAGE_READER_MAX_USD IMAGE_TIMEOUT IMAGE_MAX_BYTES
+IMAGE_MAX_PIXELS IMAGE_MAX_EDGE IMAGE_MIN_WITNESS_SHARE IMAGE_MISS_ALLOWANCE
 DOCTOR_THIN_WORDS DOCTOR_STUB_WORDS DOCTOR_ARXIV_WORDS DOCTOR_RATING_HI_SHARE
 DOCTOR_WIKI_PAGES_PER_COLLECTION DOCTOR_WIKI_WORDS
 RESEARCH_LOG_PATH RESEARCH_PACKAGE_MAX_BYTES RESEARCH_TIMEOUT RESEARCH_MAX_USD RESEARCH_RECUSAL_TAGS"
 # The environment inputs that shape the resolved values without being exported by the loader.
 MNEMON_RESOLUTION_INPUTS="HOME XDG_STATE_HOME XDG_CONFIG_HOME MNEMON_CONFIG_DIR"
 
-# --- Scalar keys with defaults (capture contracts §7, capture layer §5) --------
+# --- Scalar keys with defaults (capture contracts §7, capture layer §5, §21.8) -
 # One table, `key|VAR|type|default` per line: the loader parses, validates and
 # exports every row; bin/lib_config.py carries the same table (CONFIG_KEYS) and
 # bin/mnemon prints it (`mnemon config keys`) — tests/test_config.sh asserts the
 # three agree. Types: str · enum:a,b · int (a non-negative integer; a fraction is
-# refused) · num (a non-negative decimal). A non-numeric, negative, non-finite or
-# fractional-where-integer value is refused at config load (exit 2); an empty
-# value takes the default (`extract_max_usd` has none: unset means no cap).
+# refused) · num (a non-negative decimal) · langs (one to eight tesseract language
+# codes joined by `+`, none twice; capture layer §21.8) · level (an effort level:
+# low, medium, high, xhigh, max). A non-numeric, negative, non-finite or
+# fractional-where-integer value is refused at config load (exit 2), and so is a
+# value outside its type or a key's range (`image_min_witness_share`: 0 to 100;
+# `image_timeout`, `image_reader_max_usd`, `image_max_bytes`, `image_max_pixels`,
+# `image_max_edge`: greater than 0);
+# an empty value takes the default (`extract_max_usd` has none: unset means no cap).
 MNEMON_CONFIG_KEYS='extract_timeout|EXTRACT_TIMEOUT|num|900
 extract_inline_max_bytes|EXTRACT_INLINE_MAX_BYTES|int|400000
 extract_max_usd|EXTRACT_MAX_USD|num|
@@ -120,6 +127,16 @@ site_max_pages|SITE_MAX_PAGES|int|40
 site_timeout|SITE_TIMEOUT|num|900
 thin_words|THIN_WORDS|int|60
 extract_max_parts|EXTRACT_MAX_PARTS|int|8
+ocr_languages|OCR_LANGUAGES|langs|eng
+image_reader_model|IMAGE_READER_MODEL|str|haiku
+image_reader_effort|IMAGE_READER_EFFORT|level|high
+image_reader_max_usd|IMAGE_READER_MAX_USD|num|0.05
+image_timeout|IMAGE_TIMEOUT|num|120
+image_max_bytes|IMAGE_MAX_BYTES|int|7000000
+image_max_pixels|IMAGE_MAX_PIXELS|int|50000000
+image_max_edge|IMAGE_MAX_EDGE|int|8000
+image_min_witness_share|IMAGE_MIN_WITNESS_SHARE|num|90
+image_miss_allowance|IMAGE_MISS_ALLOWANCE|int|20
 doctor_thin_words|DOCTOR_THIN_WORDS|int|300
 doctor_stub_words|DOCTOR_STUB_WORDS|int|40
 doctor_arxiv_words|DOCTOR_ARXIV_WORDS|int|600
@@ -150,21 +167,103 @@ mnemon_config_keys() {
   done <<< "$MNEMON_CONFIG_KEYS"
 }
 
-# Validate one table value: 0 when it fits its type, else an error on stderr and 1.
-_mnemon_check_config_value() {   # <key> <value> <type> <file>
+# The type `langs` (capture layer §21.8): ^[a-z]{3}(_[a-z0-9]+)*(\+[a-z]{3}(_[a-z0-9]+)*){0,7}$ —
+# one to eight tesseract language codes joined by `+`. The letters are spelled out: a range such
+# as [a-z] follows the locale's collation in some C libraries, a list never does.
+_MNEMON_LOWER='abcdefghijklmnopqrstuvwxyz'
+_MNEMON_LANG_CODE_RE="[$_MNEMON_LOWER]{3}(_[${_MNEMON_LOWER}0123456789]+)*"
+_MNEMON_LANGS_RE="^${_MNEMON_LANG_CODE_RE}([+]${_MNEMON_LANG_CODE_RE}){0,7}\$"
+
+# Validate one value against a type of the table: 0 when it fits, else one `ERROR: <key> …` line on
+# stderr and 1. <where> closes the message in parentheses: the config file, or the flag that carried
+# the value. After the type, a key's own range: `image_min_witness_share` lies in 0–100, five image keys
+# must be greater than 0 (`image_miss_allowance` may be 0). Pure bash —
+# a full load starts no process (tests/test_config_reader.sh). The gateway checks a value of its own
+# with it too (`--ocr-languages`, capture layer §21.8), directly or through mnemon_config_check below.
+_mnemon_check_config_value() {   # <key> <value> <type> <where>
   local key="$1" val="$2" type="$3" file="$4"
   case "$type" in
-    int) [[ "$val" =~ ^[0-9]+$ ]] && return 0
-         echo "ERROR: $key must be a non-negative integer, got '$val' ($file)" >&2; return 1 ;;
-    num) [[ "$val" =~ ^[0-9]+(\.[0-9]+)?$ ]] && return 0
-         echo "ERROR: $key must be a non-negative number, got '$val' ($file)" >&2; return 1 ;;
+    int) [[ "$val" =~ ^[0-9]+$ ]] || {
+           echo "ERROR: $key must be a non-negative integer, got '$val' ($file)" >&2; return 1; } ;;
+    num) [[ "$val" =~ ^[0-9]+(\.[0-9]+)?$ ]] || {
+           echo "ERROR: $key must be a non-negative number, got '$val' ($file)" >&2; return 1; } ;;
     enum:*)
          local allowed="${type#enum:}" one
          local IFS=,
          for one in $allowed; do [[ "$val" == "$one" ]] && return 0; done
          echo "ERROR: $key must be one of ${allowed//,/|}, got '$val' ($file)" >&2; return 1 ;;
-    *)   return 0 ;;
+    langs) _mnemon_check_langs "$key" "$val" "$file" || return 1 ;;
+    level)
+         case "$val" in
+           low|medium|high|xhigh|max) ;;
+           *) echo "ERROR: $key must be one of low|medium|high|xhigh|max, got '$val' ($file)" >&2; return 1 ;;
+         esac ;;
+    *)   ;;
   esac
+  case "$key" in
+    image_min_witness_share)
+         _mnemon_num_at_most_100 "$val" || {
+           echo "ERROR: $key must lie in 0 to 100 (a percentage), got '$val' ($file)" >&2; return 1; } ;;
+    # the image worker takes only a positive deadline, budget and caps (capture layer §21.6): a zero refused
+    # here, at load, never reaches a worker that would refuse its arguments after the raw is kept
+    image_timeout|image_reader_max_usd|image_max_bytes|image_max_pixels|image_max_edge)
+         _mnemon_num_positive "$val" || {
+           echo "ERROR: $key must be greater than 0, got '$val' ($file)" >&2; return 1; } ;;
+  esac
+  return 0
+}
+
+# 0 when a value that passed the `int` or `num` check (digits, an optional fraction) is greater than 0: it
+# holds a digit other than 0. The digits are spelled out (no range, no process).
+_mnemon_num_positive() {   # <value>
+  [[ "$1" == *[123456789]* ]]
+}
+
+# A `langs` value: the pattern of the type, then no code twice (the order is the caller's and is
+# kept; nothing is sorted). 0 when it fits, else one ERROR line on stderr and 1.
+_mnemon_check_langs() {   # <key> <value> <where>
+  local key="$1" val="$2" where="$3" rest code seen="+"
+  if [[ ! "$val" =~ $_MNEMON_LANGS_RE ]]; then
+    echo "ERROR: $key must be one to eight tesseract language codes joined by + (eng, rus+eng, chi_sim), got '$val' ($where)" >&2
+    return 1
+  fi
+  rest="$val+"
+  while [[ -n "$rest" ]]; do
+    code="${rest%%+*}"; rest="${rest#*+}"
+    case "$seen" in
+      *"+$code+"*) echo "ERROR: $key names the language code $code twice, got '$val' ($where)" >&2; return 1 ;;
+    esac
+    seen="$seen$code+"
+  done
+  return 0
+}
+
+# 0 when a value that passed the `num` check (digits, an optional fraction) is at most 100.
+_mnemon_num_at_most_100() {   # <value>
+  local ip="${1%%.*}" fp=""
+  case "$1" in *.*) fp="${1#*.}" ;; esac
+  ip="${ip#"${ip%%[!0]*}"}"            # leading zeros dropped; all zeros → empty
+  [[ -n "$ip" ]] || return 0
+  [[ ${#ip} -le 3 ]] || return 1
+  (( 10#$ip < 100 )) && return 0
+  (( 10#$ip == 100 )) || return 1
+  [[ "$fp" =~ ^0*$ ]]
+}
+
+# Validate one value of a table key by the type the table gives it: the answer of
+# _mnemon_check_config_value (0 fits; 1 with one ERROR line on stderr); an unknown key is 1 too.
+# For a value that does not come from the config file — the gateway's flag (capture layer §21.8):
+#   mnemon_config_check ocr_languages "$value" --ocr-languages || exit 2
+mnemon_config_check() {   # <key> <value> <where>
+  local key var type def
+  while IFS='|' read -r key var type def; do
+    if [[ -n "$key" && "$key" == "$1" ]]; then
+      _mnemon_check_config_value "$1" "$2" "$type" "$3"
+      return $?
+    fi
+  done <<< "$MNEMON_CONFIG_KEYS"
+  echo "ERROR: unknown config key '$1' ($3)" >&2
+  return 1
 }
 
 # Validate and assign every table key of the scanned config file (defaults applied); call it

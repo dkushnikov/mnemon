@@ -1,0 +1,30 @@
+{
+  "name": "floor-20-missing-under",
+  "what": "20 words missing at a share under the floor: a 10-word line 4 times in the witness (40), twice in the reading (20). Found 20, missing 20, share 50.0; the missing are not more than the allowance: agree.",
+  "reading": "amber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\n",
+  "witness": "amber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 40,
+    "found": 20,
+    "missing": 20,
+    "share": 50.0,
+    "reading_words": 20,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

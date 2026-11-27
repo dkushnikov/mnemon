@@ -1,0 +1,30 @@
+{
+  "name": "junk-short-runs",
+  "what": "Junk of one and two letters in the witness (a ii Ok x is by me) makes no words. Witness words the post short = 3, reading the same 3: all matched.",
+  "reading": "The post is short\n",
+  "witness": "a ii Ok x\nThe post is short\nby me\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 3,
+    "found": 3,
+    "missing": 0,
+    "share": 100.0,
+    "reading_words": 3,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}
