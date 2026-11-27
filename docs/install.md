@@ -22,6 +22,7 @@ The dispatcher takes its global options before the command: `mnemon [--instance 
 | `git`, `bash`, `python3` | the engine | system / Homebrew |
 | `jq`, `shasum` | gateway JSON handling, source hashes | `brew install jq` (shasum ships with macOS / perl) |
 | Poppler (`pdftotext`, `pdfinfo`; optional) | PDF captures (refused before anything is published without it) | `brew install poppler` |
+| tesseract 4+ (optional) | image captures (`--origin image`): the local witness of the model's reading; without it, or without a language model the sequence names, an image capture exits 3 with the image kept ([capture.md §18](capture.md)). Ubuntu's `tesseract-ocr` packages are expected to work, not shown yet | `brew install tesseract`; other languages `brew install tesseract-lang`, or one `<code>.traineddata` in the model directory |
 | `pandoc` 3+ (optional) | a converter candidate of URL captures (after defuddle, before the DOM text); document conversion on import | `brew install pandoc` |
 | [`defuddle`](https://github.com/kepano/defuddle) 0.6+ (optional) | the first converter candidate of URL captures and depth probing | `npm install -g defuddle` |
 | Google Chrome or Chromium (optional) | the rendered stage of the fetch chain (JavaScript shells, bot walls, `--render`): found at its standard application path or as `google-chrome` / `chromium` on PATH; without it such pages fail as `environment` unless an external fetcher is allowed | per its site |
@@ -55,8 +56,9 @@ export PATH="$HOME/.local/bin:$PATH"
 # first instance, then a health check
 mnemon init personal --vault ~/path/to/your/vault --archive ~/path/to/archive --default
 mnemon doctor
-mnemon fence-probe      # once per Claude Code version (five real claude runs, ≈ $0.20): records that the
-                        # extractor fence holds — `mnemon add` refuses to extract without the record (exit 3)
+mnemon fence-probe      # once per Claude Code version (six real claude runs, ≈ $0.20): records that the
+                        # extractor fence holds — `mnemon add` refuses to extract without the record (exit 3);
+                        # the sixth probe gates image captures alone
 mnemon version          # which engine answered (should be the release checkout)
 
 # Claude Code plugin, from the engine directory
@@ -89,7 +91,7 @@ mkdir -p ~/.local/bin && ln -sf ~/.local/share/mnemon/engine/bin/mnemon ~/.local
 brew install jq pandoc poppler
 npm install -g defuddle
 pip3 install pyyaml
-# optional: brew install yt-dlp ffmpeg · pip3 install openai-whisper · npm install -g @tobilu/qmd
+# optional: brew install yt-dlp ffmpeg tesseract · pip3 install openai-whisper · npm install -g @tobilu/qmd
 # optional: Google Chrome or Chromium for rendered pages; FIRECRAWL_API_KEY / JINA_API_KEY in the job's
 #           environment only if the instance sets external_fetch: auto (docs/capture.md)
 

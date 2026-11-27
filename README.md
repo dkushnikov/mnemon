@@ -37,6 +37,7 @@ envelopes in a directory → mnemon ingest <dir> → the same gateway, one resul
   - **YouTube in the video's language** — captions chosen by the video's own language (manual before automatic, `en`/`ru` after it), whisper last; `transcript_language` and `original_language` recorded.
   - **The browser lane for YouTube** — when YouTube walls the engine's host, `mnemon browser-lane youtube <url>…` acquires one caption track per video through `yt-dlp` and the reader's own browser cookies (outside the engine's fetch chain, one video at a time) and hands each bundle to `mnemon add --media-bundle`: the track is the retained raw, the text is checked against it (`completeness`), chapters become headings; the engine itself never touches a cookie.
   - **Chunked extraction** — text above the inline limit is split at headings, extracted in parts and merged under one budget (`extract_max_usd`).
+- **Images and screenshots** — `mnemon add --origin image --file shot.png --ocr-languages eng` (explicit only, never auto-detected; an upright PNG or JPEG within its limits): a small vision model reads the text under the extractor's fence, tesseract reads the same image on your machine as a witness, and a reading that lacks a notable part of the witness's words, or shares none with them, is refused; smaller differences are published with their counts (`capture.fidelity: recognized`). What leaves the machine: an image capture sends the image to the model your `claude` uses — the account and provider that Claude Code is logged in to, the same that receives the text of every other capture for extraction. One invocation per attempt sends it, with a fixed transcription prompt, with no tools and no saved session. tesseract reads the same image on your machine. Do not capture as an image what must not leave the machine. See [`docs/capture.md`](docs/capture.md) §18.
 - **Inbox** — automated feeders (a bot, a scanner, an import script) drop one JSON envelope per item into a directory; `mnemon ingest <dir>` captures them through the same gateway with one result record per envelope — see [`docs/inbox.md`](docs/inbox.md).
 - **Instances** — one per vault: `~/.config/mnemon/instances/<name>.yaml` holds the vault path, archive directory, search provider and model; `mnemon init` writes it. Several libraries (say, personal and work) coexist on one machine and are selected with `--instance <name>` or `MNEMON_INSTANCE`.
 - **Library** (`archive_dir` in the instance config) — saves original source files before extraction. Any directory — iCloud, NAS, local folder. Omit to disable.
@@ -67,7 +68,7 @@ Extracts live in your Obsidian vault — searchable, linkable, always available:
 
 ## Install
 
-Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 2.1.296 or later (Mnemon runs `claude -p --restricted` as a fenced extractor), `git`, `bash`, `python3`, `jq` and `shasum`. Optional: [`defuddle`](https://github.com/kepano/defuddle) 0.6+ and `pandoc` 3+ (the converter candidates of URL captures; the DOM text is the third), Google Chrome or Chromium (rendering JavaScript shells and bot walls), Poppler (`pdftotext` / `pdfinfo`, required for PDF captures), the Python package `pyyaml` (depth-aware capture), `yt-dlp`, `ffmpeg`, `whisper`, [QMD](https://github.com/tobi/qmd); a Firecrawl or Jina Reader key in the environment (`FIRECRAWL_API_KEY`, `JINA_API_KEY`) only if an instance opts into external fetching (`external_fetch: auto`). `mnemon doctor` checks all of them — required ones fail, optional ones warn — and reports the egress setting without ever printing a key.
+Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 2.1.296 or later (Mnemon runs `claude -p --restricted` as a fenced extractor), `git`, `bash`, `python3`, `jq` and `shasum`. Optional: [`defuddle`](https://github.com/kepano/defuddle) 0.6+ and `pandoc` 3+ (the converter candidates of URL captures; the DOM text is the third), Google Chrome or Chromium (rendering JavaScript shells and bot walls), Poppler (`pdftotext` / `pdfinfo`, required for PDF captures), tesseract (`brew install tesseract`, required for image captures; other languages: `brew install tesseract-lang`), the Python package `pyyaml` (depth-aware capture), `yt-dlp`, `ffmpeg`, `whisper`, [QMD](https://github.com/tobi/qmd); a Firecrawl or Jina Reader key in the environment (`FIRECRAWL_API_KEY`, `JINA_API_KEY`) only if an instance opts into external fetching (`external_fetch: auto`). `mnemon doctor` checks all of them — required ones fail, optional ones warn — and reports the egress setting without ever printing a key.
 
 Mnemon runs from an **installed engine** — a checkout of the `release` branch at `$MNEMON_HOME` (default `~/.local/share/mnemon/engine`) — while development happens in a separate clone (`~/Code/mnemon` by convention; any path works). Sessions, skills and jobs always call the installed engine, never the dev tree. The full recipes — laptop, headless node, a second instance — are in [`docs/install.md`](docs/install.md).
 
@@ -86,8 +87,9 @@ export PATH="$HOME/.local/bin:$PATH"
 # 3. Create an instance for your vault and check the install
 mnemon init personal --vault ~/path/to/your/vault --default
 mnemon doctor
-mnemon fence-probe        # once per Claude Code version (five real claude runs, ≈ $0.20):
-                          # records that the extractor fence holds; extraction refuses to run without it
+mnemon fence-probe        # once per Claude Code version (six real claude runs, ≈ $0.20):
+                          # records that the extractor fence holds, and the image reader's;
+                          # extraction refuses to run without it, an image capture without the sixth
 
 # 4. Install the Claude Code plugin from the engine directory
 claude plugin marketplace add ~/.local/share/mnemon/engine
@@ -148,7 +150,7 @@ claude plugin marketplace add ~/.local/share/mnemon/engine && claude plugin inst
 
 - [`docs/install.md`](docs/install.md) — install recipes: laptop (dev + installed engine), headless node, second instance; dev vs installed; releasing
 - [`docs/README.md`](docs/README.md) — full reference (commands, configuration, templates, conventions)
-- [`docs/capture.md`](docs/capture.md) — the capture layer: the fetch chain and egress, completeness and the `capture:` block, site capture, arXiv and YouTube, timeouts, chunked extraction, index regeneration
+- [`docs/capture.md`](docs/capture.md) — the capture layer: the fetch chain and egress, completeness and the `capture:` block, site capture, arXiv and YouTube, timeouts, chunked extraction, index regeneration, images and screenshots
 - [`docs/inbox.md`](docs/inbox.md) — the inbox: the envelope schema and `mnemon ingest`
 - [`docs/specs/2026-10-15-capture-contracts.md`](docs/specs/2026-10-15-capture-contracts.md) — the capture contracts: persistence, the extractor fence, the inbox
 - [`docs/specs/2026-10-15-capture-layer.md`](docs/specs/2026-10-15-capture-layer.md) — the capture layer: policy, chain, completeness, site capture, canonical identity, timeouts, chunked extraction, index regeneration

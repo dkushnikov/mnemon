@@ -2,6 +2,8 @@
 
 Claude Code plugin for [Mnemon](../../README.md): the skills `/source-add`, `/source-search`, `/source-status` and, since 0.4.0, the research operations `/research-update`, `/research-ask`, `/research-synthesize`, `/research-triage` (adapters of `docs/research.md`). It is a thin layer — every skill runs the installed engine's dispatcher, `"${MNEMON_HOME:-$HOME/.local/share/mnemon/engine}/bin/mnemon"`, so install the engine first ([docs/install.md](../../docs/install.md)). The plugin used to live in the separate `mnemon-plugin` repository, now archived.
 
+Since 0.4.4, `/source-add` takes a PNG or JPEG screenshot: it captures the documents the image points to by their URL, and the image itself with `--origin image`, which the engine sends to the model your `claude` uses and checks on your machine with tesseract (`brew install tesseract`; [docs/capture.md §18](../../docs/capture.md)).
+
 ## Install
 
 ```bash
