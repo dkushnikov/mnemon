@@ -157,4 +157,28 @@ else
 fi
 rm -rf "$GEN_TMP"
 
+# --- 8. the image envelope fixtures (tests/fixtures/capture/image/: the *.png and *.jpg files, heads/ and
+#        expected.json) equal generate.py's output — byte surgery on a base pair, done by the generator and
+#        never by hand (capture layer §21.13). The directory's other files belong to other generators.
+echo "--- image envelope fixtures ---"
+IMAGES="$MNEMON_ROOT/tests/fixtures/capture/image"
+GEN_TMP="$(mktemp -d -t mnemon-images-XXXX)"
+cp "$IMAGES/generate.py" "$GEN_TMP/"
+if python3 "$GEN_TMP/generate.py" >/dev/null 2>&1; then
+  n_same=0
+  for f in $(cd "$GEN_TMP" && find . -type f ! -name generate.py | sed 's#^\./##' | sort); do
+    if cmp -s "$GEN_TMP/$f" "$IMAGES/$f"; then
+      n_same=$((n_same + 1))
+    else
+      fail "tests/fixtures/capture/image/$f equals generate.py's output" "differs — edit generate.py and run: python3 tests/fixtures/capture/image/generate.py"
+    fi
+  done
+  [[ $n_same -ge 34 ]] && pass "every image envelope fixture ($n_same files) equals generate.py's output" || fail "every image envelope fixture equals generate.py's output" "only $n_same compared"
+  stray="$( (cd "$IMAGES" && find . -maxdepth 1 -type f \( -name '*.png' -o -name '*.jpg' \) && find ./heads -type f 2>/dev/null) | sed 's#^\./##' | sort | comm -23 - <(cd "$GEN_TMP" && find . -type f | sed 's#^\./##' | sort))"
+  assert_eq "$stray" "" "no envelope fixture outside generate.py's output"
+else
+  fail "tests/fixtures/capture/image/generate.py runs" "python3 generate.py failed in $GEN_TMP"
+fi
+rm -rf "$GEN_TMP"
+
 summary
