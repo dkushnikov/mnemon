@@ -272,6 +272,62 @@ class OwnGroupWatchTests(unittest.TestCase):
         out = subprocess.run([PY, "-c", code], capture_output=True, timeout=30)   # a child shares this process's group
         self.assertEqual(out.stdout.strip(), b"refused", out.stderr)
 
+    def test_a_sigterm_during_the_runners_cleanup_still_tears_the_childs_group_down(self):
+        # the child exits at once and leaves a grandchild that holds its pipes: the runner is in its cleanup (the
+        # drains joined, the group checked) when the SIGTERM comes; the child must still be tracked there, and the
+        # teardown must reach the group of a leader that has already exited
+        work = tempfile.mkdtemp(prefix="mnemon-proc-")
+        pids = os.path.join(work, "pids")
+        child = ("import os, subprocess, sys\n"
+                 "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+                 "open(%r, 'w').write('%%d %%d' %% (os.getpid(), g.pid))\n"
+                 "os.rename(%r, %r)\n" % (pids + ".tmp", pids + ".tmp", pids))
+        parent = ("import sys\nsys.path.insert(0, %r)\nfrom capture import proc\n"
+                  "proc.install_term_handler()\n"
+                  "proc.run_bounded([sys.executable, '-c', %r], timeout=30, check_group=True)\n"
+                  "sys.exit(0)\n" % (BIN, child))
+        p = subprocess.Popen([PY, "-c", parent], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        grandchild = None
+        try:
+            self.assertTrue(wait_file(pids), "the child started its grandchild")
+            child_pid, grandchild = read_pids(pids)
+            self.assertTrue(wait_gone(child_pid, 5.0), "the child exited and was reaped: the runner is in its cleanup")
+            self.assertTrue(pid_alive(grandchild), "the grandchild still holds the pipes")
+            p.send_signal(signal.SIGTERM)
+            self.assertEqual(p.wait(timeout=20), 143)
+            self.assertTrue(wait_gone(grandchild, proc.TERM_GRACE + proc.KILL_GRACE + 1.0),
+                            "the grandchild in the ended child's group is gone")
+        finally:
+            p.kill()
+            p.wait()
+            if grandchild:
+                try:
+                    os.kill(grandchild, signal.SIGKILL)
+                except OSError:
+                    pass
+
+    def test_terminate_all_reaps_the_group_of_a_tracked_child_whose_leader_has_exited(self):
+        code = ("import os, subprocess, sys, time\nsys.path.insert(0, %r)\nfrom capture import proc\n"
+                "c = subprocess.Popen([sys.executable, '-c', 'import subprocess, sys, time\\n"
+                "g = subprocess.Popen([sys.executable, \"-c\", \"import time; time.sleep(60)\"], stderr=subprocess.DEVNULL)\\n"
+                "print(g.pid, flush=True)'], stdout=subprocess.PIPE, start_new_session=True)\n"
+                "grandchild = int(c.stdout.readline())\n"
+                "c.wait()\n"
+                "proc._children[c.pid] = c\n"
+                "proc.terminate_all()\n"
+                "time.sleep(0.2)\n"
+                "try:\n    os.kill(grandchild, 0)\n    print('alive', grandchild)\n"
+                "except ProcessLookupError:\n    print('gone', grandchild)\n" % BIN)
+        out = subprocess.run([PY, "-c", code], capture_output=True, timeout=30)
+        words = out.stdout.split()
+        if len(words) == 2:
+            try:
+                os.kill(int(words[1]), signal.SIGKILL)
+            except OSError:
+                pass
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(words[:1], [b"gone"], "terminate_all tore down the group of a leader that had exited")
+
     def test_terminate_all_ends_an_own_group_child_by_its_pid(self):
         code = ("import os, subprocess, sys, threading, time\nsys.path.insert(0, %r)\nfrom capture import proc\n"
                 "def later():\n    time.sleep(0.5)\n    proc.terminate_all()\n"

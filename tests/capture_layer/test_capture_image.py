@@ -625,6 +625,30 @@ class Cleanup(unittest.TestCase):
                          ("worker", "convert", "members-left", True))
         self.assertEqual(rep["validation"]["outcome"], "ok", "the fault report keeps what progress.json knew")
 
+    def test_a_sigterm_after_the_worker_crashed_leaves_no_member_of_its_group(self):
+        # the worker dies with the stub alive in its group; the supervisor is still checking that group when its
+        # SIGTERM comes: exit 143 (the teardown) or 1 (the fault report, the group already emptied) — never a member left
+        b = Bench(self)
+        # the start delay keeps the worker visible to `ps` long enough to read its group before it crashes
+        sup = self.start(b, b.env(tesseract="hang", extra={"MNEMON_TEST_IMAGE_WORKER_CRASH": "1",
+                                                           "MNEMON_TEST_WORKER_START_DELAY": "1.0"}), timeout=30)
+        pgid = None
+        try:
+            worker, pgid = self.worker_of(sup.pid)
+            self.assertIsNotNone(worker)
+            self.assertTrue(wait_line(b.tess_calls, "run"), "the recognition call started")
+            self.assertTrue(wait_gone(worker, 5.0), "the worker crashed and was reaped")
+            sup.send_signal(signal.SIGTERM)
+            self.assertIn(sup.wait(timeout=20), (143, 1))
+            self.assertTrue(group_gone(pgid, 1.0), "no member of the worker's group is left")
+        finally:
+            sup.kill()
+            sup.wait()
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (OSError, TypeError, NameError):
+                pass
+
     def test_a_worker_crash_with_the_reader_alive(self):
         b = Bench(self)
         rc, rep, err = b.run(b.env(reader="hang", extra={"MNEMON_TEST_IMAGE_WORKER_CRASH": "reader"}), timeout=30)

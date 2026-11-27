@@ -203,15 +203,18 @@ def reap_group(pgid: int) -> None:
 
 def terminate_all() -> None:
     """Tear down every tracked child (the owner's own deadline, or a SIGTERM from its parent): a child in a
-    group of its own by that group, a child in the caller's group by its pid."""
+    group of its own by that group — also when its leader has already exited and the group still holds a
+    member (a runner that is still in its cleanup) — a child in the caller's group by its pid."""
     with _lock:
         procs = [(proc, proc.pid in _own_group) for proc in _children.values()]
     for proc, own in procs:
-        if proc.poll() is None:
-            if own:
+        if own:
+            if proc.poll() is None:
                 kill_pid(proc)
-            else:
-                kill_group(proc)
+        elif proc.poll() is None:
+            kill_group(proc)
+        else:
+            reap_group(proc.pid)
         with _lock:
             _children.pop(proc.pid, None)
             _own_group.discard(proc.pid)
@@ -419,6 +422,10 @@ def run_bounded(argv, *, timeout=None, deadline: Optional[Deadline] = None, stdi
     timed_out = False
     capped = None
     ended_by_runner = False
+    members_left = False
+    # the child stays tracked until the cleanup below has finished — the drains joined, its group checked and
+    # emptied: a SIGTERM to the caller in that interval (terminate_all) must still find it and tear down its group,
+    # whose leader may already have exited
     try:
         while True:
             if over.is_set():
@@ -444,25 +451,24 @@ def run_bounded(argv, *, timeout=None, deadline: Optional[Deadline] = None, stdi
                 kill_group(proc)
         elif over.is_set() and capped is None:
             capped = "stdout" if out.passed else "stderr"   # the child ended in the same instant its stream passed the cap
+        # the pipes close when the child and whoever inherited them are gone; a survivor that holds one open must
+        # not hold the runner: the threads are daemons and are given a bounded time to finish
+        out.join(KILL_GRACE)
+        err.join(KILL_GRACE)
+        if capped is None and over.is_set():
+            capped = "stdout" if out.passed else "stderr"
+        if check_group and not own_group:
+            pgid = proc.pid
+            settle = time.monotonic() + GROUP_SETTLE
+            while _group_alive(pgid) and time.monotonic() < settle:
+                time.sleep(0.02)
+            if _group_alive(pgid):
+                members_left = not ended_by_runner
+                reap_group(pgid)
     finally:
         with _lock:
             _children.pop(proc.pid, None)
             _own_group.discard(proc.pid)
-    # the pipes close when the child and whoever inherited them are gone; a survivor that holds one open must
-    # not hold the runner: the threads are daemons and are given a bounded time to finish
-    out.join(KILL_GRACE)
-    err.join(KILL_GRACE)
-    if capped is None and over.is_set():
-        capped = "stdout" if out.passed else "stderr"
-    members_left = False
-    if check_group and not own_group:
-        pgid = proc.pid
-        settle = time.monotonic() + GROUP_SETTLE
-        while _group_alive(pgid) and time.monotonic() < settle:
-            time.sleep(0.02)
-        if _group_alive(pgid):
-            members_left = not ended_by_runner
-            reap_group(pgid)
     for thread in (out, err):
         if thread.is_alive():
             continue    # a survivor holds the pipe: the thread still reads it, and a closed descriptor could be reused
