@@ -2360,9 +2360,15 @@ cap_image_notes() {   # <revision>
     rj="$(cap_receipt_get "$cid" '.capture_report.text | select(type == "object" and .schema == "mnemon-capture-image/1" and (.comparison | type) == "object") | tojson' 2>/dev/null || true)"
   fi
   if [[ -n "$rj" ]]; then
+    # a stored number is listed as it stands — the comparison counts a number by \d, which holds every Unicode
+    # decimal digit (Arabic-Indic, fullwidth) — less its control characters (C0, DEL, C1) and its whitespace
+    # (the code points str.isspace names), so the NOTE stays one line of the image's own characters
     { IFS= read -r words; IFS= read -r numbers; IFS= read -r list; IFS= read -r more; } <<< "$(printf '%s' "$rj" | jq -r '
+        def shown: explode | map(select(. > 32 and . != 127 and (. < 128 or . > 160) and . != 5760
+                                        and (. < 8192 or . > 8202) and . != 8232 and . != 8233 and . != 8239
+                                        and . != 8287 and . != 12288)) | implode;
         (.comparison.unconfirmed_words // 0), (.comparison.unconfirmed_numbers // 0),
-        ((.comparison.unconfirmed.numbers // []) | map(tostring | gsub("[^0-9.,]"; "")) | .[0:20] | join(" ")),
+        ((.comparison.unconfirmed.numbers // []) | map(tostring | shown) | map(select(length > 0)) | .[0:20] | join(" ")),
         (if (.comparison.unconfirmed_numbers // 0) > 20 then "yes" else "" end)')"
   else
     words="$(cap_py nested "$f" capture unconfirmed_words)"

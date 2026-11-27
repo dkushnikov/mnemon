@@ -604,6 +604,22 @@ jq '.done.comparison.unconfirmed_numbers = 25 | .done.comparison.unconfirmed.num
 FAKE_FIXTURE="$TEST_TMPDIR/image-25.json" fake f-25 0 done yes
 assert_contains "$err" "NOTE: unconfirmed numbers: $(jq -rn '[range(101; 121) | tostring] | join(" ")') … (the first twenty of 25)" "25 unconfirmed numbers: the NOTE lists the first twenty"
 assert_not_contains "$err" "121" "...and no more"
+# a stored number keeps every character but control characters and whitespace: the comparison counts a number by
+# \d, so Unicode decimal digits (Arabic-Indic, fullwidth) are numbers and are listed as they stand (§21.10)
+python3 - "$REPORTS/image.json" "$TEST_TMPDIR/image-unicode.json" <<'PY'
+import json, sys
+rep = json.load(open(sys.argv[1], encoding="utf-8"))
+nums = [chr(0x661) + chr(0x662) + chr(0x663), chr(0xFF14) + chr(0xFF15) + chr(0xFF16),
+        "7" + chr(0x1F) + "8", "9" + chr(0x20) + "0" + chr(0x3000) + chr(0x0A)]
+rep["done"]["comparison"]["unconfirmed_numbers"] = len(nums)
+rep["done"]["comparison"]["unconfirmed"]["numbers"] = nums
+with open(sys.argv[2], "w", encoding="utf-8") as fh:
+    json.dump(rep, fh, ensure_ascii=True)
+PY
+want="$(python3 -c 'print(" ".join([chr(0x661) + chr(0x662) + chr(0x663), chr(0xFF14) + chr(0xFF15) + chr(0xFF16), "78", "90"]))')"
+FAKE_FIXTURE="$TEST_TMPDIR/image-unicode.json" fake f-uni 0 done yes
+assert_eq "$rc" "0" "a report with Unicode digits among the unconfirmed numbers: published"
+assert_eq "$(printf '%s\n' "$err" | grep '^NOTE: unconfirmed numbers:')" "NOTE: unconfirmed numbers: $want" "...the NOTE lists the Arabic-Indic and the fullwidth number; a control character, spaces and a line end are dropped"
 fake f-notext 0 done no
 assert_eq "$rc $(result error_class) $(result retryable) $(rget f-notext '.stage')" "1 convert true worker" "exit 0 with a right report and no capture.md: the worker's fault — convert, retryable, stage worker"
 assert_eq "$(rget f-notext '.source_published') $(rget f-notext '.text_sha256')" "false null" "...nothing published, no text hash taken"
