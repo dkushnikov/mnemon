@@ -23,8 +23,9 @@ A wrong argv, a wrong message or an unknown mode → exit 97 with one line on st
 
 Modes: ok · other-text · empty · whitespace · control-chars · nul · surrogate · no-result · no-structured ·
 text-not-string · error · auth · budget · max-turns · no-init · init-no-tools · tool-in-init · mcp-in-init ·
-denial · stdout-flood · hang · hang-child. `ok` returns the text of `stub-text.txt`, `other-text` the text of
-`stub-text-other.txt` (both in this directory), inside the recorded success stream with its text replaced.
+denial · stdout-flood · hang · hang-child · one-char. `ok` returns the text of `stub-text.txt`, `other-text` the
+text of `stub-text-other.txt` (both in this directory), `one-char` the one visible character `x`, inside the
+recorded success stream with its text replaced.
 Stdlib only, python 3.9.
 """
 from __future__ import annotations
@@ -205,6 +206,8 @@ def stream(mode: str):
         return with_text(success, stub_text("stub-text-other.txt")), 0, ""
     if mode == "empty":
         return with_text(success, ""), 0, ""
+    if mode == "one-char":
+        return with_text(success, "x"), 0, ""
     if mode == "whitespace":
         return with_text(success, "  \f   　 ﻿  "), 0, ""
     if mode == "control-chars":
@@ -277,7 +280,7 @@ def write_facts(args, media: str, raw: bytes, child_pid=None) -> None:
 
 MODES = ("ok", "other-text", "empty", "whitespace", "control-chars", "nul", "surrogate", "no-result", "no-structured",
          "text-not-string", "error", "auth", "budget", "max-turns", "no-init", "init-no-tools", "tool-in-init",
-         "mcp-in-init", "denial", "stdout-flood", "hang", "hang-child")
+         "mcp-in-init", "denial", "stdout-flood", "hang", "hang-child", "one-char")
 
 
 def main() -> int:

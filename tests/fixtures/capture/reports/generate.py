@@ -5,7 +5,7 @@
     python3 tests/fixtures/capture/reports/generate.py        # rewrites the JSON files next to this script
 
 One example per schema, including the failure and null shapes. These are the frozen seam contracts between the
-capture layer (producers: capture-fetch.py, capture-text.py, capture-site.py, media-extract.py) and the gateway
+capture layer (producers: capture-fetch.py, capture-text.py, capture-site.py, media-extract.py, capture-image.py) and the gateway
 (consumer): every producer's tests validate its real output against the fixture's key set, every consumer's
 tests read the fixture, and the integrator diffs real outputs against these files. Edit this generator, never
 the JSON files; the hygiene suite checks the committed files equal the generator's output. Stdlib only, 3.9.
@@ -305,6 +305,104 @@ MEDIA_ERROR_BLOCKED = {"schema": "mnemon-media-error/1", "error_class": "blocked
                        "error": "ERROR: [youtube] abc123xyz00: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication.",
                        "retryable": False}
 
+# --- mnemon-capture-image/1 (§21.7) and mnemon-ocr-probe/1 (§21.6): the image origin (A20) ---------------------
+# One report per stage the attempt can end at; every key is present in every report, null for what the attempt
+# did not learn. The producer (capture-image.py) validates its output against these key sets, and the gateway's
+# tests read them. `tessdata_dir` is a synthetic path.
+IMAGE_LIMITS = {"max_bytes": 7000000, "max_pixels": 50000000, "max_edge": 8000}
+IMAGE_VALIDATION = {"outcome": "ok", "reason": None, "detected": "png", "format": "png", "input_extension": "png",
+                    "extension_matches": True, "width": 1320, "height": 2868, "pixels": 3785760, "bytes": 1306624,
+                    "orientation": 1, "trailing_bytes": 0, "limits": IMAGE_LIMITS}
+IMAGE_OPTIONS = {"oem": "default", "psm": "3", "variables": {"tessedit_create_tsv": "1", "tessedit_create_txt": "1"}}
+IMAGE_WITNESS_REQUEST = {"adapter": "ocr-tesseract/1", "backend": "tesseract", "version": None, "detail": None,
+                         "tessdata_dir": None, "languages": "eng", "data": None, "options": IMAGE_OPTIONS, "missing": None,
+                         "text_sha256": None, "words": None, "confidence": None}
+IMAGE_WITNESS_PROBED = dict(IMAGE_WITNESS_REQUEST, version="5.5.4", detail="leptonica-1.87.0",
+                            tessdata_dir="/opt/tessdata", data=[["eng", sha("eng.traineddata")]], missing=[])
+IMAGE_WITNESS = dict(IMAGE_WITNESS_PROBED, text_sha256=sha("witness text"), words=255,
+                     confidence={"unit": "tesseract-word-0-100", "mean": 91.4, "min": 0.0, "items": 255})
+IMAGE_EXECUTION = sha("witness execution")
+IMAGE_READER_REQUEST = {"adapter": "image-reader/1", "claude_code": None, "model": "haiku", "model_id": None,
+                        "effort": "high", "max_usd": 0.05, "cost_usd": None, "duration_ms": None, "turns": None,
+                        "output_tokens": None, "thinking_tokens": None, "text_sha256": None}
+IMAGE_READER = dict(IMAGE_READER_REQUEST, claude_code="2.1.328", model_id="claude-haiku-5-5", cost_usd=0.0021,
+                    duration_ms=11800, turns=2, output_tokens=2610, thinking_tokens=1940, text_sha256=sha("reading"))
+IMAGE_COMPARISON = {"rule": "mnemon-read-compare/1", "verdict": "agree", "floor": {"min_share": 90.0, "allowance": 20},
+                    "witness_words": 194, "found": 186, "missing": 8, "share": 95.9, "reading_words": 187,
+                    "unconfirmed_words": 1, "reading_numbers": 9, "unconfirmed_numbers": 2, "hyphen_joined": 0,
+                    "unconfirmed": {"words": ["example"], "numbers": ["12", "3.4"], "truncated": False}}
+IMAGE_RESULT = {"lines": 31, "words": 235, "chars": 1410, "bytes": 1468}
+
+
+def image_report(stage, failure=None, **over) -> dict:
+    base = {"schema": "mnemon-capture-image/1", "stage": stage, "failure": failure, "method": None, "converter": None,
+            "completeness": None, "validation": IMAGE_VALIDATION, "witness": IMAGE_WITNESS, "execution": IMAGE_EXECUTION,
+            "reader": IMAGE_READER, "previous_text": None, "comparison": None, "result": None, "error": None,
+            "elapsed_ms": 13200}
+    base.update(over)
+    return base
+
+
+def image_failure(cls, reason, acquisition=None, retryable=False) -> dict:
+    return {"class": cls, "acquisition": acquisition, "reason": reason, "retryable": retryable}
+
+
+IMAGE_REPORTS = {
+    "done": image_report("done", method="read:claude-haiku-5-5", converter="image-reader", completeness="unknown",
+                         comparison=IMAGE_COMPARISON, result=IMAGE_RESULT),
+    "envelope": image_report(
+        "envelope", image_failure("unsupported", "orientation", "rotated"),
+        validation=dict(IMAGE_VALIDATION, outcome="rotated", reason="orientation", detected="jpeg", format="jpeg",
+                        input_extension="jpg", orientation=6),
+        witness=IMAGE_WITNESS_REQUEST, execution=None, reader=IMAGE_READER_REQUEST,
+        error="the image envelope is rotated (orientation)"),
+    "probe": image_report(
+        "probe", image_failure("environment", "model-missing", retryable=True),
+        witness=dict(IMAGE_WITNESS_PROBED, languages="rus+eng", data=None, missing=["lang:rus"]), execution=None,
+        reader=IMAGE_READER_REQUEST, error="the language model rus.traineddata is not in /opt/tessdata"),
+    "witness": image_report(
+        "witness", image_failure("unsupported", "recognizer-decode", "corrupt"),
+        witness=IMAGE_WITNESS_PROBED, reader=IMAGE_READER_REQUEST, error="libpng error: Read Error"),
+    "output": image_report(
+        "output", image_failure("convert", "output-encoding"),
+        witness=IMAGE_WITNESS_PROBED, reader=IMAGE_READER_REQUEST, error="out.txt is not valid UTF-8"),
+    "reader": image_report(
+        "reader", image_failure("convert", "reader-budget"),
+        reader=dict(IMAGE_READER, text_sha256=None), error="error_max_budget_usd"),
+    "text": image_report(
+        "text", image_failure("no-text", "zero-reading"),
+        reader=dict(IMAGE_READER, text_sha256=None), result={"lines": 0, "words": 0, "chars": 0, "bytes": 0},
+        error="the model read no text in the image (the local recognizer read 255 word(s))"),
+    "compare": image_report(
+        "compare", image_failure("reading-mismatch", "loss", "words-missing"),
+        comparison=dict(IMAGE_COMPARISON, verdict="loss", found=89, missing=105, share=45.9, reading_words=90,
+                        unconfirmed={"words": ["example"], "numbers": [], "truncated": False}, unconfirmed_numbers=0),
+        result=IMAGE_RESULT,
+        error="the reading lacks 105 of the 194 words the local recognizer read: 45.9 % found, the floor is 90 % and "
+              "20 words; witness languages eng, mean word confidence 91.4; the image is kept"),
+    "timeout": image_report(
+        "reader", image_failure("timeout", "deadline"), reader=IMAGE_READER_REQUEST,
+        error="the image worker exceeded image_timeout=120 s at stage reader (the worker and its process group were killed)"),
+    "worker": image_report(
+        "worker", image_failure("convert", "members-left", retryable=True), reader=IMAGE_READER_REQUEST,
+        error="the image worker failed (members-left): the worker ended and its process group still had a member"),
+}
+
+OCR_PROBE_OK = {"schema": "mnemon-ocr-probe/1", "ok": True, "adapter": "ocr-tesseract/1", "backend": "tesseract",
+                "version": "5.5.4", "detail": "leptonica-1.87.0", "tessdata_dir": "/opt/tessdata", "languages": "rus+eng",
+                "available": ["eng", "osd", "rus"], "present": ["rus", "eng"], "missing": [], "reason": None, "error": None}
+OCR_PROBES = {
+    "present": OCR_PROBE_OK,
+    "no-tesseract": dict(OCR_PROBE_OK, ok=False, version=None, detail=None, tessdata_dir=None, available=None, present=[],
+                         missing=["tesseract"], reason="no-tesseract", error="tesseract is not on PATH"),
+    "version-old": dict(OCR_PROBE_OK, ok=False, version="3.05", detail=None, tessdata_dir=None, available=None, present=[],
+                        missing=["version"], reason="version", error="tesseract 3.05 is older than 4"),
+    "model-missing": dict(OCR_PROBE_OK, ok=False, available=["eng", "osd"], present=["eng"], missing=["lang:rus"],
+                          reason="model-missing", error="the language model rus.traineddata is not in /opt/tessdata"),
+    "probe-timeout": dict(OCR_PROBE_OK, ok=False, version=None, detail=None, tessdata_dir=None, available=None, present=[],
+                          missing=["version"], reason="probe-timeout", error="tesseract --version exceeded 10 s"),
+}
+
 # --- receipts (§4.1, A3, A4): the request objects under their own schema ---------------------------------------
 def receipt(request: dict, **extra) -> dict:
     req_bytes = json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -393,6 +491,8 @@ FILES = {
     "media-bundle.json": MEDIA_BUNDLE,
     "media-error.json": MEDIA_ERROR,
     "media-error-blocked.json": MEDIA_ERROR_BLOCKED,
+    "image.json": IMAGE_REPORTS,
+    "ocr-probe.json": OCR_PROBES,
     "receipts/request-v1.json": RECEIPT_V1,
     "receipts/request-v2-page.json": RECEIPT_V2_PAGE,
     "receipts/request-v2-site-auto.json": RECEIPT_V2_SITE_AUTO,

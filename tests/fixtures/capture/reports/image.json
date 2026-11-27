@@ -1,0 +1,863 @@
+{
+ "done": {
+  "schema": "mnemon-capture-image/1",
+  "stage": "done",
+  "failure": null,
+  "method": "read:claude-haiku-5-5",
+  "converter": "image-reader",
+  "completeness": "unknown",
+  "validation": {
+   "outcome": "ok",
+   "reason": null,
+   "detected": "png",
+   "format": "png",
+   "input_extension": "png",
+   "extension_matches": true,
+   "width": 1320,
+   "height": 2868,
+   "pixels": 3785760,
+   "bytes": 1306624,
+   "orientation": 1,
+   "trailing_bytes": 0,
+   "limits": {
+    "max_bytes": 7000000,
+    "max_pixels": 50000000,
+    "max_edge": 8000
+   }
+  },
+  "witness": {
+   "adapter": "ocr-tesseract/1",
+   "backend": "tesseract",
+   "version": "5.5.4",
+   "detail": "leptonica-1.87.0",
+   "tessdata_dir": "/opt/tessdata",
+   "languages": "eng",
+   "data": [
+    [
+     "eng",
+     "f74ce87b9feb3a67bbbbfb569698286c7dc2f869482e074d555ae22b1d88f4b6"
+    ]
+   ],
+   "options": {
+    "oem": "default",
+    "psm": "3",
+    "variables": {
+     "tessedit_create_tsv": "1",
+     "tessedit_create_txt": "1"
+    }
+   },
+   "missing": [],
+   "text_sha256": "c55787267a1e41311a8c160606bc077ecaa24cea9f88ac67b87e30e0509962c2",
+   "words": 255,
+   "confidence": {
+    "unit": "tesseract-word-0-100",
+    "mean": 91.4,
+    "min": 0.0,
+    "items": 255
+   }
+  },
+  "execution": "7d7190fb3c795be02192f72dd439b10a0b06d27b2d0610b8db161500329230aa",
+  "reader": {
+   "adapter": "image-reader/1",
+   "claude_code": "2.1.328",
+   "model": "haiku",
+   "model_id": "claude-haiku-5-5",
+   "effort": "high",
+   "max_usd": 0.05,
+   "cost_usd": 0.0021,
+   "duration_ms": 11800,
+   "turns": 2,
+   "output_tokens": 2610,
+   "thinking_tokens": 1940,
+   "text_sha256": "d70afca615203838da3d858e60dda12f900e83e4a6fb03a63cfadb8576ca8985"
+  },
+  "previous_text": null,
+  "comparison": {
+   "rule": "mnemon-read-compare/1",
+   "verdict": "agree",
+   "floor": {
+    "min_share": 90.0,
+    "allowance": 20
+   },
+   "witness_words": 194,
+   "found": 186,
+   "missing": 8,
+   "share": 95.9,
+   "reading_words": 187,
+   "unconfirmed_words": 1,
+   "reading_numbers": 9,
+   "unconfirmed_numbers": 2,
+   "hyphen_joined": 0,
+   "unconfirmed": {
+    "words": [
+     "example"
+    ],
+    "numbers": [
+     "12",
+     "3.4"
+    ],
+    "truncated": false
+   }
+  },
+  "result": {
+   "lines": 31,
+   "words": 235,
+   "chars": 1410,
+   "bytes": 1468
+  },
+  "error": null,
+  "elapsed_ms": 13200
+ },
+ "envelope": {
+  "schema": "mnemon-capture-image/1",
+  "stage": "envelope",
+  "failure": {
+   "class": "unsupported",
+   "acquisition": "rotated",
+   "reason": "orientation",
+   "retryable": false
+  },
+  "method": null,
+  "converter": null,
+  "completeness": null,
+  "validation": {
+   "outcome": "rotated",
+   "reason": "orientation",
+   "detected": "jpeg",
+   "format": "jpeg",
+   "input_extension": "jpg",
+   "extension_matches": true,
+   "width": 1320,
+   "height": 2868,
+   "pixels": 3785760,
+   "bytes": 1306624,
+   "orientation": 6,
+   "trailing_bytes": 0,
+   "limits": {
+    "max_bytes": 7000000,
+    "max_pixels": 50000000,
+    "max_edge": 8000
+   }
+  },
+  "witness": {
+   "adapter": "ocr-tesseract/1",
+   "backend": "tesseract",
+   "version": null,
+   "detail": null,
+   "tessdata_dir": null,
+   "languages": "eng",
+   "data": null,
+   "options": {
+    "oem": "default",
+    "psm": "3",
+    "variables": {
+     "tessedit_create_tsv": "1",
+     "tessedit_create_txt": "1"
+    }
+   },
+   "missing": null,
+   "text_sha256": null,
+   "words": null,
+   "confidence": null
+  },
+  "execution": null,
+  "reader": {
+   "adapter": "image-reader/1",
+   "claude_code": null,
+   "model": "haiku",
+   "model_id": null,
+   "effort": "high",
+   "max_usd": 0.05,
+   "cost_usd": null,
+   "duration_ms": null,
+   "turns": null,
+   "output_tokens": null,
+   "thinking_tokens": null,
+   "text_sha256": null
+  },
+  "previous_text": null,
+  "comparison": null,
+  "result": null,
+  "error": "the image envelope is rotated (orientation)",
+  "elapsed_ms": 13200
+ },
+ "probe": {
+  "schema": "mnemon-capture-image/1",
+  "stage": "probe",
+  "failure": {
+   "class": "environment",
+   "acquisition": null,
+   "reason": "model-missing",
+   "retryable": true
+  },
+  "method": null,
+  "converter": null,
+  "completeness": null,
+  "validation": {
+   "outcome": "ok",
+   "reason": null,
+   "detected": "png",
+   "format": "png",
+   "input_extension": "png",
+   "extension_matches": true,
+   "width": 1320,
+   "height": 2868,
+   "pixels": 3785760,
+   "bytes": 1306624,
+   "orientation": 1,
+   "trailing_bytes": 0,
+   "limits": {
+    "max_bytes": 7000000,
+    "max_pixels": 50000000,
+    "max_edge": 8000
+   }
+  },
+  "witness": {
+   "adapter": "ocr-tesseract/1",
+   "backend": "tesseract",
+   "version": "5.5.4",
+   "detail": "leptonica-1.87.0",
+   "tessdata_dir": "/opt/tessdata",
+   "languages": "rus+eng",
+   "data": null,
+   "options": {
+    "oem": "default",
+    "psm": "3",
+    "variables": {
+     "tessedit_create_tsv": "1",
+     "tessedit_create_txt": "1"
+    }
+   },
+   "missing": [
+    "lang:rus"
+   ],
+   "text_sha256": null,
+   "words": null,
+   "confidence": null
+  },
+  "execution": null,
+  "reader": {
+   "adapter": "image-reader/1",
+   "claude_code": null,
+   "model": "haiku",
+   "model_id": null,
+   "effort": "high",
+   "max_usd": 0.05,
+   "cost_usd": null,
+   "duration_ms": null,
+   "turns": null,
+   "output_tokens": null,
+   "thinking_tokens": null,
+   "text_sha256": null
+  },
+  "previous_text": null,
+  "comparison": null,
+  "result": null,
+  "error": "the language model rus.traineddata is not in /opt/tessdata",
+  "elapsed_ms": 13200
+ },
+ "witness": {
+  "schema": "mnemon-capture-image/1",
+  "stage": "witness",
+  "failure": {
+   "class": "unsupported",
+   "acquisition": "corrupt",
+   "reason": "recognizer-decode",
+   "retryable": false
+  },
+  "method": null,
+  "converter": null,
+  "completeness": null,
+  "validation": {
+   "outcome": "ok",
+   "reason": null,
+   "detected": "png",
+   "format": "png",
+   "input_extension": "png",
+   "extension_matches": true,
+   "width": 1320,
+   "height": 2868,
+   "pixels": 3785760,
+   "bytes": 1306624,
+   "orientation": 1,
+   "trailing_bytes": 0,
+   "limits": {
+    "max_bytes": 7000000,
+    "max_pixels": 50000000,
+    "max_edge": 8000
+   }
+  },
+  "witness": {
+   "adapter": "ocr-tesseract/1",
+   "backend": "tesseract",
+   "version": "5.5.4",
+   "detail": "leptonica-1.87.0",
+   "tessdata_dir": "/opt/tessdata",
+   "languages": "eng",
+   "data": [
+    [
+     "eng",
+     "f74ce87b9feb3a67bbbbfb569698286c7dc2f869482e074d555ae22b1d88f4b6"
+    ]
+   ],
+   "options": {
+    "oem": "default",
+    "psm": "3",
+    "variables": {
+     "tessedit_create_tsv": "1",
+     "tessedit_create_txt": "1"
+    }
+   },
+   "missing": [],
+   "text_sha256": null,
+   "words": null,
+   "confidence": null
+  },
+  "execution": "7d7190fb3c795be02192f72dd439b10a0b06d27b2d0610b8db161500329230aa",
+  "reader": {
+   "adapter": "image-reader/1",
+   "claude_code": null,
+   "model": "haiku",
+   "model_id": null,
+   "effort": "high",
+   "max_usd": 0.05,
+   "cost_usd": null,
+   "duration_ms": null,
+   "turns": null,
+   "output_tokens": null,
+   "thinking_tokens": null,
+   "text_sha256": null
+  },
+  "previous_text": null,
+  "comparison": null,
+  "result": null,
+  "error": "libpng error: Read Error",
+  "elapsed_ms": 13200
+ },
+ "output": {
+  "schema": "mnemon-capture-image/1",
+  "stage": "output",
+  "failure": {
+   "class": "convert",
+   "acquisition": null,
+   "reason": "output-encoding",
+   "retryable": false
+  },
+  "method": null,
+  "converter": null,
+  "completeness": null,
+  "validation": {
+   "outcome": "ok",
+   "reason": null,
+   "detected": "png",
+   "format": "png",
+   "input_extension": "png",
+   "extension_matches": true,
+   "width": 1320,
+   "height": 2868,
+   "pixels": 3785760,
+   "bytes": 1306624,
+   "orientation": 1,
+   "trailing_bytes": 0,
+   "limits": {
+    "max_bytes": 7000000,
+    "max_pixels": 50000000,
+    "max_edge": 8000
+   }
+  },
+  "witness": {
+   "adapter": "ocr-tesseract/1",
+   "backend": "tesseract",
+   "version": "5.5.4",
+   "detail": "leptonica-1.87.0",
+   "tessdata_dir": "/opt/tessdata",
+   "languages": "eng",
+   "data": [
+    [
+     "eng",
+     "f74ce87b9feb3a67bbbbfb569698286c7dc2f869482e074d555ae22b1d88f4b6"
+    ]
+   ],
+   "options": {
+    "oem": "default",
+    "psm": "3",
+    "variables": {
+     "tessedit_create_tsv": "1",
+     "tessedit_create_txt": "1"
+    }
+   },
+   "missing": [],
+   "text_sha256": null,
+   "words": null,
+   "confidence": null
+  },
+  "execution": "7d7190fb3c795be02192f72dd439b10a0b06d27b2d0610b8db161500329230aa",
+  "reader": {
+   "adapter": "image-reader/1",
+   "claude_code": null,
+   "model": "haiku",
+   "model_id": null,
+   "effort": "high",
+   "max_usd": 0.05,
+   "cost_usd": null,
+   "duration_ms": null,
+   "turns": null,
+   "output_tokens": null,
+   "thinking_tokens": null,
+   "text_sha256": null
+  },
+  "previous_text": null,
+  "comparison": null,
+  "result": null,
+  "error": "out.txt is not valid UTF-8",
+  "elapsed_ms": 13200
+ },
+ "reader": {
+  "schema": "mnemon-capture-image/1",
+  "stage": "reader",
+  "failure": {
+   "class": "convert",
+   "acquisition": null,
+   "reason": "reader-budget",
+   "retryable": false
+  },
+  "method": null,
+  "converter": null,
+  "completeness": null,
+  "validation": {
+   "outcome": "ok",
+   "reason": null,
+   "detected": "png",
+   "format": "png",
+   "input_extension": "png",
+   "extension_matches": true,
+   "width": 1320,
+   "height": 2868,
+   "pixels": 3785760,
+   "bytes": 1306624,
+   "orientation": 1,
+   "trailing_bytes": 0,
+   "limits": {
+    "max_bytes": 7000000,
+    "max_pixels": 50000000,
+    "max_edge": 8000
+   }
+  },
+  "witness": {
+   "adapter": "ocr-tesseract/1",
+   "backend": "tesseract",
+   "version": "5.5.4",
+   "detail": "leptonica-1.87.0",
+   "tessdata_dir": "/opt/tessdata",
+   "languages": "eng",
+   "data": [
+    [
+     "eng",
+     "f74ce87b9feb3a67bbbbfb569698286c7dc2f869482e074d555ae22b1d88f4b6"
+    ]
+   ],
+   "options": {
+    "oem": "default",
+    "psm": "3",
+    "variables": {
+     "tessedit_create_tsv": "1",
+     "tessedit_create_txt": "1"
+    }
+   },
+   "missing": [],
+   "text_sha256": "c55787267a1e41311a8c160606bc077ecaa24cea9f88ac67b87e30e0509962c2",
+   "words": 255,
+   "confidence": {
+    "unit": "tesseract-word-0-100",
+    "mean": 91.4,
+    "min": 0.0,
+    "items": 255
+   }
+  },
+  "execution": "7d7190fb3c795be02192f72dd439b10a0b06d27b2d0610b8db161500329230aa",
+  "reader": {
+   "adapter": "image-reader/1",
+   "claude_code": "2.1.328",
+   "model": "haiku",
+   "model_id": "claude-haiku-5-5",
+   "effort": "high",
+   "max_usd": 0.05,
+   "cost_usd": 0.0021,
+   "duration_ms": 11800,
+   "turns": 2,
+   "output_tokens": 2610,
+   "thinking_tokens": 1940,
+   "text_sha256": null
+  },
+  "previous_text": null,
+  "comparison": null,
+  "result": null,
+  "error": "error_max_budget_usd",
+  "elapsed_ms": 13200
+ },
+ "text": {
+  "schema": "mnemon-capture-image/1",
+  "stage": "text",
+  "failure": {
+   "class": "no-text",
+   "acquisition": null,
+   "reason": "zero-reading",
+   "retryable": false
+  },
+  "method": null,
+  "converter": null,
+  "completeness": null,
+  "validation": {
+   "outcome": "ok",
+   "reason": null,
+   "detected": "png",
+   "format": "png",
+   "input_extension": "png",
+   "extension_matches": true,
+   "width": 1320,
+   "height": 2868,
+   "pixels": 3785760,
+   "bytes": 1306624,
+   "orientation": 1,
+   "trailing_bytes": 0,
+   "limits": {
+    "max_bytes": 7000000,
+    "max_pixels": 50000000,
+    "max_edge": 8000
+   }
+  },
+  "witness": {
+   "adapter": "ocr-tesseract/1",
+   "backend": "tesseract",
+   "version": "5.5.4",
+   "detail": "leptonica-1.87.0",
+   "tessdata_dir": "/opt/tessdata",
+   "languages": "eng",
+   "data": [
+    [
+     "eng",
+     "f74ce87b9feb3a67bbbbfb569698286c7dc2f869482e074d555ae22b1d88f4b6"
+    ]
+   ],
+   "options": {
+    "oem": "default",
+    "psm": "3",
+    "variables": {
+     "tessedit_create_tsv": "1",
+     "tessedit_create_txt": "1"
+    }
+   },
+   "missing": [],
+   "text_sha256": "c55787267a1e41311a8c160606bc077ecaa24cea9f88ac67b87e30e0509962c2",
+   "words": 255,
+   "confidence": {
+    "unit": "tesseract-word-0-100",
+    "mean": 91.4,
+    "min": 0.0,
+    "items": 255
+   }
+  },
+  "execution": "7d7190fb3c795be02192f72dd439b10a0b06d27b2d0610b8db161500329230aa",
+  "reader": {
+   "adapter": "image-reader/1",
+   "claude_code": "2.1.328",
+   "model": "haiku",
+   "model_id": "claude-haiku-5-5",
+   "effort": "high",
+   "max_usd": 0.05,
+   "cost_usd": 0.0021,
+   "duration_ms": 11800,
+   "turns": 2,
+   "output_tokens": 2610,
+   "thinking_tokens": 1940,
+   "text_sha256": null
+  },
+  "previous_text": null,
+  "comparison": null,
+  "result": {
+   "lines": 0,
+   "words": 0,
+   "chars": 0,
+   "bytes": 0
+  },
+  "error": "the model read no text in the image (the local recognizer read 255 word(s))",
+  "elapsed_ms": 13200
+ },
+ "compare": {
+  "schema": "mnemon-capture-image/1",
+  "stage": "compare",
+  "failure": {
+   "class": "reading-mismatch",
+   "acquisition": "words-missing",
+   "reason": "loss",
+   "retryable": false
+  },
+  "method": null,
+  "converter": null,
+  "completeness": null,
+  "validation": {
+   "outcome": "ok",
+   "reason": null,
+   "detected": "png",
+   "format": "png",
+   "input_extension": "png",
+   "extension_matches": true,
+   "width": 1320,
+   "height": 2868,
+   "pixels": 3785760,
+   "bytes": 1306624,
+   "orientation": 1,
+   "trailing_bytes": 0,
+   "limits": {
+    "max_bytes": 7000000,
+    "max_pixels": 50000000,
+    "max_edge": 8000
+   }
+  },
+  "witness": {
+   "adapter": "ocr-tesseract/1",
+   "backend": "tesseract",
+   "version": "5.5.4",
+   "detail": "leptonica-1.87.0",
+   "tessdata_dir": "/opt/tessdata",
+   "languages": "eng",
+   "data": [
+    [
+     "eng",
+     "f74ce87b9feb3a67bbbbfb569698286c7dc2f869482e074d555ae22b1d88f4b6"
+    ]
+   ],
+   "options": {
+    "oem": "default",
+    "psm": "3",
+    "variables": {
+     "tessedit_create_tsv": "1",
+     "tessedit_create_txt": "1"
+    }
+   },
+   "missing": [],
+   "text_sha256": "c55787267a1e41311a8c160606bc077ecaa24cea9f88ac67b87e30e0509962c2",
+   "words": 255,
+   "confidence": {
+    "unit": "tesseract-word-0-100",
+    "mean": 91.4,
+    "min": 0.0,
+    "items": 255
+   }
+  },
+  "execution": "7d7190fb3c795be02192f72dd439b10a0b06d27b2d0610b8db161500329230aa",
+  "reader": {
+   "adapter": "image-reader/1",
+   "claude_code": "2.1.328",
+   "model": "haiku",
+   "model_id": "claude-haiku-5-5",
+   "effort": "high",
+   "max_usd": 0.05,
+   "cost_usd": 0.0021,
+   "duration_ms": 11800,
+   "turns": 2,
+   "output_tokens": 2610,
+   "thinking_tokens": 1940,
+   "text_sha256": "d70afca615203838da3d858e60dda12f900e83e4a6fb03a63cfadb8576ca8985"
+  },
+  "previous_text": null,
+  "comparison": {
+   "rule": "mnemon-read-compare/1",
+   "verdict": "loss",
+   "floor": {
+    "min_share": 90.0,
+    "allowance": 20
+   },
+   "witness_words": 194,
+   "found": 89,
+   "missing": 105,
+   "share": 45.9,
+   "reading_words": 90,
+   "unconfirmed_words": 1,
+   "reading_numbers": 9,
+   "unconfirmed_numbers": 0,
+   "hyphen_joined": 0,
+   "unconfirmed": {
+    "words": [
+     "example"
+    ],
+    "numbers": [],
+    "truncated": false
+   }
+  },
+  "result": {
+   "lines": 31,
+   "words": 235,
+   "chars": 1410,
+   "bytes": 1468
+  },
+  "error": "the reading lacks 105 of the 194 words the local recognizer read: 45.9 % found, the floor is 90 % and 20 words; witness languages eng, mean word confidence 91.4; the image is kept",
+  "elapsed_ms": 13200
+ },
+ "timeout": {
+  "schema": "mnemon-capture-image/1",
+  "stage": "reader",
+  "failure": {
+   "class": "timeout",
+   "acquisition": null,
+   "reason": "deadline",
+   "retryable": false
+  },
+  "method": null,
+  "converter": null,
+  "completeness": null,
+  "validation": {
+   "outcome": "ok",
+   "reason": null,
+   "detected": "png",
+   "format": "png",
+   "input_extension": "png",
+   "extension_matches": true,
+   "width": 1320,
+   "height": 2868,
+   "pixels": 3785760,
+   "bytes": 1306624,
+   "orientation": 1,
+   "trailing_bytes": 0,
+   "limits": {
+    "max_bytes": 7000000,
+    "max_pixels": 50000000,
+    "max_edge": 8000
+   }
+  },
+  "witness": {
+   "adapter": "ocr-tesseract/1",
+   "backend": "tesseract",
+   "version": "5.5.4",
+   "detail": "leptonica-1.87.0",
+   "tessdata_dir": "/opt/tessdata",
+   "languages": "eng",
+   "data": [
+    [
+     "eng",
+     "f74ce87b9feb3a67bbbbfb569698286c7dc2f869482e074d555ae22b1d88f4b6"
+    ]
+   ],
+   "options": {
+    "oem": "default",
+    "psm": "3",
+    "variables": {
+     "tessedit_create_tsv": "1",
+     "tessedit_create_txt": "1"
+    }
+   },
+   "missing": [],
+   "text_sha256": "c55787267a1e41311a8c160606bc077ecaa24cea9f88ac67b87e30e0509962c2",
+   "words": 255,
+   "confidence": {
+    "unit": "tesseract-word-0-100",
+    "mean": 91.4,
+    "min": 0.0,
+    "items": 255
+   }
+  },
+  "execution": "7d7190fb3c795be02192f72dd439b10a0b06d27b2d0610b8db161500329230aa",
+  "reader": {
+   "adapter": "image-reader/1",
+   "claude_code": null,
+   "model": "haiku",
+   "model_id": null,
+   "effort": "high",
+   "max_usd": 0.05,
+   "cost_usd": null,
+   "duration_ms": null,
+   "turns": null,
+   "output_tokens": null,
+   "thinking_tokens": null,
+   "text_sha256": null
+  },
+  "previous_text": null,
+  "comparison": null,
+  "result": null,
+  "error": "the image worker exceeded image_timeout=120 s at stage reader (the worker and its process group were killed)",
+  "elapsed_ms": 13200
+ },
+ "worker": {
+  "schema": "mnemon-capture-image/1",
+  "stage": "worker",
+  "failure": {
+   "class": "convert",
+   "acquisition": null,
+   "reason": "members-left",
+   "retryable": true
+  },
+  "method": null,
+  "converter": null,
+  "completeness": null,
+  "validation": {
+   "outcome": "ok",
+   "reason": null,
+   "detected": "png",
+   "format": "png",
+   "input_extension": "png",
+   "extension_matches": true,
+   "width": 1320,
+   "height": 2868,
+   "pixels": 3785760,
+   "bytes": 1306624,
+   "orientation": 1,
+   "trailing_bytes": 0,
+   "limits": {
+    "max_bytes": 7000000,
+    "max_pixels": 50000000,
+    "max_edge": 8000
+   }
+  },
+  "witness": {
+   "adapter": "ocr-tesseract/1",
+   "backend": "tesseract",
+   "version": "5.5.4",
+   "detail": "leptonica-1.87.0",
+   "tessdata_dir": "/opt/tessdata",
+   "languages": "eng",
+   "data": [
+    [
+     "eng",
+     "f74ce87b9feb3a67bbbbfb569698286c7dc2f869482e074d555ae22b1d88f4b6"
+    ]
+   ],
+   "options": {
+    "oem": "default",
+    "psm": "3",
+    "variables": {
+     "tessedit_create_tsv": "1",
+     "tessedit_create_txt": "1"
+    }
+   },
+   "missing": [],
+   "text_sha256": "c55787267a1e41311a8c160606bc077ecaa24cea9f88ac67b87e30e0509962c2",
+   "words": 255,
+   "confidence": {
+    "unit": "tesseract-word-0-100",
+    "mean": 91.4,
+    "min": 0.0,
+    "items": 255
+   }
+  },
+  "execution": "7d7190fb3c795be02192f72dd439b10a0b06d27b2d0610b8db161500329230aa",
+  "reader": {
+   "adapter": "image-reader/1",
+   "claude_code": null,
+   "model": "haiku",
+   "model_id": null,
+   "effort": "high",
+   "max_usd": 0.05,
+   "cost_usd": null,
+   "duration_ms": null,
+   "turns": null,
+   "output_tokens": null,
+   "thinking_tokens": null,
+   "text_sha256": null
+  },
+  "previous_text": null,
+  "comparison": null,
+  "result": null,
+  "error": "the image worker failed (members-left): the worker ended and its process group still had a member",
+  "elapsed_ms": 13200
+ }
+}
