@@ -9,7 +9,9 @@ FAIL=0
 # could inherit from the shell that runs it are cleared before the suite starts (capture layer
 # §7.16) — a stray MNEMON_POLICY_ALLOW_LOOPBACK or FIRECRAWL_API_KEY in the environment must never
 # change what a suite proves. Every suite inherits this by sourcing the helper; a suite that needs a
-# hook sets it itself, after this.
+# hook sets it itself, after this. TESSDATA_PREFIX is cleared too: the witness's probe prefers it to the
+# stub tesseract's model directory (capture layer §21.3), so an inherited one would make a suite read
+# the machine's language models; a test that needs it sets it itself.
 scrub_test_env() {
   unset MNEMON_TEST_HOOKS MNEMON_TEST_CRASH_AT MNEMON_TEST_RAW_LOSS_AT MNEMON_TEST_RAW_LOSS MNEMON_POLICY_ALLOW_LOOPBACK MNEMON_FETCH_URL_REWRITE \
         MNEMON_EXTERNAL_FETCH_CMD MNEMON_TEST_CONVERT_HANG MNEMON_TEST_WORKER_START_DELAY MNEMON_TEST_WORKER_START_FILE MNEMON_TEST_MAP_HANG MNEMON_TEST_SITE_PACE_S MNEMON_CAPTURE_FETCH_CMD MNEMON_CAPTURE_SITE_CMD MNEMON_CAPTURE_TEXT_CMD MNEMON_CAPTURE_CAPTIONS_CMD MNEMON_DEPTH_FOLD_CMD \
@@ -17,6 +19,7 @@ scrub_test_env() {
         MNEMON_TEST_DOCTOR_STALL MNEMON_TEST_DOCTOR_STALL_INIT MNEMON_TEST_DOCTOR_PIDFILE MNEMON_TEST_DOCTOR_RAISE MNEMON_TEST_DOCTOR_TODAY \
         OCR_CMD MNEMON_TEST_TESSERACT_MODE MNEMON_TEST_READER_MODE MNEMON_TEST_IMAGE_WORKER_CRASH MNEMON_TEST_IMAGE_ENVELOPE_HANG \
         MNEMON_TEST_TESSERACT_CALLS MNEMON_TEST_TESSDATA_DIR MNEMON_TEST_READER_CALLS MNEMON_TEST_READER_FACTS \
+        TESSDATA_PREFIX \
         MNEMON_TEST_IMAGE_SWAP_INPUT MNEMON_TEST_REPORT_FREEZE_FAIL \
         FIRECRAWL_API_KEY JINA_API_KEY HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY
 }

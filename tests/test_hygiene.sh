@@ -181,4 +181,10 @@ else
 fi
 rm -rf "$GEN_TMP"
 
+# --- the shared test environment: what the witness reads from the environment never reaches a suite
+#     (capture layer §21.13) — the probe prefers an inherited TESSDATA_PREFIX to the stub's model directory
+echo "--- the shared test environment ---"
+kept="$(TESSDATA_PREFIX=/nonexistent-tessdata bash -c 'source "$1"; printf "%s" "${TESSDATA_PREFIX+kept}"' _ "$MNEMON_ROOT/tests/test-helper.sh" 2>&1)"
+assert_eq "$kept" "" "tests/test-helper.sh clears an inherited TESSDATA_PREFIX"
+
 summary

@@ -40,6 +40,7 @@ unset STUB_FIXTURE_PART STUB_FIXTURE_PART_BAD STUB_PART_BAD_CALLS STUB_FAIL_CALL
 # the suites that capture images unset it for those sections
 unset OCR_CMD MNEMON_TEST_TESSERACT_MODE MNEMON_TEST_READER_MODE MNEMON_TEST_IMAGE_WORKER_CRASH MNEMON_TEST_IMAGE_ENVELOPE_HANG
 unset MNEMON_TEST_TESSERACT_CALLS MNEMON_TEST_TESSDATA_DIR MNEMON_TEST_READER_CALLS MNEMON_TEST_READER_FACTS MNEMON_TEST_IMAGE_SWAP_INPUT MNEMON_TEST_REPORT_FREEZE_FAIL
+unset TESSDATA_PREFIX   # the probe prefers it to the stub tesseract's model directory (capture layer §21.3)
 echo "toolchain: bash $BASH_VERSION · $(python3 --version 2>&1)"   # the running bash, never the PATH-resolved one (G30)
 # the legacy run (PATH=/usr/bin:/bin:$PATH, §7.16 / A12): when the system bash is first on PATH
 # the suite must really be running bash 3.2 and python 3.9 — asserted, not assumed
