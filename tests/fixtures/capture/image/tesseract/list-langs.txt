@@ -1,0 +1,3 @@
+List of available languages in "/opt/homebrew/share/tessdata/" (2):
+eng
+osd

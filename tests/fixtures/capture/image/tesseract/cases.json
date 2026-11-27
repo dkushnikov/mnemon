@@ -1,0 +1,23 @@
+{
+ "tool": {"version": "5.5.4", "detail": "leptonica-1.87.0", "build": "Homebrew, macOS, arm64"},
+ "recorded": "2026-11-27",
+ "cases": {
+  "version": {"argv": ["--version"], "exit": 0, "stdout": "version.txt", "stderr": null},
+  "list-langs": {"argv": ["--list-langs"], "exit": 0, "stdout": "list-langs.txt", "stderr": null},
+  "run": {"argv": ["quote-short.jpg", "scratch/out", "--tessdata-dir", "/opt/homebrew/share/tessdata", "-l", "eng",
+                   "--psm", "3", "-c", "tessedit_create_txt=1", "-c", "tessedit_create_tsv=1"],
+          "languages": "eng", "exit": 0, "stderr": "run.stderr", "outputs": ["out.txt", "out.tsv"]},
+  "too-large": {"argv": ["wide.png", "scratch/wide", "--tessdata-dir", "/opt/homebrew/share/tessdata", "-l", "eng",
+                         "--psm", "3", "-c", "tessedit_create_txt=1", "-c", "tessedit_create_tsv=1"],
+                "languages": "eng", "exit": 1, "stderr": "too-large.stderr"},
+  "decode": {"argv": ["idat-broken.png", "scratch/broken", "--tessdata-dir", "/opt/homebrew/share/tessdata", "-l", "eng",
+                      "--psm", "3", "-c", "tessedit_create_txt=1", "-c", "tessedit_create_tsv=1"],
+             "languages": "eng", "exit": 1, "stderr": "decode.stderr"},
+  "partial-lang": {"argv": ["quote-short.jpg", "scratch/partial", "--tessdata-dir", "tessdata", "-l", "rus+eng",
+                            "--psm", "3", "-c", "tessedit_create_txt=1", "-c", "tessedit_create_tsv=1"],
+                   "languages": "rus+eng", "exit": 0, "stderr": "partial-lang.stderr"},
+  "no-lang": {"argv": ["quote-short.jpg", "scratch/nolang", "--tessdata-dir", "tessdata", "-l", "rus",
+                       "--psm", "3", "-c", "tessedit_create_txt=1", "-c", "tessedit_create_tsv=1"],
+              "languages": "rus", "exit": 1, "stderr": "no-lang.stderr"}
+ }
+}
