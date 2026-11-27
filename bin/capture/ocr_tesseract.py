@@ -15,8 +15,11 @@ never published; its word confidence is a diagnostic. Every command runs through
 - `execution_key`: sha256 of the canonical JSON of §21.3.
 - `normalize`: `mnemon-ocr-text/1`, the line-ending and whitespace steps of §21.6 «Normalization».
 
-A command cut by the deadline classifies nothing: the result carries `deadline_hit` and the worker exits 124
-without a report (§21.6 «Bounded reads»). Stdlib only, python 3.9.
+tesseract runs in the scratch dir, so every path of its argv is absolute: the command, the language model
+directory (made absolute where the probe takes it) and the raw and the scratch dir (made absolute where
+`recognize` takes them), each resolved against the caller's working directory; an absolute path is kept as
+given. A command cut by the deadline classifies nothing: the result carries `deadline_hit` and the worker
+exits 124 without a report (§21.6 «Bounded reads»). Stdlib only, python 3.9.
 """
 from __future__ import annotations
 
@@ -123,15 +126,24 @@ def parse_languages(sequence: str) -> List[str]:
 
 def resolve() -> Optional[str]:
     """The witness's executable: `OCR_CMD` under the test hooks (an absolute path to an executable file; an
-    empty value counts as unset), else `tesseract` on PATH. None when there is none. Without the hooks a set
-    `OCR_CMD` is ignored and named on stderr (§3.2's rule for test hooks)."""
+    empty value counts as unset), else `tesseract` on PATH, made absolute when a relative PATH entry found it.
+    None when there is none. Without the hooks a set `OCR_CMD` is ignored and named on stderr (§3.2's rule for
+    test hooks)."""
     policy.warn_ignored_hooks()
     cmd = policy.hook("OCR_CMD")
     if cmd is not None:
         if os.path.isabs(cmd) and os.path.isfile(cmd) and os.access(cmd, os.X_OK):
             return cmd
         return None
-    return shutil.which("tesseract")
+    found = shutil.which("tesseract")
+    return _absolute(found) if found else None     # a relative PATH entry gives a relative path
+
+
+def _absolute(path: str) -> str:
+    """A path for tesseract's argv: an absolute one exactly as given, a relative one resolved against this
+    process's working directory. The run starts tesseract in the scratch dir, where a relative path the probe
+    or the envelope check resolved here would name another file."""
+    return path if os.path.isabs(path) else os.path.abspath(path)
 
 
 def normalize(text: str) -> str:
@@ -318,7 +330,7 @@ def probe(languages: str, *, deadline, hash_models: bool = True) -> Probe:
         result.available = listed
     prefix = os.environ.get("TESSDATA_PREFIX")
     if prefix:
-        result.tessdata_dir = _strip_slash(prefix)
+        result.tessdata_dir = _absolute(_strip_slash(prefix))
     elif res.rc != 0 or listed_dir is None:
         result.reason = "model-directory"
         result.missing = ["model-directory"]
@@ -329,7 +341,7 @@ def probe(languages: str, *, deadline, hash_models: bool = True) -> Probe:
             result.error = "tesseract --list-langs names no language model directory and TESSDATA_PREFIX is unset"
         return result
     else:
-        result.tessdata_dir = listed_dir
+        result.tessdata_dir = _absolute(listed_dir)    # the header of a `--list-langs` run in this directory
 
     missing, unreadable, present = [], [], []
     for code in codes:
@@ -517,11 +529,14 @@ def recognize(raw_path: str, scratch_dir: str, p: Probe, languages: str, *, dead
               on_stage: Optional[Callable[[str], None]] = None) -> Witness:
     """The run of §21.3 on the raw image, after a successful probe. The outputs land in `scratch_dir`
     (`out.txt`, `out.tsv`). The witness text is `out.txt` decoded and normalized (`mnemon-ocr-text/1`).
+    tesseract runs with `scratch_dir` as its working directory, so a relative `raw_path` or `scratch_dir` is
+    first resolved against the caller's; an absolute one reaches the argv as given.
     `on_stage`, when given, is called once with "output" after the run passed its model-load and exit checks
     and before the output files are looked at: the worker's stage transition of §21.6."""
     if not p.ok or not p.command or not p.tessdata_dir:
         raise ValueError("recognize needs a successful probe")
     codes = parse_languages(languages)
+    raw_path, scratch_dir = _absolute(raw_path), _absolute(scratch_dir)     # tesseract runs in scratch_dir
     argv = argv_for(p.command, raw_path, scratch_dir, p.tessdata_dir, languages)
     res = proc.run_bounded(argv, deadline=deadline, own_group=True, cwd=scratch_dir,
                            max_stdout=STREAM_MAX, max_stderr=STREAM_MAX)

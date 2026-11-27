@@ -10,7 +10,11 @@ unset it fails as the real tool does when it finds no language model directory.
 
 The run honours the argv of §21.3: it writes `<outbase>.txt` only under `-c tessedit_create_txt=1` and
 `<outbase>.tsv` only under `-c tessedit_create_tsv=1`, and it fails loudly (exit 64) on an argv that names a
-configuration file (`txt`, `tsv`) or an option it does not know. It reads no image.
+configuration file (`txt`, `tsv`) or an option it does not know. It reads no image, but like tesseract 5.5.4
+(measured by hand, 2026-11-27) it resolves the image, `--tessdata-dir` and `<outbase>` against its own working
+directory, before any mode: a language model that is not a file there fails to load and the run goes on with the
+others (none loaded: exit 1); an image that is not a file there is exit 1, `Error, cannot read input file`; an
+output file it cannot create is a message, and the run exits 0.
 
 Modes, by `MNEMON_TEST_TESSERACT_MODE` (unset or empty: `ok`):
   ok            `stub-text.txt` (this directory) as `out.txt`, and a matching twelve-column `out.tsv`
@@ -171,10 +175,34 @@ def write(path: str, data: bytes) -> None:
 
 
 def write_outputs(outbase: str, variables: dict, text_bytes: bytes, tsv: str) -> None:
-    if variables.get("tessedit_create_txt") == "1":
-        write(outbase + ".txt", text_bytes)
+    """As tesseract 5.5.4 does: an output file it cannot create is a message, and the run still exits 0."""
     if variables.get("tessedit_create_tsv") == "1" and MODE != "no-tsv":
-        write(outbase + ".tsv", tsv.encode("utf-8"))
+        try:
+            write(outbase + ".tsv", tsv.encode("utf-8"))
+        except OSError as exc:
+            say(sys.stderr, "Error, could not create TSV output file: %s\n" % exc.strerror)
+    if variables.get("tessedit_create_txt") == "1":
+        try:
+            write(outbase + ".txt", text_bytes)
+        except OSError as exc:
+            say(sys.stderr, "Error, could not create TXT output file: %s\n" % exc.strerror)
+
+
+def load_languages(tessdata: str, languages: str) -> None:
+    """As tesseract 5.5.4 does, from its own working directory: each language of `-l` is
+    `<tessdata-dir>/<code>.traineddata`; one that is not a file fails to load and the run goes on with the
+    others; when none loads the run ends with exit 1 (capture layer §21.3, measured)."""
+    loaded = 0
+    for code in languages.split("+"):
+        path = os.path.join(tessdata, code + ".traineddata")
+        if os.path.isfile(path):
+            loaded += 1
+            continue
+        say(sys.stderr, "Error opening data file %s\nPlease make sure the TESSDATA_PREFIX environment variable is "
+                        "set to your \"tessdata\" directory.\nFailed loading language '%s'\n" % (path, code))
+    if loaded == 0:
+        say(sys.stderr, "Tesseract couldn't load any languages!\nCould not initialize tesseract.\n")
+        sys.exit(1)
 
 
 def version() -> None:
@@ -209,7 +237,7 @@ def run(args: list) -> None:
     if len(args) < 2:
         die("usage: stub-tesseract <image> <outbase> [options]", 1)
     outbase = args[1]
-    variables, configs, tessdata = {}, [], "."
+    variables, configs, tessdata, languages = {}, [], ".", "eng"
     i = 2
     while i < len(args):
         arg = args[i]
@@ -223,6 +251,8 @@ def run(args: list) -> None:
                 variables[name] = value
             elif arg == "--tessdata-dir":
                 tessdata = args[i + 1]
+            elif arg == "-l":
+                languages = args[i + 1]
             i += 2
         elif arg.startswith("-"):
             die("unknown option %s" % arg)
@@ -231,6 +261,10 @@ def run(args: list) -> None:
             i += 1
     if configs:
         die("the argv names a configuration file: %s" % " ".join(configs))
+    load_languages(tessdata, languages)
+    if not os.path.isfile(args[0]):
+        say(sys.stderr, "Error, cannot read input file %s: No such file or directory\nError during processing.\n" % args[0])
+        sys.exit(1)
 
     if MODE == "hang":
         time.sleep(SLEEP)
@@ -270,8 +304,11 @@ def run(args: list) -> None:
         write_outputs(outbase, variables, b"Field notes \xff\xfe on a \xc3\x28 small machine\n", tsv_of("Field notes"))
     elif MODE == "big-out":
         if variables.get("tessedit_create_txt") == "1":
-            with open(outbase + ".txt", "wb") as fh:
-                fh.truncate(OUTPUT_MAX + 1)
+            try:
+                with open(outbase + ".txt", "wb") as fh:
+                    fh.truncate(OUTPUT_MAX + 1)
+            except OSError as exc:
+                say(sys.stderr, "Error, could not create TXT output file: %s\n" % exc.strerror)
         write_outputs(outbase, dict(variables, tessedit_create_txt="0"), b"", tsv_of(text))
     elif MODE == "bad-tsv":
         write_outputs(outbase, variables, text.encode("utf-8"), HEADER + "\n5\t1\tnot-a-row\n")

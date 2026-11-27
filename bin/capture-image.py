@@ -498,7 +498,17 @@ def parse(argv):
         raise Usage("--previous-text takes a sha256 in lowercase hex")
     if args.timeout is None:
         args.timeout = DEFAULTS["timeout"]
+    # tesseract runs in the witness's scratch dir and the reader's `claude` in the attempt dir: a path relative
+    # to the caller's working directory is made absolute here, once, for the supervisor and the worker alike
+    # (the worker inherits that directory). An absolute path stays as given; a bare command name stays a name.
+    args.raw, args.out, args.report = absolute(args.raw), absolute(args.out), absolute(args.report)
+    if os.sep in args.claude:
+        args.claude = absolute(args.claude)
     return args
+
+
+def absolute(path: str) -> str:
+    return path if os.path.isabs(path) else os.path.abspath(path)
 
 
 def main() -> int:

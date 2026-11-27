@@ -787,6 +787,37 @@ class SupervisorExits(unittest.TestCase):
                              "%s: the fault report keeps the metadata of progress.json" % rc)
 
 
+class RelativePaths(unittest.TestCase):
+    """Every path of the call may be relative to the caller's working directory (the second code review):
+    tesseract runs in the witness's scratch dir and the reader's `claude` in the attempt dir, so each path is
+    made absolute before a command runs in another directory."""
+
+    def run_relative(self, b, env):
+        rel = lambda path: os.path.relpath(path, b.work)
+        argv = [PY, CLI, rel(os.path.join(IMG, "base.png")), "--input-name", "base.png", "--languages", "eng",
+                "--out", rel(b.out), "--report", rel(b.report), "--reader-model", "haiku", "--reader-effort", "high",
+                "--reader-max-usd", "0.05", "--claude", rel(STUB_CLAUDE)]
+        self.assertFalse(any(os.path.isabs(a) for a in argv[2:]), argv)
+        done = subprocess.run(argv, env=env, cwd=b.work, capture_output=True, timeout=60)
+        return done.returncode, done.stderr.decode("utf-8", "replace")
+
+    def test_relative_paths_reach_both_commands_resolved(self):
+        for name, extra in (("TESSDATA_PREFIX", {"TESSDATA_PREFIX": "tessdata"}),
+                            ("the --list-langs header", {"MNEMON_TEST_TESSDATA_DIR": "tessdata"})):
+            with self.subTest(name):
+                b = Bench(self)
+                rc, err = self.run_relative(b, b.env(extra=extra))
+                self.assertEqual(rc, 0, err)
+                rep = read_json(b.report)
+                self.assertEqual((rep["stage"], rep["failure"]), ("done", None))
+                self.assertEqual(rep["witness"]["tessdata_dir"], b.tessdata)
+                with open(b.out, "r", encoding="utf-8") as fh:
+                    self.assertEqual(fh.read(), readermod.normalize(STUB_TEXT))
+                self.assertEqual(os.path.realpath(read_json(b.facts)["cwd"]), b.attempt)
+                self.assertTrue(os.path.exists(os.path.join(b.attempt, "witness.txt")))
+                self.assertEqual((b.runs_made(), b.reader_calls_made()), (1, 1))
+
+
 class StageTransitions(unittest.TestCase):
     """`progress.json` names the stage `output` before the witness's output files are looked at (section 21.6
     «Stage transitions»): the worker hands `Progress.enter` to the witness's run as its `on_stage`."""

@@ -803,6 +803,108 @@ class RecognizeTests(_Witness):
         self.assertFailure(w, "unsupported", "corrupt", "recognizer-decode", False, "witness")
 
 
+class RelativePathTests(_Witness):
+    """tesseract runs in the scratch dir, so a path the probe or the envelope resolved against the caller's
+    working directory must reach its argv absolute (the second code review). The stub resolves the image, the
+    language model directory and the output base against its own working directory, as the real tool does."""
+
+    def setUp(self):
+        _Witness.setUp(self)
+        self.old_cwd = os.getcwd()
+        os.chdir(self.work)
+        self.here = os.getcwd()     # the caller's directory as the process sees it (macOS: /private/var/…)
+
+    def tearDown(self):
+        os.chdir(self.old_cwd)
+        _Witness.tearDown(self)
+
+    def witness(self, raw: str, scratch: str, languages: str = "eng"):
+        seen = []
+        real = proc.run_bounded
+
+        def spy(argv, **kw):
+            seen.append(list(argv))
+            return real(argv, **kw)
+
+        p = self.probe(languages)
+        self.assertTrue(p.ok, p)
+        with mock.patch.object(proc, "run_bounded", spy):
+            w = ot.recognize(raw, scratch, p, languages, deadline=proc.Deadline(30))
+        return p, w, seen[-1]
+
+    def assertRead(self, w):
+        self.assertIsNone(w.failure, w)
+        self.assertEqual(w.text, ot.normalize(STUB_TEXT))
+
+    def test_a_relative_raw_and_a_relative_tessdata_prefix(self):
+        os.environ["TESSDATA_PREFIX"] = "tessdata"
+        p, w, argv = self.witness("raw.png", self.scratch)
+        self.assertRead(w)
+        self.assertEqual(argv[1], os.path.join(self.here, "raw.png"))
+        self.assertEqual(argv[argv.index("--tessdata-dir") + 1], os.path.join(self.here, "tessdata"))
+
+    def test_a_relative_tessdata_prefix_is_absolute_in_the_probe_and_its_documents(self):
+        os.environ["TESSDATA_PREFIX"] = "./tessdata/"
+        p = self.probe("eng")
+        self.assertTrue(p.ok, p)
+        self.assertEqual(p.tessdata_dir, os.path.join(self.here, "tessdata"))
+        self.assertEqual(ot.probe_document(p, "eng")["tessdata_dir"], p.tessdata_dir)
+        self.assertEqual(ot.witness_report(p, "eng", None)["tessdata_dir"], p.tessdata_dir)
+
+    def test_a_relative_directory_in_the_list_langs_header(self):
+        os.environ["MNEMON_TEST_TESSDATA_DIR"] = "tessdata"
+        p, w, argv = self.witness(self.raw, self.scratch)
+        self.assertRead(w)
+        self.assertEqual(p.tessdata_dir, os.path.join(self.here, "tessdata"))
+
+    def test_a_relative_raw(self):
+        p, w, argv = self.witness("raw.png", self.scratch)
+        self.assertRead(w)
+        self.assertEqual(argv[1], os.path.join(self.here, "raw.png"))
+
+    def test_a_relative_scratch_dir(self):
+        p, w, argv = self.witness(self.raw, "scratch")
+        self.assertRead(w)
+        self.assertEqual(argv[2], os.path.join(self.here, "scratch", "out"))
+
+    def test_a_relative_path_entry_for_tesseract(self):
+        os.mkdir(os.path.join(self.work, "bin"))
+        shutil.copyfile(STUB, os.path.join(self.work, "bin", "tesseract"))
+        shutil.copyfile(os.path.join(IMAGE_FIX, "stub-text.txt"), os.path.join(self.work, "bin", "stub-text.txt"))
+        os.chmod(os.path.join(self.work, "bin", "tesseract"), 0o755)
+        os.environ["OCR_CMD"] = ""
+        os.environ["PATH"] = "bin" + os.pathsep + os.environ["PATH"]
+        self.assertEqual(ot.resolve(), os.path.join(self.here, "bin", "tesseract"))
+        p, w, argv = self.witness(self.raw, self.scratch)
+        self.assertRead(w)
+        self.assertEqual(argv[0], os.path.join(self.here, "bin", "tesseract"))
+
+    def test_absolute_inputs_reach_the_argv_unchanged(self):
+        raw = self.work + "/./raw.png"
+        scratch = self.work + "//scratch"
+        p, w, argv = self.witness(raw, scratch)
+        self.assertRead(w)
+        self.assertEqual(argv[:6], [STUB, raw, os.path.join(scratch, "out"), "--tessdata-dir", self.tessdata, "-l"])
+
+    def test_the_stub_refuses_what_tesseract_would_not_find_from_its_working_directory(self):
+        base = ["--psm", "3", "-c", "tessedit_create_txt=1", "-c", "tessedit_create_tsv=1"]
+        run = lambda *args: subprocess.run([STUB] + list(args) + base, cwd=self.scratch, capture_output=True,
+                                           timeout=30)
+        out = run("raw.png", os.path.join(self.scratch, "out"), "--tessdata-dir", self.tessdata, "-l", "eng")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn(b"Error, cannot read input file raw.png", out.stderr)
+        out = run(self.raw, os.path.join(self.scratch, "out"), "--tessdata-dir", "tessdata", "-l", "eng")
+        self.assertEqual(out.returncode, 1)
+        self.assertEqual(ot.load_failures(out.stderr, ["eng"]), ["lang:eng"])
+        out = run(self.raw, os.path.join(self.scratch, "out"), "--tessdata-dir", self.tessdata, "-l", "deu+eng")
+        self.assertEqual(out.returncode, 0, "one language loaded: the run goes on")
+        self.assertEqual(ot.load_failures(out.stderr, ["deu", "eng"]), ["lang:deu"])
+        out = run(self.raw, "scratch/out", "--tessdata-dir", self.tessdata, "-l", "eng")
+        self.assertEqual(out.returncode, 0)
+        self.assertIn(b"Error, could not create TSV output file", out.stderr)
+        self.assertIn(b"Error, could not create TXT output file", out.stderr)
+
+
 class StderrRulesTests(unittest.TestCase):
 
     def test_the_load_messages(self):
@@ -942,7 +1044,8 @@ class StubTests(_Witness):
 
     def test_hang_child_leaves_a_child_in_the_stubs_group(self):
         env = dict(os.environ, MNEMON_TEST_TESSERACT_MODE="hang-child")
-        child = subprocess.Popen([STUB, self.raw, os.path.join(self.scratch, "out")], env=env, start_new_session=True,
+        child = subprocess.Popen([STUB, self.raw, os.path.join(self.scratch, "out"), "--tessdata-dir", self.tessdata,
+                                  "-l", "eng"], env=env, start_new_session=True,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         pgid = child.pid
         try:
