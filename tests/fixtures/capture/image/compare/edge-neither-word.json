@@ -1,0 +1,33 @@
+{
+  "name": "edge-neither-word",
+  "what": "Edge row 3: neither text has a word and the reading is not empty: agree, share null; the numbers are still counted: reading 12 3.5 7 = 3, witness 12; 3.5 and 7 unconfirmed.",
+  "reading": "OK 12 3.5 7\n",
+  "witness": "ok 12 x\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 0,
+    "found": 0,
+    "missing": 0,
+    "share": null,
+    "reading_words": 0,
+    "unconfirmed_words": 0,
+    "reading_numbers": 3,
+    "unconfirmed_numbers": 2,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [
+        "3.5",
+        "7"
+      ],
+      "truncated": false
+    }
+  }
+}

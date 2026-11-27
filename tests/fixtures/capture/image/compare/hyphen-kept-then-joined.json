@@ -1,0 +1,30 @@
+{
+  "name": "hyphen-kept-then-joined",
+  "what": "The same witness, the reading's word joined: the reading holds 'database' twice, the witness once as written, so the witness's pair is joined (1). Words the database keeps the database = 5 in each, all matched.",
+  "reading": "The database keeps the database.\n",
+  "witness": "The data-\nbase keeps the database.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 5,
+    "found": 5,
+    "missing": 0,
+    "share": 100.0,
+    "reading_words": 5,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 1,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

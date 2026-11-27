@@ -1,0 +1,30 @@
+{
+  "name": "floor-exact-tie",
+  "what": "The exact ratio at a floor of 64.4: the line 25 times in the witness (250), 16 times plus 'amber' in the reading (161). Found 161, missing 89; 100*161 = 16100 equals 64.4*250 = 16100, which is not under the floor: agree. A float product (64.4*250 = 16100.000000000002) would make it loss. Share 64.4.",
+  "reading": "amber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber.\n",
+  "witness": "amber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\n",
+  "min_share": 64.4,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 64.4,
+      "allowance": 20
+    },
+    "witness_words": 250,
+    "found": 161,
+    "missing": 89,
+    "share": 64.4,
+    "reading_words": 161,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

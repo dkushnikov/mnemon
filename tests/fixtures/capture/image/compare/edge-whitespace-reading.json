@@ -1,0 +1,10 @@
+{
+  "name": "edge-whitespace-reading",
+  "what": "Edge row 1 of section 21.5: a whitespace reading (space, tab, line ends, form feed, U+00A0, U+3000, a BOM) is no-text before the comparison: ValueError, no comparison object.",
+  "reading": " \t\n\f\u00a0\u3000\ufeff\n",
+  "witness": "amber birch cedar\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": null,
+  "raises": "ValueError"
+}

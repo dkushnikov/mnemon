@@ -1,0 +1,32 @@
+{
+  "name": "hyphen-half-also-word",
+  "what": "A pair whose half the other text also holds as a word of its own: the witness's 'note-'/'book' is joined against the reading's 'notebook' (1); its half 'book' went into that word and does not answer a second time for the reading's own 'book'. Witness words the notebook = 2, found. Reading words the notebook book = 3; 'book' unconfirmed.",
+  "reading": "The notebook, a book.\n",
+  "witness": "The note-\nbook.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 2,
+    "found": 2,
+    "missing": 0,
+    "share": 100.0,
+    "reading_words": 3,
+    "unconfirmed_words": 1,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 1,
+    "unconfirmed": {
+      "words": [
+        "book"
+      ],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

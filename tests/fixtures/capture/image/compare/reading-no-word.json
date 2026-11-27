@@ -1,0 +1,30 @@
+{
+  "name": "reading-no-word",
+  "what": "A reading without a word of three letters (OK, is, it are short runs) against a witness of 5 words: found 0, missing 5 (within the allowance), share 0.0: agree. The number 42 stands in both.",
+  "reading": "OK, 42 is it.\n",
+  "witness": "amber birch cedar daisy ember 42\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 5,
+    "found": 0,
+    "missing": 5,
+    "share": 0.0,
+    "reading_words": 0,
+    "unconfirmed_words": 0,
+    "reading_numbers": 1,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "block-dropped",
+  "what": "A block dropped: the witness holds block A (a 10-word line 3 times, 30 words), B (another 10-word line 4 times, 40) and C (a third, 3 times, 30): 100 words; the reading holds A and C (60). Found 60, missing 40, share 60.0; 40 > 20 and 6000 < 9000: loss.",
+  "reading": "amber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\nnorth south east west river lake hill coast cliff bay.\nnorth south east west river lake hill coast cliff bay.\nnorth south east west river lake hill coast cliff bay.\n",
+  "witness": "amber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\namber birch cedar daisy ember fern grove heron iris juniper.\ncopper silver nickel cobalt zinc tin iron bronze brass steel.\ncopper silver nickel cobalt zinc tin iron bronze brass steel.\ncopper silver nickel cobalt zinc tin iron bronze brass steel.\ncopper silver nickel cobalt zinc tin iron bronze brass steel.\nnorth south east west river lake hill coast cliff bay.\nnorth south east west river lake hill coast cliff bay.\nnorth south east west river lake hill coast cliff bay.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "loss",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 100,
+    "found": 60,
+    "missing": 40,
+    "share": 60.0,
+    "reading_words": 60,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

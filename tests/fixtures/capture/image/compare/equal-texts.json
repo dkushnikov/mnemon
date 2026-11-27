@@ -1,0 +1,30 @@
+{
+  "name": "equal-texts",
+  "what": "Equal texts. Words (folded runs of 3+ letters, any script): the river rose metres hours лодка стояла берега = 8; 'in' and 'у' are short runs, no words. Numbers: 2.5, 48. Everything matched.",
+  "reading": "The river rose 2.5 metres in 48 hours.\nЛодка стояла у берега.\n",
+  "witness": "The river rose 2.5 metres in 48 hours.\nЛодка стояла у берега.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 8,
+    "found": 8,
+    "missing": 0,
+    "share": 100.0,
+    "reading_words": 8,
+    "unconfirmed_words": 0,
+    "reading_numbers": 2,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "number-separator",
+  "what": "A number with and without its separator: 12.3 is not 123, 1,000 is not 1000. Words revenue million from units = 4 in each, all matched. Reading numbers 123 1000 2026 = 3; 123 and 1000 unconfirmed. The full stop after 2026 is no inner separator.",
+  "reading": "Revenue 123 million from 1000 units in 2026.\n",
+  "witness": "Revenue 12.3 million from 1,000 units in 2026.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 4,
+    "found": 4,
+    "missing": 0,
+    "share": 100.0,
+    "reading_words": 4,
+    "unconfirmed_words": 0,
+    "reading_numbers": 3,
+    "unconfirmed_numbers": 2,
+    "hyphen_joined": 0,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [
+        "123",
+        "1000"
+      ],
+      "truncated": false
+    }
+  }
+}

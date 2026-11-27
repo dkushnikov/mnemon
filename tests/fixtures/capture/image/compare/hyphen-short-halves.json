@@ -1,0 +1,30 @@
+{
+  "name": "hyphen-short-halves",
+  "what": "Two short halves that make one word (the edge row of section 21.5), with U+2010 as the hyphen: the witness holds 'go', the hyphen, a line end and 'at' and nothing else - no word as written; the reading holds 'goat', so the pair is joined (1) and the witness has one word: found, share 100.0.",
+  "reading": "goat\n",
+  "witness": "go\u2010\nat\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/1",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 1,
+    "found": 1,
+    "missing": 0,
+    "share": 100.0,
+    "reading_words": 1,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 1,
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}
