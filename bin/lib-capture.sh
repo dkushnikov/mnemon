@@ -149,6 +149,8 @@ CAP_FETCH_CMD="${MNEMON_CAPTURE_FETCH_CMD:-$_LIB_CAPTURE_DIR/capture-fetch.py}"
 CAP_CAPTIONS_CMD="${MNEMON_CAPTURE_CAPTIONS_CMD:-$_LIB_CAPTURE_DIR/capture-captions.py}"
 CAP_SITE_CMD="${MNEMON_CAPTURE_SITE_CMD:-$_LIB_CAPTURE_DIR/capture-site.py}"
 CAP_TEXT_CMD="${MNEMON_CAPTURE_TEXT_CMD:-$_LIB_CAPTURE_DIR/capture-text.py}"
+# the image worker (capture layer A20, §21.6): a model reads the raw, tesseract witnesses, the two are compared
+CAP_IMAGE_CMD="${MNEMON_CAPTURE_IMAGE_CMD:-$_LIB_CAPTURE_DIR/capture-image.py}"
 
 # ---------------------------------------------------------------------------------------------
 # Embedded python helper: the few things bash cannot do atomically or byte-exactly.
@@ -901,6 +903,7 @@ cap_resource_kind() {   # <origin>
     ref:vault)   printf 'ref' ;;
     url|youtube) printf 'url' ;;
     pdf|audio|file|book) if [[ -n "${FILE_PATH:-}" ]]; then printf 'file'; else printf 'url'; fi ;;
+    image)       printf 'file' ;;   # an image has no URL form (contracts A15 §3.1): never the catch-all below
     *)           printf 'url' ;;
   esac
 }
@@ -1083,17 +1086,20 @@ cap_canonical_request() {
       --arg input "$INPUT_SHA256" --arg url "$URL" --arg ref "$REF_PATH" --arg context "$CONTEXT" \
       --arg st "$SOURCE_TYPE" --argjson recapture "$recapture" --arg sup "$SUPERSEDES" --arg depth "$DEPTH" \
       --arg render "$REQ_RENDER" --arg external "$REQ_EXTERNAL" --arg site "$REQ_SITE" --arg rv "$REQ_RV" --arg tier "${TIER:-full}" \
+      --arg ocr "${OCR_SEQUENCE:-}" \
       'def nz: if . == "" then null else . end;
        def sup: if . == "" then null else (split(",") | if length == 1 then .[0] else . end) end;
        {schema:$schema, origin:$origin, resource_kind:$kind, resource_key:$key, input_sha256:($input|nz),
         url:($url|nz), ref_path:($ref|nz), context:$context, source_type:($st|nz), recapture:$recapture,
         supersedes:($sup|sup), render:$render, external:$external, site:($site|nz),
         requested_version:(if $rv == "" then null else ($rv|tonumber) end), canonical_version:$cv, depth:$depth}
-       + (if $tier == "bookmark" then {tier:$tier} else {} end)' --argjson cv "${CANONICAL_VERSION:-1}")"
+       + (if $tier == "bookmark" then {tier:$tier} else {} end)
+       + (if $origin == "image" then {ocr_languages:$ocr} else {} end)' --argjson cv "${CANONICAL_VERSION:-1}")"
        # (`tier` is bound only when it is bookmark — every full request keeps the hash it always had, B1;
        # `canonical_version` is the version the url identity was computed under — the lookup's, i.e. the
        # current one for a new capture and the receipt's on a replay; a non-url request keeps 1, so every
-       # existing non-url receipt binds unchanged)
+       # existing non-url receipt binds unchanged; `ocr_languages` — the witness's ordered sequence as given,
+       # never sorted — is bound for origin image only, so every other request keeps its hash, A15 §3.1)
   fi
   REQUEST_SHA256="$(cap_sha256_str "$REQUEST_JSON")"
 }
@@ -2097,7 +2103,12 @@ cap_convert_file() {
   ext="${RAW_PATH##*.}"
   ext="$(printf '%s' "$ext" | tr 'A-Z' 'a-z')"
   fmt="$(cap_pandoc_format "$ext")"
-  [[ -n "$fmt" ]] || { FAIL_CLASS=unsupported; FAIL_MSG="no converter for .$ext files (raw retained at $RAW_PATH)"; return 1; }
+  if [[ -z "$fmt" ]]; then
+    FAIL_CLASS=unsupported; FAIL_MSG="no converter for .$ext files (raw retained at $RAW_PATH)"
+    # an image is never auto-detected (contracts A15, scope): the refusal names its door
+    [[ -n "$(cap_image_signature "$RAW_PATH")" ]] && FAIL_MSG="$FAIL_MSG — the bytes are a PNG or JPEG image: capture it with --origin image --file <path>"
+    return 1
+  fi
   command -v pandoc >/dev/null 2>&1 || { FAIL_CLASS=unsupported; FAIL_MSG="pandoc is not installed; cannot convert .$ext (raw retained at $RAW_PATH)"; return 1; }
   if ! pandoc -f "$fmt" -t gfm --wrap=none "$RAW_PATH" -o "$ATTEMPT_DIR/capture.md" 2>>"$ATTEMPT_DIR/stderr.txt" || ! grep -q '[^[:space:]]' "$ATTEMPT_DIR/capture.md" 2>/dev/null; then
     rm -f "$ATTEMPT_DIR/capture.md"
@@ -2119,6 +2130,254 @@ cap_acquire_file() {   # other local files: pandoc when it converts the type
   cap_copy_raw "$FILE_PATH" "$RAW_STAGED" || return 1
   cap_raw_commit || return 1
   cap_convert_file
+}
+
+# ---------------------------------------------------------------------------------------------
+# The image origin (capture contracts A15 §18; capture layer A20 §21): the input file is the raw,
+# byte for byte; the capture-text is a model's reading of it, made under the fence by the worker
+# bin/capture-image.py and compared there with tesseract's text of the same raw.
+# ---------------------------------------------------------------------------------------------
+# The format of an image by the signature of its bytes (A15 §3.2): `png` · `jpg` · nothing. One rule
+# with capture/image.py raw_extension (tests/capture_layer/test_capture_image.py holds them equal).
+cap_image_signature() {   # <file>
+  local head
+  head="$(od -An -tx1 -N8 "$1" 2>/dev/null | tr -d ' \n')"
+  case "$head" in
+    89504e470d0a1a0a) printf 'png' ;;
+    ffd8ff*)          printf 'jpg' ;;
+  esac
+  return 0
+}
+
+# The reader's preflight (capture layer §21.4, contracts A15 §4): the fence probe record of the
+# installed Claude Code holds the Boolean probes["image-reader"]: true. Called after
+# cap_preflight_extractor (CLAUDE_VERSION). A miss is fence-unprobed, exit 3, before any raw.
+cap_preflight_image_reader() {
+  local probes
+  probes="$(cap_probe_record)"
+  if [[ "$(jq -r --arg v "${CLAUDE_VERSION:-}" '.[$v].probes["image-reader"] == true' "$probes" 2>/dev/null)" != "true" ]]; then
+    PREFLIGHT_CLASS=fence-unprobed
+    PREFLIGHT_MSG="no fence probe for images on Claude Code ${CLAUDE_VERSION:-?} in $probes (the record holds no probe image-reader: true) — an image capture sends the image to a model under the fence; run: mnemon fence-probe"
+    return 1
+  fi
+  return 0
+}
+
+# Test hook (MNEMON_TEST_HOOKS=1): MNEMON_TEST_IMAGE_SWAP_INPUT=<file> replaces the input's bytes between
+# the locator's verification and the copy — the input that changes under the capture (A15 §3.2).
+cap_image_swap_hook() {
+  [[ "${MNEMON_TEST_HOOKS:-}" == "1" && -n "${MNEMON_TEST_IMAGE_SWAP_INPUT:-}" ]] || return 0
+  cat "$MNEMON_TEST_IMAGE_SWAP_INPUT" > "$FILE_PATH"
+  echo "mnemon: test input swap before the copy" >&2
+  return 0
+}
+
+# S2–S4 of contracts A15 §3.4, then the worker: the locator verified against the bound hash, the
+# size cap, the raw destination prepared here (cap_fresh records no raw intent for an image), the
+# copy, the staged copy compared with input_sha256 before any raw hash is recorded, then the publish
+# path every file origin takes (cap_raw_commit).
+cap_acquire_image() {
+  local size ext
+  FAIL_RETRYABLE=""; FAIL_STAGE=""; FAIL_ACQUISITION=""
+  [[ -n "${FILE_PATH:-}" && -f "$FILE_PATH" ]] || { FAIL_CLASS=input-missing; FAIL_MSG="image not found: ${FILE_PATH:-?}"; return 1; }
+  if [[ -n "$INPUT_SHA256" && "$(cap_sha256 "$FILE_PATH")" != "$INPUT_SHA256" ]]; then
+    FAIL_CLASS=input-missing; FAIL_MSG="the input at $FILE_PATH changed since the request was recorded"; return 1
+  fi
+  size="$(cap_py stat-size "$FILE_PATH" 2>/dev/null || echo 0)"
+  [[ "$size" =~ ^[0-9]+$ ]] || size=0
+  if [[ "$size" -gt "${IMAGE_MAX_BYTES:-7000000}" ]]; then
+    FAIL_CLASS=too-large; FAIL_RETRYABLE=false; FAIL_ACQUISITION=too-large
+    FAIL_MSG="the image is $size bytes, over image_max_bytes=${IMAGE_MAX_BYTES:-7000000}: nothing was kept (the engine never shrinks an image — capture it in parts, or raise the key and replay the id)"
+    return 1
+  fi
+  ext="$(cap_image_signature "$FILE_PATH")"
+  [[ -n "$ext" ]] || ext="$(cap_ext_of "$FILE_PATH" bin)"
+  cap_raw_prepare "$ext"
+  RAW_KIND=image
+  cap_raw_record_intent
+  cap_image_swap_hook
+  cap_copy_raw "$FILE_PATH" "$RAW_STAGED" || return 1
+  if [[ "$(cap_sha256 "$RAW_STAGED")" != "$INPUT_SHA256" ]]; then
+    rm -f "$RAW_STAGED"
+    FAIL_CLASS=input-missing; FAIL_RETRYABLE=false
+    FAIL_MSG="the input at $FILE_PATH changed between the request and the copy: nothing was kept"
+    return 1
+  fi
+  cap_raw_commit || return 1
+  cap_convert_image
+}
+
+# S5–S7 on the published raw through the worker (CAP_IMAGE_CMD). The worker's exit and report are
+# read by the table of capture layer §21.6, one row per exit; the report and the read_history entry
+# reach the receipt in ONE update on every outcome, before the failure exits. On the verdict `agree`
+# the same update carries the text hash and clears the frozen report identity an earlier attempt
+# left (a source is never published beside the report of another reading, A15 §3.4).
+cap_convert_image() {
+  local report="$ATTEMPT_DIR/capture-image.json" out="$ATTEMPT_DIR/capture.md" rc=0 prev rj="" kind="" why=""
+  local f_class="" f_retry="" f_acq="" r_stage="" verdict="" r_error="" outcome="" o_class="" entry rnull
+  local -a args
+  FAIL_RETRYABLE=""; FAIL_STAGE=""; FAIL_ACQUISITION=""
+  prev="$(cap_receipt_get "$CAPTURE_ID" '[(.read_history // [])[] | .text_sha256 | select(. != null)] | last // ""')"
+  args=("$RAW_PATH" --input-name "$(basename "${INPUT_PATH:-$RAW_PATH}")" --languages "${OCR_SEQUENCE:-eng}"
+        --out "$out" --report "$report"
+        --reader-model "${IMAGE_READER_MODEL:-haiku}" --reader-effort "${IMAGE_READER_EFFORT:-high}"
+        --reader-max-usd "${IMAGE_READER_MAX_USD:-0.05}" --claude "${CLAUDE_CMD:-claude}"
+        --timeout "${IMAGE_TIMEOUT:-120}" --max-bytes "${IMAGE_MAX_BYTES:-7000000}"
+        --max-pixels "${IMAGE_MAX_PIXELS:-50000000}" --max-edge "${IMAGE_MAX_EDGE:-8000}"
+        --min-share "${IMAGE_MIN_WITNESS_SHARE:-90}" --miss-allowance "${IMAGE_MISS_ALLOWANCE:-20}")
+  [[ "$prev" =~ ^[0-9a-f]{64}$ ]] && args+=(--previous-text "$prev")
+  rm -f "$report" "$out"
+  "$CAP_IMAGE_CMD" "${args[@]}" 2>>"$ATTEMPT_DIR/stderr.txt" || rc=$?
+  # the reader's argv.txt / argv.json keep their own names: the extractor's runner writes its pair into
+  # the same attempt dir after the reading (capture contracts §4.2), and would overwrite the reader's
+  local pair
+  for pair in txt json; do
+    if [[ -f "$ATTEMPT_DIR/argv.$pair" ]]; then mv -f "$ATTEMPT_DIR/argv.$pair" "$ATTEMPT_DIR/reader-argv.$pair"; fi
+  done
+  if [[ -s "$report" ]]; then
+    rj="$(jq -c 'select(type == "object" and .schema == "mnemon-capture-image/1")' "$report" 2>/dev/null || true)"
+  fi
+  if [[ -n "$rj" ]]; then
+    { IFS= read -r f_class; IFS= read -r f_retry; IFS= read -r f_acq; IFS= read -r r_stage; IFS= read -r verdict; IFS= read -r r_error; } <<< "$(printf '%s' "$rj" | jq -r '
+        def line: if . == null then "" else (tostring | gsub("[\\n\\r]"; " ")) end;
+        (.failure | if type == "object" then .class else null end | line),
+        (.failure | if type == "object" then .retryable else null end | line),
+        (.failure | if type == "object" then .acquisition else null end | line),
+        (.stage | line), (.comparison | if type == "object" then .verdict else null end | line), (.error | line)')"
+  fi
+  # the table of §21.6 «How the gateway reads it»: no row overlaps another
+  case "$rc" in
+    0)   if [[ -n "$rj" && -z "$f_class" && "$r_stage" == "done" && "$verdict" == "agree" ]]; then
+           # the capture-text is checked before its hash is taken: exit 0 with a right report and no text is the worker's fault
+           if [[ -s "$out" ]]; then kind=ok; else kind=fault; why="the worker exited 0 and left no capture-text"; fi
+         else kind=fault; why="the worker exited 0 without a report of an agreed reading"; fi ;;
+    1)   if [[ -n "$f_class" && "$f_class" != "environment" && "$f_class" != "timeout" ]]; then kind=failed
+         else kind=fault; why="the worker exited 1 without a failure its exit allows"; fi ;;
+    3)   if [[ "$f_class" == "environment" ]]; then kind=environment
+         else kind=fault; why="the worker exited 3 without an environment failure in its report"; fi ;;
+    124) kind=timeout ;;
+    *)   kind=fault; why="the worker exited $rc" ;;
+  esac
+  case "$kind" in
+    ok)          outcome=agreed; o_class="" ;;
+    failed)      outcome=failed; o_class="$f_class"
+                 [[ "$f_class" == "reading-mismatch" ]] && outcome=mismatch
+                 [[ "$r_stage" == "worker" ]] && outcome=worker-fault ;;
+    environment) outcome=environment; o_class=environment ;;
+    timeout)     outcome=timeout; o_class=timeout ;;
+    fault)       outcome=worker-fault; o_class=convert ;;
+  esac
+  rnull=null
+  [[ -n "$rj" ]] && rnull="$rj"
+  entry="$(jq -cn --argjson r "$rnull" --argjson n "${ATTEMPT_N:-0}" --arg o "$outcome" --arg fc "$o_class" --arg langs "${OCR_SEQUENCE:-}" '
+      def nz: if . == "" then null else . end;
+      ($r // {}) as $q
+      | {attempt: $n, outcome: $o, failure_class: ($fc | nz),
+         text_sha256: ($q.reader.text_sha256? // null), verdict: ($q.comparison.verdict? // null),
+         share: ($q.comparison.share? // null), cost_usd: ($q.reader.cost_usd? // null),
+         output_tokens: ($q.reader.output_tokens? // null), thinking_tokens: ($q.reader.thinking_tokens? // null),
+         reader_adapter: ($q.reader.adapter? // null), reader_model_id: ($q.reader.model_id? // null),
+         claude_code: ($q.reader.claude_code? // null), witness_execution: ($q.execution? // null),
+         languages: ($q.witness.languages? // ($langs | nz))}')"
+  if [[ "$kind" == "ok" ]]; then
+    TEXT_SHA256="$(cap_sha256 "$out")"
+    TEXT_BYTES="$(cap_bytes "$out")"
+    cap_receipt_update "$CAPTURE_ID" '.capture_report.text = $r | .read_history = ((.read_history // []) + [$e])
+        | .text_sha256 = $h | .text_bytes = $b | .report_sha256 = null | .report_path = null | .report_state = null' \
+      --argjson r "$rnull" --argjson e "$entry" --arg h "$TEXT_SHA256" --argjson b "$TEXT_BYTES"
+    cap_crash_at after-read
+    cap_image_fields "$rj" || return 1
+    if [[ "$(printf '%s' "$rj" | jq -r '.previous_text // ""')" != "" ]]; then
+      echo "NOTE: this attempt's reading differs from the previous attempt's" >&2
+    fi
+    return 0
+  fi
+  rm -f "$out"
+  cap_receipt_update "$CAPTURE_ID" '.capture_report.text = $r | .read_history = ((.read_history // []) + [$e])
+      | .report_sha256 = null | .report_path = null | .report_state = null' --argjson r "$rnull" --argjson e "$entry"
+  # a refused reading that differs from the last one the history holds is named too (contracts A15 §3.4)
+  if [[ "$kind" == "failed" && "$(printf '%s' "$rj" | jq -r '.previous_text // ""')" != "" ]]; then
+    echo "NOTE: this attempt's reading differs from the previous attempt's" >&2
+  fi
+  case "$kind" in
+    failed)
+      FAIL_CLASS="$f_class"; FAIL_ACQUISITION="$f_acq"; FAIL_STAGE="$r_stage"
+      [[ "$f_retry" == "true" || "$f_retry" == "false" ]] && FAIL_RETRYABLE="$f_retry"
+      FAIL_MSG="$r_error"
+      [[ -n "$FAIL_MSG" ]] || FAIL_MSG="the image worker failed: $f_class"
+      [[ "$f_class" == "reading-mismatch" ]] || FAIL_MSG="$FAIL_MSG; the image is kept at $RAW_PATH" ;;
+    environment)
+      FAIL_CLASS=environment; FAIL_RETRYABLE=true; FAIL_STAGE="$r_stage"
+      FAIL_MSG="$r_error"
+      [[ -n "$FAIL_MSG" ]] || FAIL_MSG="the environment of the image worker is not ready"
+      FAIL_MSG="$FAIL_MSG — the image is kept at $RAW_PATH; install or repair what the message names, then replay: mnemon add --capture-id $CAPTURE_ID" ;;
+    timeout)
+      FAIL_CLASS=timeout; FAIL_RETRYABLE=false; FAIL_STAGE="$r_stage"
+      FAIL_MSG="the image worker exceeded image_timeout=${IMAGE_TIMEOUT:-120}s${r_stage:+ at stage $r_stage}: the image is kept at $RAW_PATH — raise image_timeout and replay the id" ;;
+    fault)
+      FAIL_CLASS=convert; FAIL_RETRYABLE=true; FAIL_STAGE=worker
+      FAIL_MSG="the image worker failed: $why; the image is kept at $RAW_PATH, and a replay runs the worker again" ;;
+  esac
+  return 1
+}
+
+# The chain fields and the frontmatter keys of an image revision from the worker's report (the image
+# twin of cap_text_fields; contracts A15 §3.3). One string of the model reaches the frontmatter: the
+# model id in `method`, and only when it matches the pattern — else the capture fails.
+cap_image_fields() {   # <report json>
+  local vals method
+  vals="$(printf '%s' "$1" | jq -r '
+      def line: if . == null then "" else (tostring | gsub("[\\n\\r]"; " ")) end;
+      def one: (. * 10 | round) as $t | "\($t / 10 | floor).\($t % 10)";
+      (.method | line), (.validation.format | line), ("\(.validation.width)x\(.validation.height)"),
+      (.reader.adapter | line), (.reader.claude_code | line), (.witness.backend | line), (.witness.version | line),
+      (.witness.adapter | line), (.witness.languages | line), (.execution | line), (.comparison.rule | line),
+      (.comparison.share | if . == null then "" else one end), (.comparison.missing | line),
+      (.comparison.reading_words | line), (.comparison.unconfirmed_words | line), (.comparison.unconfirmed_numbers | line)')"
+  { IFS= read -r method; IFS= read -r IMG_FORMAT; IFS= read -r IMG_PIXELS; IFS= read -r IMG_READER_ADAPTER; IFS= read -r IMG_READER_CC
+    IFS= read -r IMG_WITNESS_BACKEND; IFS= read -r IMG_WITNESS_VERSION; IFS= read -r IMG_WITNESS_ADAPTER; IFS= read -r IMG_WITNESS_LANGS
+    IFS= read -r IMG_WITNESS_EXEC; IFS= read -r IMG_COMPARE_RULE; IFS= read -r IMG_SHARE; IFS= read -r IMG_MISSING
+    IFS= read -r IMG_COMPARED; IFS= read -r IMG_UNCONF_WORDS; IFS= read -r IMG_UNCONF_NUMBERS; } <<< "$vals"
+  if [[ ! "$method" =~ ^read:[A-Za-z0-9._:@-]{1,100}$ ]]; then
+    FAIL_CLASS=convert; FAIL_RETRYABLE=true; FAIL_STAGE=reader
+    FAIL_MSG="the reader's call reported no usable model id (reader-output): nothing is published"
+    return 1
+  fi
+  CAPTURE_METHOD="$method"; FIDELITY=recognized; CONTENT_FORMAT=text
+  CAPX_CONVERTER="image-reader"; CAPX_COMPLETENESS=unknown
+  return 0
+}
+
+# The notes of a published image revision, on stderr (capture layer §21.10): what the local recognizer
+# does not confirm, from the report that the receipt of the revision's owner holds — a replay and a
+# duplicate read nothing again, so the lines never come from a new comparison. The skill's report
+# reads them (§21.12 item 4).
+cap_image_notes() {   # <revision>
+  local f="$VAULT_PATH/Sources/$1/source.md" cid rj="" words="" numbers="" list="" more=""
+  [[ -f "$f" && "$(_mnemon_yaml_literal origin "$f")" == "image" ]] || return 0
+  cid="$(_mnemon_yaml_literal capture_id "$f")"
+  if [[ -n "$cid" ]] && cap_receipt_exists "$cid"; then
+    rj="$(cap_receipt_get "$cid" '.capture_report.text | select(type == "object" and .schema == "mnemon-capture-image/1" and (.comparison | type) == "object") | tojson' 2>/dev/null || true)"
+  fi
+  if [[ -n "$rj" ]]; then
+    { IFS= read -r words; IFS= read -r numbers; IFS= read -r list; IFS= read -r more; } <<< "$(printf '%s' "$rj" | jq -r '
+        (.comparison.unconfirmed_words // 0), (.comparison.unconfirmed_numbers // 0),
+        ((.comparison.unconfirmed.numbers // []) | map(tostring | gsub("[^0-9.,]"; "")) | .[0:20] | join(" ")),
+        (if (.comparison.unconfirmed_numbers // 0) > 20 then "yes" else "" end)')"
+  else
+    words="$(cap_py nested "$f" capture unconfirmed_words)"
+    numbers="$(cap_py nested "$f" capture unconfirmed_numbers)"
+  fi
+  [[ "$words" =~ ^[0-9]+$ ]] || words=0
+  [[ "$numbers" =~ ^[0-9]+$ ]] || numbers=0
+  [[ "$words" -gt 0 || "$numbers" -gt 0 ]] || return 0
+  if [[ -z "$rj" ]]; then
+    echo "NOTE: the local recognizer does not confirm $words word(s) and $numbers number(s) of the text (the list is unavailable: this ledger holds no report of the reading)" >&2
+    return 0
+  fi
+  echo "NOTE: the local recognizer does not confirm $words word(s) and $numbers number(s) of the text" >&2
+  if [[ "$numbers" -gt 0 ]]; then echo "NOTE: unconfirmed numbers: $list${more:+ … (the first twenty of $numbers)}" >&2; fi
+  return 0
 }
 
 cap_media_tool() { printf '%s' "${MEDIA_EXTRACT_CMD:-$_LIB_CAPTURE_DIR/media-extract.py}"; }
@@ -2561,6 +2820,7 @@ cap_acquire() {
     youtube) if [[ -n "${MEDIA_BUNDLE_VTT:-}" ]]; then cap_acquire_youtube_bundle || return 1; else cap_acquire_youtube || return 1; fi ;;
     audio)   cap_acquire_audio || return 1 ;;
     file|book) cap_acquire_file || return 1 ;;
+    image)   cap_acquire_image || return 1 ;;
     *) FAIL_CLASS=unsupported; FAIL_MSG="origin '$ORIGIN' has no acquisition step"; return 1 ;;
   esac
   TEXT_SHA256="$(cap_sha256 "$ATTEMPT_DIR/capture.md")"
@@ -2573,6 +2833,9 @@ cap_capx_reset() {
   CAPX_FETCH=""; CAPX_CONVERTER=""; CAPX_ACQUISITION=""; CAPX_COMPLETENESS=""; CAPX_REFERENCE=""; CAPX_ELIGIBLE=""
   CAPX_MISSING=""; CAPX_GLUED=""; CAPX_HEADINGS_MISSING=""; CAPX_REPAIRS=""; CAPX_HTTP_STATUS=""; CAPX_EGRESS=""; CAPX_BLOCKED_KIND=""
   SITE_PAGES=""
+  IMG_FORMAT=""; IMG_PIXELS=""; IMG_READER_ADAPTER=""; IMG_READER_CC=""; IMG_WITNESS_BACKEND=""; IMG_WITNESS_VERSION=""
+  IMG_WITNESS_ADAPTER=""; IMG_WITNESS_LANGS=""; IMG_WITNESS_EXEC=""; IMG_COMPARE_RULE=""; IMG_SHARE=""; IMG_MISSING=""
+  IMG_COMPARED=""; IMG_UNCONF_WORDS=""; IMG_UNCONF_NUMBERS=""
 }
 
 # Re-create capture-text from the retained, published raw (RAW_PATH, RAW_KIND from the receipt)
@@ -2613,6 +2876,8 @@ cap_reconvert() {
       pdf) cap_convert_pdf || return 1
            [[ -z "$FILE_PATH" ]] && { fr="$(cap_fetch_report_file)"; cap_fetch_fields "$fr"; cap_published_from_fetch "$fr"; } ;;
       file|book) cap_convert_file || return 1 ;;
+      # a new attempt from the retained raw: a new run of the witness, a new call of the reader, a new comparison
+      image) cap_convert_image || return 1 ;;
       youtube)
         # captions: the retained raw is the transcript; whisper: the retained raw is the audio and
         # the conversion is a new transcription of the same bytes — the video's metadata comes from
@@ -2721,6 +2986,25 @@ cap_source_frontmatter() {   # > stdout
   [[ -n "${CAPX_HTTP_STATUS:-}" ]] && printf '  http_status: %s\n' "$CAPX_HTTP_STATUS"
   [[ -n "${CAPX_EGRESS:-}" ]] && printf '  egress: %s\n' "$CAPX_EGRESS"
   [[ -n "${CAPX_BLOCKED_KIND:-}" ]] && printf '  blocked_kind: %s\n' "$CAPX_BLOCKED_KIND"
+  # the image origin's keys (contracts A15 §3.3): who read, who witnessed, how far the two agreed —
+  # after `completeness`, before `engine`, in this order; versions and ids quoted, counts bare
+  if [[ "$ORIGIN" == "image" && -n "${IMG_FORMAT:-}" ]]; then
+    printf '  image_format: %s\n' "$(cap_plain "$IMG_FORMAT")"
+    printf '  image_pixels: %s\n' "$(cap_q "$IMG_PIXELS")"
+    printf '  reader_adapter: %s\n' "$(cap_q "$IMG_READER_ADAPTER")"
+    printf '  reader_claude_code: %s\n' "$(cap_q "$IMG_READER_CC")"
+    printf '  witness_backend: %s\n' "$(cap_plain "$IMG_WITNESS_BACKEND")"
+    printf '  witness_version: %s\n' "$(cap_q "$IMG_WITNESS_VERSION")"
+    printf '  witness_adapter: %s\n' "$(cap_q "$IMG_WITNESS_ADAPTER")"
+    printf '  witness_languages: %s\n' "$(cap_q "$IMG_WITNESS_LANGS")"
+    printf '  witness_execution: %s\n' "$(cap_q "$IMG_WITNESS_EXEC")"
+    printf '  compare_rule: %s\n' "$(cap_q "$IMG_COMPARE_RULE")"
+    [[ "$IMG_SHARE" =~ ^[0-9]+\.[0-9]$ ]] && printf '  witness_share: %s\n' "$IMG_SHARE"
+    [[ "$IMG_MISSING" =~ ^[0-9]+$ ]] && printf '  witness_missing_words: %s\n' "$IMG_MISSING"
+    [[ "$IMG_COMPARED" =~ ^[0-9]+$ ]] && printf '  compared_words: %s\n' "$IMG_COMPARED"
+    [[ "$IMG_UNCONF_WORDS" =~ ^[0-9]+$ ]] && printf '  unconfirmed_words: %s\n' "$IMG_UNCONF_WORDS"
+    [[ "$IMG_UNCONF_NUMBERS" =~ ^[0-9]+$ ]] && printf '  unconfirmed_numbers: %s\n' "$IMG_UNCONF_NUMBERS"
+  fi
   printf '  engine: %s\n' "$(cap_q "$(cap_engine)")"
   printf -- '---\n'
   return 0
@@ -2738,6 +3022,12 @@ cap_report_freeze() {
   [[ -n "${ARCHIVE_DIR:-}" ]] || return 0
   [[ "$(cap_receipt_get "$CAPTURE_ID" '[.capture_report.fetch, .capture_report.text, .capture_report.site, .media_meta] | map(select(. != null)) | length')" != "0" ]] || return 0
   local sha
+  # test hook (MNEMON_TEST_HOOKS=1): MNEMON_TEST_REPORT_FREEZE_FAIL=1 makes the freeze fail — the publisher warns and goes on
+  if [[ "${MNEMON_TEST_HOOKS:-}" == "1" && "${MNEMON_TEST_REPORT_FREEZE_FAIL:-}" == "1" ]]; then
+    REPORT_STATUS=failed
+    echo "WARNING: could not freeze the capture report for the archive sidecar (the receipt keeps the reports)" >&2
+    return 0
+  fi
   if sha="$(cap_py report-freeze "$ATTEMPT_DIR/report.json" "$(cap_receipt_path "$CAPTURE_ID")" 2>>"$ATTEMPT_DIR/stderr.txt")" && [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then
     cap_receipt_update "$CAPTURE_ID" '.report_sha256=$h | .report_path=$p | .report_state="pending"' --arg h "$sha" --arg p "$ARCHIVE_DIR/$REVISION.report.json"
     REPORT_STATUS=pending
@@ -2834,6 +3124,7 @@ cap_publish_source() {
     return 1
   fi
   cap_report_freeze
+  cap_crash_at after-report-frozen
   if ! cap_py publish-dir "$staged" "$final"; then
     FAIL_CLASS=convert; FAIL_MSG="could not publish Sources/$REVISION/ (the rename of $staged failed)"; return 1
   fi
@@ -2948,6 +3239,10 @@ cap_result() {
   # only after an extraction (or a bookmark) that ran the reindex hook (§12 A8); a replay from the files prints none
   [[ ( "$status" == extracted || "$status" == bookmarked ) && -n "${REINDEX_STATUS:-}" ]] && printf 'RESULT:reindex=%s\n' "$REINDEX_STATUS"
   [[ "$replayed" == true ]] && printf 'RESULT:replayed=true\n'
+  # a published image revision: what its one reading left unconfirmed, from the stored report (stderr)
+  if [[ -n "$rev" ]]; then
+    case "$status" in extracted|captured|skipped-duplicate) cap_image_notes "$rev" ;; esac
+  fi
   return 0
 }
 
@@ -2960,6 +3255,8 @@ cap_retryable_of() {   # <class> → true|false
   # field the same source, template and reader context validated on the next run (--resume).
   case "$1" in
     fetch|convert|auth|transient|timeout|claude-exit|fence-unprobed|environment|server-error|unavailable|invalid-output) printf 'true' ;;
+    # reading-mismatch (contracts A15): two readers disagree about an image — no consumer retries it on its own
+    reading-mismatch) printf 'false' ;;
     *) printf 'false' ;;
   esac
 }

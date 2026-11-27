@@ -44,6 +44,13 @@ HELP
     exit 0 ;;
 esac
 
+# The image reader's call (capture layer A20, §21.4): an image arrives on stdin as a stream-json message. That
+# call is answered by the image stub (tests/fixtures/capture/image/stub-claude-image.py, STUB_CLAUDE_IMAGE),
+# which checks the argv and the message itself and keeps its own counter file; it is not a call of this stub.
+for _arg in "$@"; do
+  if [[ "$_arg" == "--input-format" ]]; then exec python3 "${STUB_CLAUDE_IMAGE:?STUB_CLAUDE_IMAGE must be set}" "$@"; fi
+done
+
 : "${STUB_DIR:?STUB_DIR must be set}"
 mkdir -p "$STUB_DIR"
 n=$(( $(cat "$STUB_DIR/count" 2>/dev/null || echo 0) + 1 ))
