@@ -1055,8 +1055,11 @@ cap_resolve_resume() {
     rev="$(cap_receipt_get "$target" '.resolved_to_revision // .revision')"
     if [[ "$(cap_receipt_get "$target" '.state')" == "extracted" && -f "$VAULT_PATH/Sources/$rev/extract.md" ]]; then
       # «complete» is an answer about a published revision too (contracts A12): the raw it claims is
-      # checked first, by presence — nothing is opened or written. Lost or changed: the replay of
-      # this capture answers (integrity-error on its receipt), never «complete»
+      # checked first, by presence — a file raw exists with its recorded size, a bundle has its
+      # manifest; the raw is not opened. (A raw renamed back to its staged name is restored first,
+      # as on every path, and its receipt records that.) Missing or of another size: the replay of
+      # this capture answers (integrity-error on its receipt), never «complete». A raw changed at
+      # its size, or a changed member of a bundle, is not seen here; the replay's full check sees it
       cap_raw_evidence_check "$rev" presence && cap_die2 "--resume: capture $target is complete (nothing to finish)"
       return 0
     fi
@@ -1067,7 +1070,7 @@ cap_resolve_resume() {
   fi
   if [[ -d "$VAULT_PATH/Sources/$target" ]]; then
     if [[ -f "$VAULT_PATH/Sources/$target/extract.md" ]]; then
-      # the same rule by the revision's name: the raw first, by presence. Lost or changed: the owner's
+      # the same rule by the revision's name: the raw first, by presence. Missing or of another size: the owner's
       # replay answers when its receipt is in this ledger; else the folder's own claim does, under a
       # fresh id and with no receipt written (as a duplicate's guard, contracts A12)
       cap_raw_evidence_check "$target" presence && cap_die2 "--resume: revision $target is complete (nothing to finish)"

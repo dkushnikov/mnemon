@@ -3,7 +3,8 @@
 `Policy.get(url)` is the only way the capture layer talks HTTP: `http`/`https` only, no userinfo, every
 hop's host resolved and **every** returned address checked (private, loopback, link-local, reserved,
 multicast, unspecified, and anything else that is not globally reachable — the RFC 6598 shared space of a
-tailnet or a carrier NAT included → `ssrf-blocked` on the first hop, `ssrf-redirect` after a redirect), the connection
+tailnet or a carrier NAT included → `ssrf-blocked` on the first hop, `ssrf-redirect` after a redirect; an address of the
+NAT64 well-known prefix `64:ff9b::/96` is judged by the IPv4 address it carries, spec §20, A19), the connection
 pinned to the checked address (the socket is opened on the resolved sockaddr — never a second lookup — and
 TLS is verified against the host name with SNI = host; the `Host` header is the host name), at most
 `max_redirects` redirects each re-checked before it is followed, a byte cap measured on the decoded body
@@ -22,7 +23,8 @@ transport URL (the logical URL, the hops and the identity are untouched); `MNEMO
 by the fetch chain; `MNEMON_TEST_CONVERT_HANG` and `MNEMON_TEST_MAP_HANG` make the conversion and the map
 worker hang in C code (proc.hang — the supervisor's kill is the proof); `MNEMON_TEST_WORKER_START_DELAY` delays
 the conversion worker's start after it touched `MNEMON_TEST_WORKER_START_FILE` (the race of a supervisor killed
-before the worker looked at its parent, reproduced on purpose). Without the master switch the hooks are
+before the worker looked at its parent, reproduced on purpose); `MNEMON_TEST_SITE_PACE_S` replaces the site
+capture's interval between two requests to one host (`site.pace_s`). Without the master switch the hooks are
 ignored and a warning names them.
 Stdlib only, python 3.9.
 """
@@ -51,7 +53,8 @@ ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 RETRYABLE_KINDS = ("timeout", "connection", "tls")
 HOOK_VARS = ("MNEMON_POLICY_ALLOW_LOOPBACK", "MNEMON_FETCH_URL_REWRITE", "MNEMON_EXTERNAL_FETCH_CMD", "MNEMON_TEST_CONVERT_HANG",
-             "MNEMON_TEST_MAP_HANG", "MNEMON_TEST_WORKER_START_DELAY", "MNEMON_TEST_WORKER_START_FILE")
+             "MNEMON_TEST_MAP_HANG", "MNEMON_TEST_WORKER_START_DELAY", "MNEMON_TEST_WORKER_START_FILE",
+             "MNEMON_TEST_SITE_PACE_S")
 CHUNK = 65536
 
 _warned = False

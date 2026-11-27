@@ -282,8 +282,13 @@ _SCHEME_RE = re.compile(r"(?i)\b(?:bearer|basic)(?=\s+\S)")
 # yt-dlp's own header option, wherever it stands: whatever follows it is a header
 _ADD_HEADER_RE = re.compile(r"(?i)--add-header(?![A-Za-z0-9_-])")
 _URL_RE = re.compile(r"(?i)https?://(?:<redacted>|[^\s'\"<>])+")   # a URL after the query rule ran
-# the user and password of a URL of any scheme (`http://user:password@proxy:8080`)
-_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s/'\"<>@?#]+@")
+# the user and password of a URL of any scheme (`http://user:password@proxy:8080`), whatever stands before the
+# scheme: a URL glued to the text before it (`8080http://…`) has a user part too. The part runs to the last `@`
+# before the host — a password with a raw `@` in it is common — and ends at whitespace, a quote, an angle bracket,
+# `/`, `?` or `#`: a part that holds one of those raw is not recognized (capture layer A18, the limits). The rule
+# starts at the literal `://`, not at a scheme: a pattern that looks for a scheme start rescans a long run of
+# letters and digits from every letter (quadratic), and what stands before `://` does not matter here
+_USERINFO_RE = re.compile(r"(://)[^\s/'\"<>?#]+@")
 # a URL's query: every value but the video id `v` is dropped (`sig=`, `token=`, `pot=`, `n=` … carry credentials)
 _QUERY_RE = re.compile(r"(?i)(https?://[^\s'\"?#<>]+)\?([^\s'\"#<>]*)")
 _PATH_RE = re.compile(r"(?<![A-Za-z0-9_:/.~-])(?:~/|/)[^\s'\"]+")
@@ -292,6 +297,10 @@ _TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_+=-])(?=[A-Za-z0-9_+=-]*[0-9])(?=[A-Za-z
 _CLOSERS = {"[": "]", "(": ")", "{": "}", "'": "'", '"': '"'}
 STDERR_MAX_LINES = 200
 STDERR_MAX_CHARS = 2000
+# redact() reads no more of a line than this. Several rules rescan a long run with no space in it from many
+# starting points (a run of `a-`, a line of `http://` with no `?`), so their time grows with the square of the
+# line; the limit bounds it. Twice the kept length: a redaction shortens a line
+REDACT_MAX_CHARS = 2 * STDERR_MAX_CHARS
 
 
 def _redact_query(m) -> str:
@@ -344,17 +353,30 @@ def _value_follows(line: str, pos: int, urls) -> bool:
 
 
 def redact(line: str) -> str:
-    """One line made safe to print or retain: URL query values first (the video id aside) and a URL's user and
-    password; then the rest of the line becomes <redacted> at the earliest of four cuts — a credential word outside a
-    URL, with its separator or with a value after it in free wording; and, wherever they stand, a credential key with
-    its separator (a hyphenated name and a URL's fragment included), `Bearer` or `Basic` with a value after it, and
-    `--add-header` — the separator kept when there is one (`Authorization: <redacted>`, `SID=<redacted>`), whatever
-    was left open closed; then absolute and home-relative paths, and token-shaped strings. Every line that the rule of
-    the release before this one cut is cut here too: its key, scheme and option rules read the whole line, as they
-    did."""
+    """One line made safe to print or retain: URL query values first (the video id aside); then the rest of the line
+    becomes <redacted> at the earliest of four cuts — a credential word outside a URL, with its separator or with a
+    value after it in free wording; and, wherever they stand, a credential key with its separator (a hyphenated name
+    and a URL's fragment included), `Bearer` or `Basic` with a value after it, and `--add-header` — the separator kept
+    when there is one (`Authorization: <redacted>`, `SID=<redacted>`), whatever was left open closed; then a URL's
+    user and password (a cut inside that part takes the whole part), absolute and home-relative paths, and
+    token-shaped strings.
+
+    The key, scheme and option rules read the line as the first release's did — after the query rule and before any
+    other change — and each cuts where it did, or earlier. That is a statement about these three rules, not about
+    every line: an earlier cut keeps what stands before it (see the limits in capture layer A18).
+
+    A line longer than REDACT_MAX_CHARS is read up to there. The word that the limit splits goes with the rest —
+    half of a token is not token-shaped any more — and a note counts what was not read."""
+    if len(line) > REDACT_MAX_CHARS:
+        total, i = len(line), REDACT_MAX_CHARS
+        while i > 0 and not line[i - 1].isspace():
+            i -= 1
+        head = line[:i].rstrip()
+        note = "<%d character(s) of the line not read>" % (total - len(head))
+        return (redact(head) + " " + note) if head else note
     line = _QUERY_RE.sub(_redact_query, line)
-    line = _USERINFO_RE.sub(lambda m: m.group(1) + "<redacted>@", line)
     urls = [(m.start(), m.end()) for m in _URL_RE.finditer(line)]
+    user_parts = [(m.end(1), m.end() - 1) for m in _USERINFO_RE.finditer(line)]   # each URL's user part, up to its `@`
 
     def outside(m) -> bool:
         return not any(a <= m.start() < b for a, b in urls)
@@ -381,8 +403,17 @@ def redact(line: str) -> str:
             cuts.append((m.end(), " <redacted>"))
     if cuts:
         end, tail = min(cuts)
+        # a cut inside a URL's user part (a field name or `--add-header` in a password, a key as the user name) would
+        # keep the start of that part and drop the `@` the rule below looks for: nothing of the part is kept
+        for a, b in user_parts:
+            if a < end <= b:
+                end, tail = a, "<redacted>"
+                break
         prefix = line[:end]
         line = prefix + tail + _closers(prefix)
+    # the user parts that the kept line still holds whole. After the cut, never before it: a key inside a user part
+    # (`https://sid:…@host`) is a field, and the cut it makes takes the rest of the line with it
+    line = _USERINFO_RE.sub(lambda m: m.group(1) + "<redacted>@", line)
     line = _PATH_RE.sub("<path>", line)
     return _TOKEN_RE.sub("<redacted>", line)
 

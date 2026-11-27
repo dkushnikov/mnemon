@@ -490,6 +490,7 @@ class HooksOff(unittest.TestCase):
             env["MNEMON_TEST_MAP_HANG"] = "1"          # ...and the map worker's (F10)
             env["MNEMON_TEST_WORKER_START_DELAY"] = "1"   # the conversion worker's start delay and its handshake file
             env["MNEMON_TEST_WORKER_START_FILE"] = "/dev/null"
+            env["MNEMON_TEST_SITE_PACE_S"] = "0"          # ...and the site capture's pacing control
             code = ("import sys; sys.path.insert(0, %r)\n"
                     "from capture import policy as P\n"
                     "try:\n    P.Policy().get(%r)\nexcept P.PolicyError as e:\n    print(e.kind)\n") % (BIN, server.url("/x"))
