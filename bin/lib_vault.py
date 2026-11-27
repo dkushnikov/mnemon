@@ -382,6 +382,9 @@ def read_folder(sources: str, name: str, snapshot: dict) -> dict:
         rec["judgement"] = "dismissed"
     rec["cc_vault"] = (rec["ex_nested"].get("capture_context", {}).get("vault") or "").strip()
     rec["completeness"] = cap.get("completeness") if "completeness" in cap else None
+    # capture.fidelity (exact · converted · transcribed · recognized), read as completeness is; null
+    # when the key is absent — research reads `recognized` as an info reason (research interface v1.5)
+    rec["fidelity"] = cap.get("fidelity") if "fidelity" in cap else None
     rec["raw_store"] = (cap.get("raw_store") or "").strip()
     rec["text_sha256"] = cap.get("text_sha256")
     rec["origin"] = (src.get("origin") or "").strip()
@@ -570,14 +573,15 @@ def scan_wiki(vault: str, snapshot: dict) -> dict:
 
 def research_context(scan: dict, budget_words: Optional[int] = None) -> dict:
     """What lib_research.validate_wiki needs, from one snapshot: the revisions (class, the capture
-    and body hashes, completeness, the supersedes verdict), the collections by name, the charter's
-    fingerprint, a lazy reader of `source.md` bodies (the locator check), local existence."""
+    and body hashes, completeness, fidelity, the supersedes verdict), the collections by name, the
+    charter's fingerprint, a lazy reader of `source.md` bodies (the locator check), local existence."""
     vault = scan["vault"]
     revisions: Dict[str, dict] = {}
     for r in scan["folders"]:
         revisions[r["name"]] = {
             "has_source": r["has_source"], "has_extract": r["has_extract"], "klass": r["klass"],
             "capture_sha256": r["text_sha256"], "body_sha256": r["body_sha256"], "completeness": r["completeness"],
+            "fidelity": r["fidelity"],                  # v1.5: capture.fidelity of source.md, or None
             "superseded": r["superseded"], "source_type": r["source_type"],
             "unreadable": r["source_state"] == "unreadable",
         }
