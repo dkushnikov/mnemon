@@ -1,0 +1,12 @@
+Bounded Recall: Retrieval Budgets for Long-Context Agents
+Alex Placeholder, Blair Example
+Example Institute of Technology
+Abstract
+Long-context language models invite a simple strategy: retrieve more and let the model sort it out. We show that this strategy has a cost that grows faster than its benefit. On three question answering benchmarks, raising the number of retrieved passages from 8 to 32 improves recall by 3.8 points but raises the rate of misattributed quotations from 4.1% to 11.7%. We propose a retrieval budget, a fixed cap on passages enforced after ranking, and report the dropped passages as a diagnostic. The budget recovers most of the accuracy at a quarter of the token cost.
+1 Introduction
+Agents that answer questions from a private library face a trade-off between coverage and focus. A wider retrieval step finds more of the relevant evidence, but every passage it returns competes for the attention of the model that writes the answer.
+Prior work treats the number of passages as a tuning constant. We argue that it is a budget, and that a budget should be stated, enforced and audited like any other resource of the system.
+Our contributions are threefold. First, we measure the effect of the passage count on recall, latency and quotation accuracy across three benchmarks. Second, we define a retrieval budget and a simple enforcement rule. Third, we show that recording the dropped passages makes failures easy to diagnose.
+2 Related Work
+Retrieval augmented generation has been studied extensively. Most systems fix the passage count once and never revisit it.
+arXiv:2401.00001v1 [cs.CL] 1 Jan 2024

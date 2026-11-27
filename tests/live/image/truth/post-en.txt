@@ -1,0 +1,8 @@
+Example Author
+@example_author · 4h
+A small thread on why our retrieval pipeline got slower when we gave it more memory.
+For three weeks we measured every request. The median latency went from 410 ms to 1.9 s, and nobody had changed the model. What changed was the index: we had raised the chunk budget from 8 to 32 passages, because recall on the evaluation set improved by four points.
+Recall is not the whole story. Each extra passage costs tokens, and the ranking step reads all of them before it answers. Past roughly twelve passages the answers did not get better; they got longer, and they quoted the wrong paragraph more often.
+So we added a budget. The ranker keeps the best twelve, drops the rest, and records which passages it dropped. The evaluation set lost one point of recall and the users stopped complaining.
+Three lessons. Measure the whole request, not one stage. A metric you can raise cheaply will be raised. And write the budget down where the next person will find it, because in six months nobody will remember why the number is twelve.
+1.2K replies · 3.4K reposts · 18K likes
