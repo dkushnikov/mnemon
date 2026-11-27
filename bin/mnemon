@@ -516,10 +516,19 @@ for key in (sys.argv[2], sys.argv[3]):
         probed = [k for k, v in probes.items() if v is True]
         documented = [k for k, v in probes.items() if v == "skipped"]
         failed = [k for k, v in probes.items() if v is False]
+        # the image reader (capture contracts A15 §4): a pass record gates extraction; images need the
+        # Boolean probes["image-reader"] true too, so the line names a missing or failed entry
+        image = probes.get("image-reader")
+        image_gap = rec.get("pass") is True and image is not True
+        if image_gap:
+            failed = [k for k in failed if k != "image-reader"]
         parts = []
         if probed:
             parts.append("probed: " + ", ".join(probed))
         parts += [k + ": documented" for k in documented] + [k + ": failed" for k in failed]
+        if image_gap:
+            parts.append("image-reader: " + ("failed" if image is False else "not probed")
+                         + " — image captures exit 3: mnemon fence-probe")
         print(("pass " if rec.get("pass") is True else "fail ") + str(rec.get("date") or "unknown date") + "\t" + "; ".join(parts))
         sys.exit(0)
 print("none")
@@ -660,7 +669,120 @@ _doctor_capture_deps() {
   else
     status=warn; detail="$detail · poppler missing (PDF captures refused: brew install poppler)"
   fi
+  # the image origin (capture layer §21.11): the witness's probe and the reader's fence probe entry
+  local part tab=$'\t'
+  part="$(_doctor_ocr_part)"
+  [[ "${part%%$tab*}" == ok ]] || status=warn
+  detail="$detail · ${part#*$tab}"
+  part="$(_doctor_image_reader_part)"
+  [[ "${part%%$tab*}" == ok ]] || status=warn
+  detail="$detail · ${part#*$tab}"
   _check "$status" capture-deps "$detail"
+}
+
+# ocr — the witness's probe, `capture-image.py --probe --languages <ocr_languages> --timeout 10` (capture layer
+# §21.6 «The probe», §21.11), read from its stdout document mnemon-ocr-probe/1. Prints `ok|warn<TAB><part>`.
+# Observational: the probe reads tesseract's version and its language model directory, nothing else.
+# MNEMON_CAPTURE_IMAGE_CMD names the worker as it does for the gateway (the test seam).
+_doctor_ocr_part() {
+  local cmd langs doc="" rc=0
+  cmd="${MNEMON_CAPTURE_IMAGE_CMD:-$BIN_DIR/capture-image.py}"
+  langs="${OCR_LANGUAGES:-eng}"
+  doc="$("$cmd" --probe --languages "$langs" --timeout 10 2>/dev/null </dev/null)" || rc=$?
+  python3 - "$rc" "$langs" "$(basename "$cmd")" "${doc:0:65536}" <<'PY' 2>/dev/null || printf 'warn\tocr: the probe answer could not be read (exit %s)\n' "$rc"
+import json, sys
+rc, langs, cmd, raw = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+EXIT3 = " — image captures exit 3"
+try:
+    doc = json.loads(raw) if raw.strip() else None
+except ValueError:
+    doc = None
+if not isinstance(doc, dict) or doc.get("schema") != "mnemon-ocr-probe/1":
+    if rc == 2:
+        print("warn\tocr: the probe refused ocr_languages %s (exit 2)" % langs)
+    else:
+        print("warn\tocr not probed: %s --probe answered no mnemon-ocr-probe/1 document (exit %d)%s" % (cmd, rc, EXIT3))
+    sys.exit(0)
+def names(value):
+    return [str(x) for x in value] if isinstance(value, list) else []
+version = doc.get("version") if isinstance(doc.get("version"), str) else None
+available, missing = names(doc.get("available")), names(doc.get("missing"))
+codes = [m[5:] for m in missing if m.startswith("lang:")]
+where = " (tesseract %s, language models in %s)" % (version or "?", doc.get("tessdata_dir") or "?")
+command = "tesseract --list-langs" if "model-directory" in missing else "tesseract --version"
+reason = doc.get("reason")
+if rc == 0 and doc.get("ok") is True and not missing:
+    print("ok\tocr tesseract %s (models: %s)" % (version or "?", ", ".join(available) or "none listed"))
+elif rc != 3 or doc.get("ok") is not False:
+    print("warn\tocr: the probe answered exit %d with ok %s — its exit and its document disagree" % (rc, json.dumps(doc.get("ok"))))
+elif reason == "no-tesseract":
+    print("warn\tocr missing" + EXIT3 + ": brew install tesseract")
+elif reason == "version":
+    if version:
+        print("warn\tocr tesseract %s is older than 4%s: brew upgrade tesseract" % (version, EXIT3))
+    else:
+        print("warn\tocr tesseract version unreadable" + EXIT3)
+elif reason == "model-missing":
+    print("warn\tocr_languages %s: %s missing%s%s: brew install tesseract-lang" % (langs, ", ".join(codes) or "a language model", where, EXIT3))
+elif reason == "model-unreadable":
+    print("warn\tocr_languages %s: %s unreadable%s%s" % (langs, ", ".join(codes) or "a language model", where, EXIT3))
+elif reason == "model-directory":
+    print("warn\tocr tesseract %s: no language model directory (tesseract --list-langs names none, TESSDATA_PREFIX unset)%s" % (version or "?", EXIT3))
+elif reason == "probe-timeout":
+    print("warn\tocr probe timed out: %s ran over 10 s%s" % (command, EXIT3))
+elif reason == "probe-output-cap":
+    print("warn\tocr probe: %s wrote over its output cap%s" % (command, EXIT3))
+elif reason == "tesseract-start":
+    print("warn\tocr: tesseract cannot be started%s" % EXIT3)
+else:
+    print("warn\tocr not ready (reason %s; missing: %s)%s" % (reason, ", ".join(missing) or "nothing named", EXIT3))
+PY
+}
+
+# image-reader — the reader's fence probe entry (capture contracts A15 §4, capture layer §21.11): the record of
+# the installed Claude Code holds probes["image-reader"]: true, written by `mnemon fence-probe`. The record is
+# looked up as the fence line looks it up (the version token, then the whole --version line). Prints
+# `ok|warn<TAB><part>`.
+_doctor_image_reader_part() {
+  local ver_line ver entry
+  if ! command -v claude >/dev/null 2>&1; then
+    printf 'warn\timage-reader: claude not on PATH (see deps) — image captures exit 3\n'
+    return 0
+  fi
+  ver_line="$(claude --version 2>/dev/null </dev/null || true)"
+  ver_line="${ver_line%%$'\n'*}"
+  ver="${ver_line%% *}"
+  entry="$(_doctor_image_probe_entry "$ver" "$ver_line")"
+  if [[ "$entry" == true ]]; then
+    printf 'ok\timage-reader %s (fence probe: pass)\n' "${IMAGE_READER_MODEL:-haiku}"
+  else
+    printf 'warn\timage-reader: no fence probe for images on Claude Code %s — image captures exit 3: mnemon fence-probe\n' "${ver:-(no version)}"
+  fi
+}
+
+# _doctor_image_probe_entry <version token> <--version line> → true · false · absent · none · unreadable:
+# probes["image-reader"] of the fence probe record of that version.
+_doctor_image_probe_entry() {
+  local probes
+  probes="$(mnemon_state_home)/mnemon/fence-probes.json"
+  if [[ ! -f "$probes" ]]; then echo none; return 0; fi
+  python3 - "$probes" "$1" "$2" <<'PY' 2>/dev/null || echo unreadable
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        doc = json.load(fh)
+except Exception:
+    print("unreadable")
+    sys.exit(0)
+for key in (sys.argv[2], sys.argv[3]):
+    rec = doc.get(key) if isinstance(doc, dict) else None
+    if isinstance(rec, dict):
+        probes = rec.get("probes") if isinstance(rec.get("probes"), dict) else {}
+        value = probes.get("image-reader")
+        print("true" if value is True else "false" if value is False else "absent")
+        sys.exit(0)
+print("none")
+PY
 }
 
 # media-tools — what the media path and the browser lane depend on beyond presence (capture layer A18): yt-dlp's
@@ -1777,6 +1899,37 @@ cmd_version() {
 }
 
 # ---------------------------------------------------------------------------
+# fence-probe — the image reader's configuration for the sixth probe
+# ---------------------------------------------------------------------------
+
+# Exports IMAGE_READER_MODEL, IMAGE_READER_EFFORT and IMAGE_READER_MAX_USD for bin/fence-probe.sh (capture
+# contracts A15 §4.7: the probe runs «with the reader's configured model and effort level»): the values of the
+# instance that resolves — its config, the loader's default for a key it does not set — else haiku · high · 0.05,
+# whatever the caller's environment carries. The config is loaded in a subshell, so nothing else of it reaches
+# the probe. Never fails: a machine without any instance probes as before (the install guide runs
+# `mnemon fence-probe` before `mnemon init`), and a config that does not load falls back to the defaults. One
+# line on stderr says which values the probe uses and where they came from.
+_fence_probe_reader_config() {
+  local errf line model effort usd inst file src why origin us=$'\037'
+  errf="$(mktemp)"
+  if line="$(load_config >/dev/null 2>"$errf" && printf '%s\037%s\037%s\037%s\037%s\037%s' "${IMAGE_READER_MODEL:-}" \
+               "${IMAGE_READER_EFFORT:-}" "${IMAGE_READER_MAX_USD:-}" "${MNEMON_INSTANCE:-}" "${MNEMON_CONFIG_FILE:-}" \
+               "${MNEMON_CONFIG_SOURCE:-}")" && [[ -n "$line" ]]; then
+    IFS="$us" read -r model effort usd inst file src <<<"$line"
+    origin="the instance $inst ($file; selected by $src)"
+  else
+    model=haiku effort=high usd=0.05
+    why="$(sed -n '/[^[:space:]]/{s/^ERROR: //;p;q;}' "$errf" | cut -c1-300)"
+    origin="the defaults: no instance config loaded${why:+ ($why)}"
+  fi
+  rm -f "$errf"
+  export IMAGE_READER_MODEL="${model:-haiku}" IMAGE_READER_EFFORT="${effort:-high}" IMAGE_READER_MAX_USD="${usd:-0.05}"
+  printf 'mnemon fence-probe: the image reader probe uses model %s, effort %s, cap $%s — from %s\n' \
+    "$IMAGE_READER_MODEL" "$IMAGE_READER_EFFORT" "$IMAGE_READER_MAX_USD" "$origin" >&2
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # Global options + dispatch
 # ---------------------------------------------------------------------------
 
@@ -1831,7 +1984,12 @@ case "$cmd" in
             _resolve_or_die
             MNEMON_DISPATCHER="$0" exec python3 "$BIN_DIR/browser-lane.py" "$@" ;;
   fence-probe)
-            if [[ -f "$BIN_DIR/fence-probe.sh" ]]; then exec "$BIN_DIR/fence-probe.sh" "$@"; fi
+            # the sixth probe runs the image reader's call with the reader's configured model, level and cap
+            # (capture contracts A15 §4.7): the resolved instance's, else the defaults (--help needs neither)
+            if [[ -f "$BIN_DIR/fence-probe.sh" ]]; then
+              _has_flag --help "$@" || _has_flag -h "$@" || _fence_probe_reader_config
+              exec "$BIN_DIR/fence-probe.sh" "$@"
+            fi
             printf 'mnemon fence-probe: bin/fence-probe.sh not present in this engine\n' >&2
             exit 2 ;;
   status)   _reject_post_command_selectors "$@"; _resolve_or_die

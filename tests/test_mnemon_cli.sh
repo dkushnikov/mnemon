@@ -17,6 +17,29 @@ unset MNEMON_CONFIG MNEMON_INSTANCE MNEMON_CONFIG_DIR MNEMON_HOME
 CFG_DIR="$XDG_CONFIG_HOME/mnemon"
 mkdir -p "$TEST_TMPDIR/cwd"
 cd "$TEST_TMPDIR/cwd"
+# The doctor's ocr part (capture layer §21.11) runs `capture-image.py --probe`: every doctor run of this suite
+# gets a stub through the worker's seam, MNEMON_CAPTURE_IMAGE_CMD — never the real worker, never tesseract. The
+# stub appends its argv to STUB_OCR_ARGV (when set) and prints one document of the fixture ocr-probe.json:
+# STUB_OCR_CASE (default present; exit 0 for present, 3 for the others), or STUB_OCR_DOC with exit STUB_OCR_RC.
+OCR_STUB="$TEST_TMPDIR/ocr-probe-stub"
+cat > "$OCR_STUB" <<STUB
+#!/usr/bin/env python3
+import json, os, sys
+log = os.environ.get("STUB_OCR_ARGV")
+if log:
+    with open(log, "a", encoding="utf-8") as fh:
+        fh.write(" ".join(sys.argv[1:]) + "\n")
+if os.environ.get("STUB_OCR_DOC") is not None:
+    sys.stdout.write(os.environ["STUB_OCR_DOC"] + "\n")
+    sys.exit(int(os.environ.get("STUB_OCR_RC", "3")))
+case = os.environ.get("STUB_OCR_CASE", "present")
+with open("$MNEMON_ROOT/tests/fixtures/capture/reports/ocr-probe.json", encoding="utf-8") as fh:
+    doc = json.load(fh)[case]
+sys.stdout.write(json.dumps(doc) + "\n")
+sys.exit(0 if case == "present" else 3)
+STUB
+chmod +x "$OCR_STUB"
+export MNEMON_CAPTURE_IMAGE_CMD="$OCR_STUB"
 THIS_HOST="$(hostname -s 2>/dev/null || hostname)"
 THIS_HOST="${THIS_HOST%%.*}"
 
@@ -486,6 +509,16 @@ mk_stub pandoc 'echo "pandoc 3.9.0.2"'
 mk_stub pdftotext 'echo "pdftotext version 26.04.0" >&2'
 mk_stub pdfinfo 'exit 0'
 mk_stub google-chrome 'echo "Google Chrome 130.0.6723.91"'
+# the image origin's two parts (capture layer §21.11) need a claude whose fence probe record holds the image
+# reader's entry: a stub claude and a record keyed by its --version line, as bin/fence-probe.sh writes it
+mk_stub claude 'case "$1" in --version) echo "2.1.328 (Claude Code)" ;; --help) echo "Options: --restricted  --tools <list>" ;; esac'
+PROBES="$XDG_STATE_HOME/mnemon/fence-probes.json"
+mkdir -p "$(dirname "$PROBES")"
+write_probe_record() {  # write_probe_record <pass true|false> <probes JSON object>
+  printf '{"2.1.328 (Claude Code)": {"pass": %s, "date": "2026-11-27", "model": "sonnet", "probes": %s}}\n' "$1" "$2" > "$PROBES"
+}
+PROBES_1_5='"no-tools": true, "ambient-project": true, "ambient-user": "skipped", "mcp": true, "session": true'
+write_probe_record true "{$PROBES_1_5, \"image-reader\": true}"
 run env PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
 assert_contains "$out" "ok capture-deps — defuddle 0.8.0 · pandoc 3.9.0.2 · chrome Google Chrome " "doctor: capture-deps ok with versions (defuddle ≥ 0.6, pandoc ≥ 3, Chrome by render-url.sh's candidates)"
 assert_contains "$out" " · poppler 26.04.0" "...and Poppler's version"
@@ -499,6 +532,85 @@ rm -f "$CSTUB/defuddle" "$CSTUB/pandoc"
 run env PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
 assert_contains "$out" "warn capture-deps — defuddle missing (pandoc and the DOM text remain as converters) · pandoc missing (html conversion falls back to the DOM text)" "doctor: capture-deps names missing converters"
 assert_eq "$(printf '%s\n' "$out" | grep -c '^fail capture-deps' || true)" "0" "doctor: capture-deps never fails (every tool is optional)"
+
+# --- doctor: capture-deps — the witness's probe (ocr) and the reader's fence probe entry (image-reader), §21.11 ---
+echo "--- doctor: capture-deps ocr / image-reader (capture layer §21.11) ---"
+mk_stub defuddle 'echo 0.8.0'
+mk_stub pandoc 'echo "pandoc 3.9.0.2"'
+mk_stub pdftotext 'echo "pdftotext version 26.04.0" >&2'
+printf 'ocr_languages: rus+eng\nimage_reader_model: sonnet\n' >> "$CFG_DIR/instances/alpha.yaml"
+OCR_ARGV="$TEST_TMPDIR/ocr-argv"
+: > "$OCR_ARGV"
+run env STUB_OCR_ARGV="$OCR_ARGV" PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" "ok capture-deps — defuddle 0.8.0 · pandoc 3.9.0.2 · chrome Google Chrome " "doctor: capture-deps ok with the image parts ready"
+assert_contains "$out" " · poppler 26.04.0 · ocr tesseract 5.5.4 (models: eng, osd, rus) · image-reader sonnet (fence probe: pass)" "...ocr: the probe's version and its available language models; image-reader: the instance's model, fence probe pass"
+assert_eq "$(cat "$OCR_ARGV")" "--probe --languages rus+eng --timeout 10" "...one probe: capture-image.py --probe --languages <the instance's ocr_languages> --timeout 10"
+# every case of tests/fixtures/capture/reports/ocr-probe.json: the probe's exit 3 warns, by its reason
+for c in no-tesseract version-old model-missing probe-timeout; do
+  run env STUB_OCR_CASE="$c" PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+  assert_contains "$out" "warn capture-deps — defuddle 0.8.0 · pandoc 3.9.0.2 · " "doctor: the probe's case $c (exit 3) → warn capture-deps"
+  case "$c" in
+    no-tesseract)  assert_contains "$out" " · ocr missing — image captures exit 3: brew install tesseract · image-reader sonnet (fence probe: pass)" "...no-tesseract: ocr missing, the install named; the image-reader part unchanged" ;;
+    version-old)   assert_contains "$out" " · ocr tesseract 3.05 is older than 4 — image captures exit 3: brew upgrade tesseract · " "...version: the version older than 4 named" ;;
+    model-missing) assert_contains "$out" " · ocr_languages rus+eng: rus missing (tesseract 5.5.4, language models in /opt/tessdata) — image captures exit 3: brew install tesseract-lang · " "...model-missing: ocr_languages rus+eng: rus missing" ;;
+    probe-timeout) assert_contains "$out" " · ocr probe timed out: tesseract --version ran over 10 s — image captures exit 3 · " "...probe-timeout: the command named" ;;
+  esac
+  assert_eq "$(printf '%s\n' "$out" | grep -c '^fail capture-deps' || true)" "0" "...never fail (observational)"
+done
+# the reasons the fixture holds no document for: probe-output-cap, and contract K2's three
+base_doc="$(python3 -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1]))["no-tesseract"]))' "$MNEMON_ROOT/tests/fixtures/capture/reports/ocr-probe.json")"
+k2_doc() {  # k2_doc <reason> <missing JSON list> → the no-tesseract document with that reason
+  printf '%s' "$base_doc" | python3 -c 'import json, sys; d = json.load(sys.stdin); d.update(reason=sys.argv[1], missing=json.loads(sys.argv[2]), version="5.5.4", tessdata_dir="/opt/tessdata"); print(json.dumps(d))' "$1" "$2"
+}
+run env STUB_OCR_DOC="$(k2_doc probe-output-cap '["model-directory"]')" PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" " · ocr probe: tesseract --list-langs wrote over its output cap — image captures exit 3 · " "doctor: probe-output-cap → warn, the command named (--list-langs)"
+run env STUB_OCR_DOC="$(k2_doc model-directory '["model-directory"]')" PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" " · ocr tesseract 5.5.4: no language model directory (tesseract --list-langs names none, TESSDATA_PREFIX unset) — image captures exit 3 · " "doctor: model-directory (contract K2) → warn"
+run env STUB_OCR_DOC="$(k2_doc model-unreadable '["lang:rus"]')" PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" " · ocr_languages rus+eng: rus unreadable (tesseract 5.5.4, language models in /opt/tessdata) — image captures exit 3 · " "doctor: model-unreadable (contract K2) → warn"
+run env STUB_OCR_DOC="$(k2_doc tesseract-start '["tesseract"]')" PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" " · ocr: tesseract cannot be started — image captures exit 3 · " "doctor: tesseract-start (contract K2) → warn"
+run env STUB_OCR_DOC="" STUB_OCR_RC=2 PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" " · ocr: the probe refused ocr_languages rus+eng (exit 2) · " "doctor: a probe that refuses the sequence (exit 2, nothing on stdout) → warn"
+run env MNEMON_CAPTURE_IMAGE_CMD="$TEST_TMPDIR/no-such-probe" PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" " · ocr not probed: no-such-probe --probe answered no mnemon-ocr-probe/1 document (exit 127) — image captures exit 3 · " "doctor: a worker that cannot run → warn, never fail"
+run env STUB_OCR_CASE=present STUB_OCR_DOC="$(k2_doc model-missing '["lang:rus"]')" STUB_OCR_RC=0 PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" " · ocr: the probe answered exit 0 with ok false — its exit and its document disagree · " "doctor: an exit that contradicts the document → warn"
+# image-reader: with and without the probe entry in the record of the installed Claude Code
+write_probe_record true "{$PROBES_1_5}"
+run env PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" "warn capture-deps — " "doctor: a record without the image-reader entry → warn capture-deps"
+assert_contains "$out" " · ocr tesseract 5.5.4 (models: eng, osd, rus) · image-reader: no fence probe for images on Claude Code 2.1.328 — image captures exit 3: mnemon fence-probe" "...image-reader: no fence probe for images on Claude Code <version>, the command named"
+assert_contains "$out" "ok fence — claude 2.1.328, --restricted available, probed 2026-11-27 — probed: no-tools, ambient-project, mcp, session; ambient-user: documented; image-reader: not probed — image captures exit 3: mnemon fence-probe" "...and the fence line names the same (extraction stays fenced: ok)"
+write_probe_record true "{$PROBES_1_5, \"image-reader\": false}"
+run env PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" " · image-reader: no fence probe for images on Claude Code 2.1.328 — image captures exit 3: mnemon fence-probe" "doctor: a failed image probe (entry false) → the same warn"
+assert_contains "$out" "ok fence — claude 2.1.328, --restricted available, probed 2026-11-27 — probed: no-tools, ambient-project, mcp, session; ambient-user: documented; image-reader: failed — image captures exit 3: mnemon fence-probe" "...the fence line: image-reader failed"
+write_probe_record true "{$PROBES_1_5, \"image-reader\": true}"
+run env PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" " · image-reader sonnet (fence probe: pass)" "doctor: the entry true → image-reader <model> (fence probe: pass)"
+assert_contains "$out" "ok fence — claude 2.1.328, --restricted available, probed 2026-11-27 — probed: no-tools, ambient-project, mcp, session, image-reader; ambient-user: documented" "...the fence line lists image-reader among the probed"
+assert_not_contains "$out" "image captures exit 3" "...and no line says that image captures exit 3"
+printf '{"2.1.327 (Claude Code)": {"pass": true, "date": "2026-11-20", "probes": {"image-reader": true}}}\n' > "$PROBES"
+run env PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" " · image-reader: no fence probe for images on Claude Code 2.1.328 — image captures exit 3: mnemon fence-probe" "doctor: an entry for another Claude Code version does not count"
+rm -f "$PROBES"
+run env PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+assert_contains "$out" " · image-reader: no fence probe for images on Claude Code 2.1.328 — image captures exit 3: mnemon fence-probe" "doctor: no record at all → the same warn"
+rm -f "$CSTUB/claude"
+run env PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor
+if env PATH="$CSTUB:/usr/bin:/bin" sh -c 'command -v claude' >/dev/null 2>&1; then
+  echo "  ○ skipped image-reader-without-claude: claude is on /usr/bin:/bin"
+else
+  assert_contains "$out" " · image-reader: claude not on PATH (see deps) — image captures exit 3" "doctor: no claude → image-reader warns, never fails"
+fi
+assert_eq "$(printf '%s\n' "$out" | grep -c '^fail capture-deps' || true)" "0" "doctor: capture-deps never fails with the image parts either"
+run env PATH="$CSTUB:/usr/bin:/bin" "$MNEMON" doctor --json
+assert_contains "$(printf '%s' "$out" | jget '[c["detail"] for c in d["checks"] if c["name"] == "capture-deps"][0]')" " · ocr tesseract 5.5.4 (models: eng, osd, rus) · image-reader" "doctor --json: the two parts are in the capture-deps detail"
+assert_eq "$(printf '%s' "$out" | jget 'len([c for c in d["checks"] if c["name"] in ("ocr", "image-reader")])')" "0" "...no check of their own: the check list is untouched"
+sed -i.bak '/^ocr_languages: /d; /^image_reader_model: /d' "$CFG_DIR/instances/alpha.yaml"; rm -f "$CFG_DIR/instances/alpha.yaml.bak"
+rm -f "$CSTUB/defuddle" "$CSTUB/pandoc" "$CSTUB/pdftotext" "$PROBES"
+rmdir "$XDG_STATE_HOME/mnemon" "$XDG_STATE_HOME" 2>/dev/null || true
 
 # --- doctor: media-tools (capture layer A18) — yt-dlp's own report: its version and age, the JS runtimes it can use ---
 echo "--- doctor: media-tools ---"
@@ -686,6 +798,68 @@ else
   assert_contains "$out" "warn fence — claude not on PATH (see deps)" "doctor: fence warns (deps fails) when claude is missing"
 fi
 rm -f "$PROBES"
+
+# --- fence-probe: the image reader's configuration (capture contracts A15 §4.7) ---
+# `mnemon fence-probe` runs bin/fence-probe.sh with the resolved instance's image_reader_model, _effort and
+# _max_usd, else the defaults. A stub claude, first on PATH, records the sixth call's argv and its effort variable
+# (the probe's scratch dir p6) and answers nothing, so the probe runs to its end and fails (exit 1, no record):
+# only the argv matters here. The real claude is never run; HOME is a temporary one.
+echo "--- fence-probe: the image reader's configuration ---"
+FPSTUB="$TEST_TMPDIR/fpstub"; mkdir -p "$FPSTUB" "$TEST_TMPDIR/home-fp"
+cat > "$FPSTUB/claude" <<'STUB'
+#!/bin/sh
+case "$1" in
+  --version) echo "2.1.328 (Claude Code)"; exit 0 ;;
+  --help) echo "Options: --restricted  --tools <list>"; exit 0 ;;
+esac
+if [ "$(basename "$PWD")" = p6 ]; then
+  : > "$FP_ARGV"
+  for a in "$@"; do printf '%s\n' "$a" >> "$FP_ARGV"; done
+  printf '%s\n' "${CLAUDE_CODE_EFFORT_LEVEL:-}" > "$FP_EFFORT"
+fi
+cat > /dev/null
+exit 0
+STUB
+chmod +x "$FPSTUB/claude"
+export FP_ARGV="$TEST_TMPDIR/fp-argv" FP_EFFORT="$TEST_TMPDIR/fp-effort"
+if [[ "$(PATH="$FPSTUB:$PATH" type -P claude)" != "$FPSTUB/claude" ]]; then
+  fail "fence-probe: the stub claude is first on PATH" "PATH resolves claude elsewhere"
+else
+  fp_run() { rm -f "$FP_ARGV" "$FP_EFFORT"; run env HOME="$TEST_TMPDIR/home-fp" PATH="$FPSTUB:$PATH" "$@"; }
+  fp_argv() { tr '\n' ' ' < "$FP_ARGV" 2>/dev/null | sed 's/ $//'; }
+  run "$MNEMON" init fpi --vault "$TEST_TMPDIR/vault-fpi" --non-interactive
+  printf 'image_reader_model: sonnet\nimage_reader_effort: max\nimage_reader_max_usd: 0.2\n' >> "$CFG_DIR/instances/fpi.yaml"
+  fp_run "$MNEMON" --instance fpi fence-probe
+  assert_eq "$rc" "1" "fence-probe with an instance: the probe ran to its end (the stub answers nothing: exit 1)"
+  assert_contains "$(fp_argv)" "--model sonnet --effort max --max-budget-usd 0.2" "...the sixth call's argv carries the instance's image_reader_model, _effort and _max_usd"
+  assert_eq "$(cat "$FP_EFFORT" 2>/dev/null)" "max" "...and CLAUDE_CODE_EFFORT_LEVEL is the instance's level"
+  assert_contains "$out" "mnemon fence-probe: the image reader probe uses model sonnet, effort max, cap \$0.2 — from the instance fpi ($CFG_DIR/instances/fpi.yaml; selected by --instance)" "...stderr says which values and where they came from"
+  fp_run env IMAGE_READER_MODEL=opus IMAGE_READER_EFFORT=low "$MNEMON" fence-probe
+  assert_contains "$(fp_argv)" "--model haiku --effort high --max-budget-usd 0.05" "the default instance without the keys → the loader's defaults, over the caller's environment"
+  assert_contains "$out" "uses model haiku, effort high, cap \$0.05 — from the instance alpha ($CFG_DIR/instances/alpha.yaml; selected by default)" "...named as the default instance's"
+  mkdir -p "$TEST_TMPDIR/xdg-none"
+  fp_run env XDG_CONFIG_HOME="$TEST_TMPDIR/xdg-none" IMAGE_READER_MODEL=opus IMAGE_READER_EFFORT=low "$MNEMON" fence-probe
+  assert_eq "$rc" "1" "no instance at all (before mnemon init): the probe still runs"
+  assert_contains "$(fp_argv)" "--model haiku --effort high --max-budget-usd 0.05" "...with the defaults haiku · high · 0.05, whatever the caller's environment carries"
+  assert_eq "$(cat "$FP_EFFORT" 2>/dev/null)" "high" "...the default level in the call's environment"
+  assert_contains "$out" "uses model haiku, effort high, cap \$0.05 — from the defaults: no instance config loaded (no Mnemon config found." "...stderr: the defaults, and why"
+  run "$MNEMON" init fpbad --vault "$TEST_TMPDIR/vault-fpbad" --non-interactive
+  printf 'image_reader_model: sonnet\nimage_reader_effort: extreme\n' >> "$CFG_DIR/instances/fpbad.yaml"
+  fp_run "$MNEMON" --instance fpbad fence-probe
+  assert_eq "$rc" "1" "an instance whose config does not load (image_reader_effort: extreme): the probe still runs"
+  assert_contains "$(fp_argv)" "--model haiku --effort high --max-budget-usd 0.05" "...with the defaults"
+  assert_contains "$out" "— from the defaults: no instance config loaded (" "...stderr: the defaults"
+  assert_contains "$out" "image_reader_effort" "...and names the key the loader refused"
+  fp_run "$MNEMON" --instance nosuch fence-probe
+  assert_contains "$(fp_argv)" "--model haiku --effort high --max-budget-usd 0.05" "an instance that does not exist → the defaults"
+  assert_contains "$out" "no instance config loaded (instance 'nosuch' has no config at " "...stderr names the loader's reason"
+  fp_run "$MNEMON" --instance fpi fence-probe --help
+  assert_eq "$rc" "0" "fence-probe --help exits 0"
+  assert_not_contains "$out" "the image reader probe uses" "...and loads no configuration"
+  [[ -e "$PROBES" ]] && fail "fence-probe with failing probes writes no record" "$(cat "$PROBES")" || pass "fence-probe with failing probes writes no record"
+  rm -f "$CFG_DIR/instances/fpi.yaml" "$CFG_DIR/instances/fpbad.yaml"
+fi
+unset FP_ARGV FP_EFFORT
 
 echo "--- doctor: vault-state, vault-lock ---"
 # D6: <XDG_STATE_HOME>/mnemon/vaults/<sha256(physical vault path)[:16]>
