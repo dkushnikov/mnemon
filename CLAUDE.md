@@ -50,6 +50,7 @@ Mnemon is the tool; the plugin is a thin door into it.
 # in a temp HOME — one with no `claude` on PATH, one against a logging stub `claude`
 tests/run-suites.sh test_config.sh test_capture.sh   # while you work: the suites your change touches
 tests/run-suites.sh            # before a pull request that touches a shared path: every suite, the toolchain on PATH
+tests/run-suites.sh --jobs 4   # the same pass, up to 4 suites at once (or --jobs auto): the same rows, in order, and the same exit code
 tests/run-suites.sh --both     # on main, once, before mnemon release (macOS): the current toolchain, then the legacy one
 
 # Dry-run a capture through the dispatcher against an explicit instance file

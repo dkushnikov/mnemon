@@ -37,8 +37,19 @@
 # the header names the jobs and a line before the summary gives the wall-clock time and the
 # longest suite; with N = 1 the output is the sequential runner's, byte for byte.
 #
+# One runner per logs directory: two runners on one --logs directory would remove each other's
+# working directories, TMPDIRs and row files, and one of them could end with exit 0 on a table it
+# never finished. Before it starts a suite or removes anything, the runner takes the directory
+# with a lock in it: `.run-suites.lock`, a directory made by one atomic mkdir, whose `pid` file
+# names the owner. A runner refuses a directory whose owner is alive (exit 2, naming the directory
+# and the owner's pid). A lock whose owner is gone is stale: the runner takes it over and says so
+# in one line on stderr. The owner removes the lock when it exits; --list takes no lock.
+#
 # Exit codes: 0 every suite passed · 1 a suite failed or was not run · 2 usage error, no suites,
-# or the legacy toolchain is not available · 130 interrupted (the running suites are stopped).
+# the legacy toolchain is not available, or a live runner owns the logs directory · 130
+# interrupted with --jobs above 1 (INT or TERM: the running suites are stopped). With one job the
+# runner traps no signal, like the sequential runner before it: SIGTERM ends it with 143 and
+# removes its lock, and the suite it was running goes on.
 # Runs under bash 3.2.
 
 set -u
@@ -69,12 +80,14 @@ Usage: tests/run-suites.sh [--both | --legacy] [-k|--keep-going] [-j|--jobs <n>|
                    failure starts no new suite: the running ones finish, the rest are "not run".
                    auto = the host's cores, at most 8
   --logs <dir>     keep each suite's output as <dir>/<toolchain>.<suite>.log (default: a temp dir,
-                   named in the summary); a failing suite's TMPDIR stays as <dir>/tmp.<toolchain>.<suite>
+                   named in the summary); a failing suite's TMPDIR stays as <dir>/tmp.<toolchain>.<suite>.
+                   One runner at a time: a directory that a live runner owns is refused (exit 2)
   --suites-dir <d> take the test_*.sh suites from <d> instead of this script's directory
   --list           print the suites and exit
   suite …          run only these suites (names in the suites dir, or paths)
 
-Exit: 0 all passed · 1 a suite failed or was not run · 2 usage / no suites / legacy toolchain missing.
+Exit: 0 all passed · 1 a suite failed or was not run · 2 usage / no suites / legacy toolchain missing /
+      logs directory in use.
 USAGE
 }
 
@@ -199,6 +212,58 @@ else
   mkdir -p "$LOG_DIR" || die2 "cannot create the logs directory $LOG_DIR"
 fi
 LOG_DIR="$(cd "$LOG_DIR" && pwd -P)"
+
+# --- one runner per logs directory ---
+# take_lock: own LOG_DIR through LOCK (mkdir is atomic; LOCK/pid names the owner) or refuse it
+# (exit 2) while its owner lives. A stale lock is taken over through a second mkdir,
+# LOCK/takeover.<the gone pid>: of the runners that found the same stale lock, one wins it; the
+# others read the winner's pid on their next round. A lock with no pid file, or one that stays
+# half taken over, is refused after a second: a runner is taking it, or one died while doing so.
+# release_lock (the EXIT trap) removes the lock of the runner that owns it. bash runs no EXIT
+# trap in a subshell or an asynchronous job, so a suite or a job never removes it.
+LOCK="$LOG_DIR/.run-suites.lock"
+LOCK_HELD=false
+release_lock() {
+  local owner
+  $LOCK_HELD || return 0
+  LOCK_HELD=false
+  owner="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  [[ -z "$owner" || "$owner" == "$$" ]] && rm -rf "$LOCK"
+  return 0
+}
+take_lock() {
+  local owner i=0
+  while :; do
+    if mkdir "$LOCK" 2>/dev/null; then
+      LOCK_HELD=true
+      printf '%s\n' "$$" >"$LOCK/pid"
+      return 0
+    fi
+    [[ -d "$LOCK" ]] || die2 "cannot create the lock $LOCK"
+    owner="$(cat "$LOCK/pid" 2>/dev/null || true)"
+    case "$owner" in *[!0-9]*) owner="" ;; esac
+    if [[ -n "$owner" ]]; then
+      # (a pid file with this runner's own pid is the lock of a gone runner whose pid came back)
+      if [[ "$owner" != "$$" ]] && kill -0 "$owner" 2>/dev/null; then
+        die2 "the logs directory $LOG_DIR is in use by another runner (pid $owner, lock $LOCK) — wait for it to end, or pass another --logs"
+      fi
+      if mkdir "$LOCK/takeover.$owner" 2>/dev/null; then
+        if [[ "$(cat "$LOCK/pid" 2>/dev/null || true)" == "$owner" ]]; then
+          printf '%s\n' "$$" >"$LOCK/pid.$$" && mv -f "$LOCK/pid.$$" "$LOCK/pid" || die2 "cannot write $LOCK/pid"
+          LOCK_HELD=true
+          printf 'run-suites: took over the lock of %s from pid %s, which is gone\n' "$LOG_DIR" "$owner" >&2
+          return 0
+        fi
+        rmdir "$LOCK/takeover.$owner" 2>/dev/null || true
+      fi
+    fi
+    [[ $i -lt 20 ]] || die2 "the logs directory $LOG_DIR holds a half-taken lock ($LOCK): a runner is taking it, or one died while doing so — remove $LOCK once no runner uses the directory"
+    i=$((i + 1))
+    sleep 0.05
+  done
+}
+trap release_lock EXIT
+take_lock
 
 # --- the table ---
 row() {   # <mark> <toolchain> <suite> <result> <passed> <failed> <time>
