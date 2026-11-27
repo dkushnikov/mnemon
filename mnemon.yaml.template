@@ -84,7 +84,8 @@ auto_detect_origin: true
 # A capture binds its witness's languages (`ocr_languages`, or --ocr-languages for one capture);
 # the reader's model, the caps and the floor are limits read at run time, like convert_timeout:
 # change one and replay, and the report records the values the attempt ran under. A value outside
-# its type or range is refused at config load (exit 2).
+# its type or range is refused at config load (exit 2). The reader's cap, the timeout and the three
+# size caps must be greater than 0.
 # ocr_languages: eng                # the witness's tesseract language codes, in order, joined by +
 #                                   # (eng, rus+eng, chi_sim): one to eight codes, none twice
 # image_reader_model: haiku         # the model of the reader's call, as --model takes it
