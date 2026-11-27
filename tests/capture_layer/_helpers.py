@@ -251,6 +251,19 @@ def tmpdir(prefix="mnemon-cl-") -> str:
     return tempfile.mkdtemp(prefix=prefix)
 
 
+def private_tmpdir(testcase, work: str, env: dict) -> str:
+    """A TMPDIR of the CLI's own, `<work>/tmp`, set in `env`, for a check that the CLI leaves no temp
+    directory behind: a check on the system temp directory also sees what every other process puts there
+    meanwhile (suites that run at the same time, another checkout's pass). The control asserts that a python
+    started with `env` takes its temp files from there, so an empty directory is not a vacuous pass."""
+    path = os.path.join(work, "tmp")
+    os.mkdir(path)
+    env["TMPDIR"] = path
+    rc, so, se = run_cli(["-c", "import tempfile; print(tempfile.gettempdir())"], env=env, timeout=60)
+    testcase.assertEqual((rc, so.strip()), (0, os.path.abspath(path)), se)
+    return path
+
+
 def pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
