@@ -871,6 +871,11 @@ class PacingControl(unittest.TestCase):
             self.assertEqual(seconds, site.PACE_S, "%r keeps PACE_S" % bad)
             self.assertIn("MNEMON_TEST_SITE_PACE_S=%r ignored" % bad, err)
 
+    def test_the_production_interval_is_the_one_second_of_the_spec(self):
+        # Pacing measures gaps against this constant, so the constant itself needs a pin: the spec says
+        # «keeps ≥ 1 s between requests to one host»
+        self.assertEqual(site.PACE_S, 1.0)
+
     def test_the_site_cli_names_it_without_the_master_switch(self):
         rc, so, se = run_cli([CS, "map", "http://127.0.0.1:9/", "--json"],
                              env=clean_env({"MNEMON_TEST_SITE_PACE_S": "0"}, hooks=False), timeout=60)
