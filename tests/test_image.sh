@@ -271,6 +271,28 @@ write_image_probe_record
 run_gw --capture-id i-prex
 assert_eq "$rc $(result status)" "0 extracted" "the record written → the replay publishes"
 assert_eq "$(rget i-prex '.raw_sha256')" "$(sha_of "$prex")" "...the input read and verified, the destination prepared again"
+# a replay of a kept image reads again: the reader's preflight runs on that path too (capture layer §21.4,
+# §21.10, §21.12 item 4) — fence-unprobed, exit 3, the image still kept, no model call; the entry back → published
+stub_reset
+prk="$(mkimg pre-kept.png)"
+MNEMON_TEST_READER_MODE=error run_gw --origin image --file "$prk" --capture-id i-prk
+assert_eq "$rc $(result error_class) $(result retryable)" "1 convert true" "a reader error keeps the image: failed/convert, retryable"
+prk_raw="$(rget i-prk '.raw_path')"
+assert_eq "$(rget i-prk '.raw_published') $(sha_of "$prk_raw")" "true $(sha_of "$prk")" "...the raw published in the store"
+write_probe_record     # the record without the entry image-reader
+r0="$(reader_calls)"; t0="$(tess_calls)"
+run_gw --capture-id i-prk
+assert_eq "$rc $(result status) $(result error_class)" "3 failed fence-unprobed" "the replay of a kept image without the reader's probe entry: exit 3, fence-unprobed"
+assert_contains "$err" "mnemon fence-probe" "...the message names the command"
+assert_eq "$(( $(reader_calls) - r0 )) $(( $(tess_calls) - t0 ))" "0 0" "...no reader call, no witness run"
+assert_eq "$(rget i-prk '.raw_path') $(sha_of "$prk_raw")" "$prk_raw $(sha_of "$prk")" "...the image still kept, unchanged"
+assert_eq "$(rget i-prk '.source_published') $(rget i-prk '.state')" "false failed" "...nothing published, the receipt failed and replayable"
+[[ -d "$VAULT/Sources/$(rget i-prk '.revision')" ]] && fail "no source folder after fence-unprobed" "exists" || pass "...no source folder"
+write_image_probe_record
+rm -f "$prk"     # the retained raw is the input now
+run_gw --capture-id i-prk
+assert_eq "$rc $(result status)" "0 extracted" "the entry back: the same replay publishes from the kept image"
+assert_eq "$(( $(reader_calls) - r0 ))" "1" "...with one reader call"
 
 # ---------------------------------------------------------------------------------------------
 echo "--- 5. the size cap and the changed input: no raw ---"
