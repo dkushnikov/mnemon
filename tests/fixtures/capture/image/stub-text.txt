@@ -1,0 +1,7 @@
+Field notes on a small reading machine
+
+The model reads the picture and writes what it sees. A second reader checks the words on the same machine.
+When both readers agree, the text is published with its counts. When a large part is missing, the capture is refused.
+Posted 14 March 2026 at 09.30 by the example desk. 1,240 views and 87 replies.
+The witness keeps its own copy and never publishes it. Every number is counted apart from the words.
+A short quote card is published like a long article, because length is a diagnostic and never a gate.
