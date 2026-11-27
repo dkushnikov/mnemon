@@ -152,7 +152,8 @@ image_min_witness_share num 90
 image_miss_allowance int 20'
 missing_rows=""
 while IFS= read -r row; do
-  printf '%s\n' "$(mnemon_config_keys)" | grep -qxF -- "$row" || missing_rows="$missing_rows [$row]"
+  # grep reads the whole list (no -q): an early exit would end printf by SIGPIPE, which pipefail reports as a miss
+  printf '%s\n' "$(mnemon_config_keys)" | grep -xF -- "$row" >/dev/null || missing_rows="$missing_rows [$row]"
 done <<< "$image_rows"
 assert_eq "$missing_rows" "" "the table holds the ten rows of §21.8 with their types and defaults (key type default)"
 assert_eq "$(mnemon_config_keys | grep -cE '^(ocr_languages|image_[a-z_]+) ')" "10" "...and no other image key"
@@ -182,6 +183,24 @@ for bad in "ocr_languages: english" "ocr_languages: eng+" "ocr_languages: ENG" "
 done
 rc=0; msg="$( (printf 'vault_path: %s/vault5\nocr_languages: eng+eng\n' "$TEST_TMPDIR" > "$TEST_TMPDIR/bad.yaml"; load_config "$TEST_TMPDIR/bad.yaml") 2>&1 )" || rc=$?
 assert_contains "$msg" "names the language code eng twice" "a repeated code is named in the refusal"
+# five image keys must be greater than 0: the worker takes only a positive value (a zero would refuse its
+# arguments after the raw is kept); image_miss_allowance may be 0
+for bad in "image_timeout: 0" "image_timeout: 0.0" "image_timeout: 0.00" "image_reader_max_usd: 0" "image_reader_max_usd: 0.0" \
+           "image_reader_max_usd: 0.00" "image_max_bytes: 0" "image_max_bytes: 000" "image_max_pixels: 0" "image_max_edge: 0"; do
+  printf 'vault_path: %s/vault5\n%s\n' "$TEST_TMPDIR" "$bad" > "$TEST_TMPDIR/bad.yaml"
+  rc=0; msg="$( (load_config "$TEST_TMPDIR/bad.yaml") 2>&1 )" || rc=$?
+  assert_eq "$rc" "2" "'$bad' is refused at config load (exit 2)"
+  assert_contains "$msg" "ERROR: ${bad%%:*} must be greater than 0" "...naming the key: must be greater than 0"
+done
+accepted=""
+for good in "image_timeout|0.001" "image_timeout|1" "image_reader_max_usd|0.0001" "image_reader_max_usd|0.01" "image_max_bytes|1" \
+            "image_max_pixels|1" "image_max_edge|1" "image_max_edge|01" "image_miss_allowance|0"; do
+  key="${good%%|*}"; val="${good#*|}"; var="$(mnemon_config_var_of "$key")"
+  printf 'vault_path: %s/vault5\n%s: %s\n' "$TEST_TMPDIR" "$key" "$val" > "$TEST_TMPDIR/good.yaml"
+  rc=0; got="$( (load_config "$TEST_TMPDIR/good.yaml" >/dev/null && printf '%s' "${!var}") 2>&1 )" || rc=$?
+  [[ "$rc $got" == "0 $val" ]] || accepted="$accepted [$key: $val → rc=$rc '$got']"
+done
+assert_eq "$accepted" "" "accepted: the smallest positive values (image_timeout 0.001, image_reader_max_usd 0.0001, the three caps 1) and image_miss_allowance 0"
 # accepted at load, the value exported as written (the order of the codes kept, nothing sorted)
 accepted=""
 for good in "ocr_languages|rus+eng" "ocr_languages|chi_sim" "ocr_languages|eng+rus+deu+fra+spa+ita+por+nld" "ocr_languages|deu_latf+eng" \

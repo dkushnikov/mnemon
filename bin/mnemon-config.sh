@@ -106,7 +106,9 @@ MNEMON_RESOLUTION_INPUTS="HOME XDG_STATE_HOME XDG_CONFIG_HOME MNEMON_CONFIG_DIR"
 # codes joined by `+`, none twice; capture layer §21.8) · level (an effort level:
 # low, medium, high, xhigh, max). A non-numeric, negative, non-finite or
 # fractional-where-integer value is refused at config load (exit 2), and so is a
-# value outside its type or a key's range (`image_min_witness_share`: 0 to 100);
+# value outside its type or a key's range (`image_min_witness_share`: 0 to 100;
+# `image_timeout`, `image_reader_max_usd`, `image_max_bytes`, `image_max_pixels`,
+# `image_max_edge`: greater than 0);
 # an empty value takes the default (`extract_max_usd` has none: unset means no cap).
 MNEMON_CONFIG_KEYS='extract_timeout|EXTRACT_TIMEOUT|num|900
 extract_inline_max_bytes|EXTRACT_INLINE_MAX_BYTES|int|400000
@@ -174,7 +176,8 @@ _MNEMON_LANGS_RE="^${_MNEMON_LANG_CODE_RE}([+]${_MNEMON_LANG_CODE_RE}){0,7}\$"
 
 # Validate one value against a type of the table: 0 when it fits, else one `ERROR: <key> …` line on
 # stderr and 1. <where> closes the message in parentheses: the config file, or the flag that carried
-# the value. After the type, a key's own range: `image_min_witness_share` lies in 0–100. Pure bash —
+# the value. After the type, a key's own range: `image_min_witness_share` lies in 0–100, five image keys
+# must be greater than 0 (`image_miss_allowance` may be 0). Pure bash —
 # a full load starts no process (tests/test_config_reader.sh). The gateway checks a value of its own
 # with it too (`--ocr-languages`, capture layer §21.8), directly or through mnemon_config_check below.
 _mnemon_check_config_value() {   # <key> <value> <type> <where>
@@ -201,8 +204,19 @@ _mnemon_check_config_value() {   # <key> <value> <type> <where>
     image_min_witness_share)
          _mnemon_num_at_most_100 "$val" || {
            echo "ERROR: $key must lie in 0 to 100 (a percentage), got '$val' ($file)" >&2; return 1; } ;;
+    # the image worker takes only a positive deadline, budget and caps (capture layer §21.6): a zero refused
+    # here, at load, never reaches a worker that would refuse its arguments after the raw is kept
+    image_timeout|image_reader_max_usd|image_max_bytes|image_max_pixels|image_max_edge)
+         _mnemon_num_positive "$val" || {
+           echo "ERROR: $key must be greater than 0, got '$val' ($file)" >&2; return 1; } ;;
   esac
   return 0
+}
+
+# 0 when a value that passed the `int` or `num` check (digits, an optional fraction) is greater than 0: it
+# holds a digit other than 0. The digits are spelled out (no range, no process).
+_mnemon_num_positive() {   # <value>
+  [[ "$1" == *[123456789]* ]]
 }
 
 # A `langs` value: the pattern of the type, then no code twice (the order is the caller's and is
