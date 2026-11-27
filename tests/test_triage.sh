@@ -268,17 +268,20 @@ run_m triage promote 2026-09-06_e1e1e1e1
 assert_eq "$rc" "0" "...and promotes"
 assert_contains "$out" "RESULT:status=extracted" "...in full"
 assert_eq "$(fm "$VAULT/Sources/$(printf '%s\n' "$out" | grep '^RESULT:revision=' | cut -d= -f2)/source.md" supersedes)" "\"2026-09-06_e1e1e1e1\"" "...superseding the legacy card"
-# a text card promotes through its own body — on stdin, nothing left in $TMPDIR (reviewer A P2-4)
+# a text card promotes through its own body — on stdin, nothing left in $TMPDIR (reviewer A P2-4).
+# The promote gets a TMPDIR of its own: a count in the shared temp directory would also see the
+# files of whatever else runs at the same time (parallel suites, another checkout's pass)
 stub_reset
-tmp_before="$(/bin/ls "${TMPDIR:-/tmp}" 2>/dev/null | grep -c '^mnemon-promote-' || true)"
-run_m triage promote "$bmt" --dry-run
+PROMOTE_TMP="$TEST_TMPDIR/promote-tmp"; mkdir -p "$PROMOTE_TMP"
+assert_eq "$(TMPDIR="$PROMOTE_TMP" python3 -c 'import tempfile; print(tempfile.gettempdir())')" "$PROMOTE_TMP" "the promote's python takes its temp files from the private TMPDIR"
+TMPDIR="$PROMOTE_TMP" run_m triage promote "$bmt" --dry-run
 assert_contains "$out" "add --origin text --title Text card --context personal" "the dry-run shows the text card's command"
 assert_contains "$out" "< <the card's text on stdin>" "...with the text on stdin, no --file-text"
-run_m triage promote "$bmt"
+TMPDIR="$PROMOTE_TMP" run_m triage promote "$bmt"
 assert_eq "$rc" "0" "promote of a text card exits 0"
 newt="$(printf '%s\n' "$out" | grep '^RESULT:revision=' | cut -d= -f2)"
 assert_eq "$(fm "$VAULT/Sources/$newt/source.md" supersedes) $(fm "$VAULT/Sources/$newt/source.md" origin)" "\"$bmt\" text" "the text card is superseded by a full text capture"
-assert_eq "$(/bin/ls "${TMPDIR:-/tmp}" 2>/dev/null | grep -c '^mnemon-promote-' || true)" "$tmp_before" "no temp file left in TMPDIR"
+assert_eq "$(/bin/ls "$PROMOTE_TMP" 2>/dev/null | grep -c '^mnemon-promote-' || true)" "0" "no temp file left in TMPDIR"
 assert_contains "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["input_path"])' "$VSTATE/captures/$(fm "$VAULT/Sources/$newt/source.md" capture_id | tr -d '"').json")" "/attempt-1/capture.md" "the input locator is the gateway's own (runs/<id>/attempt-1/capture.md)"
 # an edited text card is integrity-error, never promoted as an unrelated resource (Codex P2-1)
 printf 'another text to bookmark\n' > "$TEST_TMPDIR/t2.txt"

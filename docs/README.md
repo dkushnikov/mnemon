@@ -201,7 +201,7 @@ mnemon/
 ├── protocols/                 # Schema and convention docs
 ├── vault-template/            # Scaffold copied into a new vault
 ├── docs/                      # Documentation (install.md, capture.md, inbox.md, specs/)
-├── tests/                     # test_*.sh suites; run-suites.sh runs them all (--both: current + legacy toolchain)
+├── tests/                     # test_*.sh suites; run-suites.sh runs them all (--both: current + legacy toolchain; --jobs N: N at once)
 └── setup.sh                   # Deprecated one-shot installer — use `mnemon init`
 ```
 
