@@ -240,6 +240,46 @@ assert_eq "$(stub_calls)" "0" "...none of them called the model"
 cp "$TEST_TMPDIR/inc.keep" "$rawi"
 run_gw --resume "$revi"
 assert_eq "$rc $(result status)" "0 extracted" "...restored: --resume finishes the extraction"
+# --resume on a complete revision: «complete (nothing to finish)» is an answer about a published revision too, so the
+# raw is checked first, by presence — by the revision's name and by the capture id; the owner's replay answers
+stub_reset
+run_gw --url "https://example.com/ri-done" --capture-id ri-done
+revd2="$(rget ri-done '.revision')"; rawd2="$(rget ri-done '.raw_path')"
+run_gw --resume "$revd2"
+assert_eq "$rc" "2" "--resume <revision> on a complete revision with its raw: exit 2"
+assert_contains "$err" "revision $revd2 is complete (nothing to finish)" "...«complete (nothing to finish)»"
+run_gw --resume ri-done
+assert_eq "$rc" "2" "--resume <capture_id> on a complete capture with its raw: exit 2"
+assert_contains "$err" "capture ri-done is complete (nothing to finish)" "...«complete (nothing to finish)»"
+cp "$rawd2" "$TEST_TMPDIR/done.keep"
+rm -f "$rawd2"
+run_gw --resume "$revd2"
+assert_eq "$rc $(result status) $(result error_class) $(result capture_id)" "1 integrity-error raw-missing ri-done" "...its raw gone: --resume <revision> → integrity-error under the owner's id, never «complete»"
+assert_eq "$(rget ri-done '.state')" "integrity-error" "...the owner's receipt records it, as its replay does"
+cp "$TEST_TMPDIR/done.keep" "$rawd2"
+run_gw --capture-id ri-done
+assert_eq "$rc $(result status) $(rget ri-done '.state')" "0 extracted extracted" "...restored: the replay reconciles the receipt"
+rm -f "$rawd2"
+run_gw --resume ri-done
+assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error raw-missing" "--resume <capture_id> on a complete capture whose raw is gone → integrity-error"
+printf 'x' > "$rawd2"
+run_gw --resume "$revd2"
+assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error raw-mismatch" "...a raw of another size → raw-mismatch"
+cp "$TEST_TMPDIR/done.keep" "$rawd2"
+run_gw --capture-id ri-done
+assert_eq "$rc $(result status)" "0 extracted" "...restored again"
+assert_eq "$(stub_calls)" "1" "...and the model ran once, for the capture itself"
+# a complete folder whose receipt is not in this ledger: the folder's own claim is the reference, nothing is written
+mv "$(receipt ri-done)" "$TEST_TMPDIR/ri-done.receipt"
+run_gw --resume "$revd2"
+assert_eq "$rc" "2" "--resume <revision> without a receipt, the raw present: exit 2 (complete)"
+rm -f "$rawd2"
+before="$(ls "$VSTATE/captures" | wc -l | tr -d ' ')"
+run_gw --resume "$revd2"
+assert_eq "$rc $(result status) $(result error_class) $(result revision)" "1 integrity-error raw-missing $revd2" "...the raw gone: integrity-error from the folder's own claim"
+assert_eq "$(ls "$VSTATE/captures" | wc -l | tr -d ' ')" "$before" "...and no receipt is written"
+cp "$TEST_TMPDIR/done.keep" "$rawd2"
+mv "$TEST_TMPDIR/ri-done.receipt" "$(receipt ri-done)"
 # a crash between a publication and its receipt, then the raw lost: the reconciliation rows guard too
 for boundary in after-source-published after-extract-published; do
   stub_reset
@@ -275,6 +315,18 @@ assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error raw-mi
 printf 'short\n' > "$rawm"
 run_gw --url "https://example.com/ri-moved"
 assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error raw-mismatch" "a duplicate of a raw with another size → integrity-error/raw-mismatch"
+cp "$TEST_TMPDIR/moved.keep" "$rawm"
+# the presence check never opens the raw (an evicted file of a synced folder would download): a raw
+# that cannot be opened answers by its metadata — present at its size; at another size, caught
+chmod 000 "$rawm"
+run_gw --url "https://example.com/ri-moved"
+assert_eq "$rc $(result status)" "0 skipped-duplicate" "a duplicate of a raw that cannot be opened (mode 000): present with its recorded size, from the metadata alone"
+chmod 600 "$rawm"
+python3 -c 'import sys; p=sys.argv[1]; d=open(p,"rb").read(); open(p,"wb").write(d[:-1])' "$rawm"
+chmod 000 "$rawm"
+run_gw --url "https://example.com/ri-moved"
+assert_eq "$rc $(result status) $(result error_class)" "1 integrity-error raw-mismatch" "...and one byte short, still caught without opening it"
+chmod 600 "$rawm"
 cp "$TEST_TMPDIR/moved.keep" "$rawm"
 
 # ---------------------------------------------------------------------------------------------

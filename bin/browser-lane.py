@@ -247,26 +247,60 @@ def add_argv(mnemon: str, canonical: str, bundle: str, track: dict, args) -> lis
 
 
 # Retained and printed tool output (capture layer A18, A13's disclosure rule): only yt-dlp's ERROR / WARNING lines are
-# kept, and every kept or printed line goes through redact(). The rule: a line never holds a header value, a cookie
-# value or a token-shaped string — at a credential key the rest of the line is dropped, since a value may be quoted,
-# hold spaces (`Bearer <token>`) or run on as `a=1; b=2`.
+# kept, and every kept or printed line goes through redact(). The rule names shapes, and a line is cut at the first
+# one: a credential field (`key:`, `key=`), an authorization scheme with its value, `--add-header`, and a credential
+# word in free wording with a value after it (`Cookie header was: a=1; b=2`). After the cut nothing of the line is
+# kept, since a value may be quoted, hold spaces (`Bearer <token>`) or run on as `a=1; b=2`. A credential word in
+# plain prose — yt-dlp's own `… account cookies are no longer valid.`, `… require a GVS PO Token which was not
+# provided.` — is not a value and stays: the lane keeps these lines to say why a video failed.
 _KEEP_PREFIXES = ("ERROR", "WARNING")
-# a credential key: a header or cookie name, a token or secret field, written `key:` or `key=` (the key may be quoted)
+# a credential word: a header or cookie name, a token, secret or password field — a word of its own. A word joined to
+# a longer one by a letter, digit, `_` or `-` is not one (`tokenizer`, `sidebar`, `cookie-consent`, the option names
+# `--cookies` and `--cookies-from-browser`, a URL fragment `#how-to-pass-cookies`), nor is a word inside a URL (its
+# query values go by the query rule first). Without a separator right after it, the word cuts the line only when a
+# value follows (_value_follows)
+_CRED_WORD_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_-])(?P<word>set-cookie|cookies?|proxy-authorization|authorization|bearer|"
+    r"x-goog-authuser|x-goog-visitor-id|x-youtube-identity-token|x-origin|"
+    r"[a-z0-9_]*sapisid(?:hash)?|apisid|hsid|ssid|sid|nid|__secure-[a-z0-9_-]*|__host-[a-z0-9_-]*|login_info|"
+    r"visitor_info1_live|pref|ysc|[a-z0-9_]*tokens?|api[ _-]?keys?|apikey|passwords?|passwd|secrets?|credentials?|"
+    r"session(?:id|_token)?)(?![A-Za-z0-9_-])(?P<sep>[\"']?\s*[:=])?")
+# a credential key with its separator — `key:` or `key=`, the key may be quoted. A separator makes it a field, so a
+# hyphen on its left does not hide it: the last part of a hyphenated name counts (`access-token=`, `x-api-key:`,
+# `--password=`), and so does a field inside a URL that the query rule did not reach (`#access_token=…`). The word
+# rule above cannot take these: without a separator a hyphen-joined word is prose or an option name
 _CRED_KEY_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9_])(?P<key>set-cookie|cookies?|proxy-authorization|authorization|x-goog-authuser|x-goog-visitor-id|"
-    r"x-youtube-identity-token|x-origin|[a-z0-9_-]*sapisid(?:hash)?|apisid|hsid|ssid|sid|__secure-[a-z0-9_-]*|__host-[a-z0-9_-]*|"
-    r"login_info|visitor_info1_live|pref|ysc|access_token|refresh_token|id_token|[a-z0-9_-]*token|api[_-]?key|"
-    r"password|passwd|secret|session(?:id|_token)?)(?P<q>[\"']?)(?P<sep>\s*[:=])(?!\s*<redacted>)")
-# a header echoed through yt-dlp's own option, and a bare `Bearer <token>` (`--cookies <file>` names a path only)
-_ADD_HEADER_RE = re.compile(r"(?i)(--add-header)(?:[\s=]+).*$")
-_BEARER_RE = re.compile(r"(?i)\b(bearer|basic)\s+\S.*$")
+    r"(?i)(?<![A-Za-z0-9_])(?P<key>set-cookie|cookies?|proxy-authorization|authorization|x-goog-authuser|"
+    r"x-goog-visitor-id|x-youtube-identity-token|x-origin|[a-z0-9_-]*sapisid(?:hash)?|apisid|hsid|ssid|sid|nid|sidcc|"
+    r"socs|__secure-[a-z0-9_-]*|__host-[a-z0-9_-]*|login_info|visitor_info1_live|visitor_data|pref|ysc|"
+    r"[a-z0-9_-]*tokens?|api[ _-]?keys?|apikey|[a-z0-9_-]*passwords?|[a-z0-9_-]*passwd|pwd|passphrase|"
+    r"[a-z0-9_-]*secrets?|credentials?|jwt|signature|session(?:[_-]?id|[_-]token)?)"
+    r"(?P<sep>[\"']?\s*[:=])(?!\s*<redacted>)")
+# an authorization scheme with a value after it — `Bearer <token>`, `Basic <value>` — wherever it stands: glued to a
+# URL, a bracket or a hyphen too (a word boundary is enough). `basic` alone is common prose and stays
+_SCHEME_RE = re.compile(r"(?i)\b(?:bearer|basic)(?=\s+\S)")
+# yt-dlp's own header option, wherever it stands: whatever follows it is a header
+_ADD_HEADER_RE = re.compile(r"(?i)--add-header(?![A-Za-z0-9_-])")
+_URL_RE = re.compile(r"(?i)https?://(?:<redacted>|[^\s'\"<>])+")   # a URL after the query rule ran
+# the user and password of a URL of any scheme (`http://user:password@proxy:8080`), whatever stands before the
+# scheme: a URL glued to the text before it (`8080http://…`) has a user part too. The part runs to the last `@`
+# before the host — a password with a raw `@` in it is common — and ends at whitespace, a quote, an angle bracket,
+# `/`, `?` or `#`: a part that holds one of those raw is not recognized (capture layer A18, the limits). The rule
+# starts at the literal `://`, not at a scheme: a pattern that looks for a scheme start rescans a long run of
+# letters and digits from every letter (quadratic), and what stands before `://` does not matter here
+_USERINFO_RE = re.compile(r"(://)[^\s/'\"<>?#]+@")
 # a URL's query: every value but the video id `v` is dropped (`sig=`, `token=`, `pot=`, `n=` … carry credentials)
 _QUERY_RE = re.compile(r"(?i)(https?://[^\s'\"?#<>]+)\?([^\s'\"#<>]*)")
 _PATH_RE = re.compile(r"(?<![A-Za-z0-9_:/.~-])(?:~/|/)[^\s'\"]+")
 # token-shaped: 24 or more characters of a token alphabet with at least one digit and one letter
 _TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_+=-])(?=[A-Za-z0-9_+=-]*[0-9])(?=[A-Za-z0-9_+=-]*[A-Za-z])[A-Za-z0-9_+=-]{24,}")
+_CLOSERS = {"[": "]", "(": ")", "{": "}", "'": "'", '"': '"'}
 STDERR_MAX_LINES = 200
 STDERR_MAX_CHARS = 2000
+# redact() reads no more of a line than this. Several rules rescan a long run with no space in it from many
+# starting points (a run of `a-`, a line of `http://` with no `?`), so their time grows with the square of the
+# line; the limit bounds it. Twice the kept length: a redaction shortens a line
+REDACT_MAX_CHARS = 2 * STDERR_MAX_CHARS
 
 
 def _redact_query(m) -> str:
@@ -277,16 +311,109 @@ def _redact_query(m) -> str:
     return m.group(1) + "?" + "&".join(pairs)
 
 
+def _closers(prefix: str) -> str:
+    """What the kept part of a cut line leaves open — brackets, and quotes that open a value (after a space, `[`,
+    `(`, `{`, `,`, `=` or `:`; an apostrophe inside a word is not a quote) — closed in reverse order, so a cut line
+    stays well-formed: `['--add-header <redacted>']`."""
+    stack = []
+    for i, ch in enumerate(prefix):
+        if stack and ch == _CLOSERS[stack[-1]] and (ch in "'\"" or stack[-1] in "[({"):
+            stack.pop()
+        elif ch in "[({":
+            stack.append(ch)
+        elif ch in "'\"" and (i == 0 or prefix[i - 1] in " \t[({,=:"):
+            stack.append(ch)
+    return "".join(_CLOSERS[c] for c in reversed(stack))
+
+
+_FREE_REACH = 60   # how far after a credential word in free wording a value is looked for
+_NEXT_DIGIT_RE = re.compile(r"\s+(?=\S*[0-9])\S")   # the next word holds a digit
+
+
+def _value_follows(line: str, pos: int, urls) -> bool:
+    """A value after a credential word that has no separator of its own: the next word holds a digit
+    (`password hunter2`), or an `=` stands in the same sentence within _FREE_REACH characters, outside a URL
+    (`Cookie header was: a=1; b=2`). A `:` alone is not one — `… PO Token for this client: Missing required …` is
+    prose."""
+    def in_url(i: int) -> bool:
+        return any(a <= i < b for a, b in urls)
+
+    m = _NEXT_DIGIT_RE.match(line, pos)
+    if m and not in_url(m.end() - 1):
+        return True
+    for i in range(pos, min(len(line), pos + _FREE_REACH)):
+        if in_url(i):
+            continue
+        ch = line[i]
+        if ch == "=":
+            return True
+        if ch in ".!?" and (i + 1 == len(line) or line[i + 1].isspace()):
+            return False
+    return False
+
+
 def redact(line: str) -> str:
-    """One line made safe to print or retain: URL query values first (the video id aside); then, at the first
-    credential key (or `--add-header`, `Bearer`), the rest of the line becomes <redacted>; then absolute and
-    home-relative paths, and token-shaped strings."""
+    """One line made safe to print or retain: URL query values first (the video id aside); then the rest of the line
+    becomes <redacted> at the earliest of four cuts — a credential word outside a URL, with its separator or with a
+    value after it in free wording; and, wherever they stand, a credential key with its separator (a hyphenated name
+    and a URL's fragment included), `Bearer` or `Basic` with a value after it, and `--add-header` — the separator kept
+    when there is one (`Authorization: <redacted>`, `SID=<redacted>`), whatever was left open closed; then a URL's
+    user and password (a cut inside that part takes the whole part), absolute and home-relative paths, and
+    token-shaped strings.
+
+    The key, scheme and option rules read the line as the first release's did — after the query rule and before any
+    other change — and each cuts where it did, or earlier. That is a statement about these three rules, not about
+    every line: an earlier cut keeps what stands before it (see the limits in capture layer A18).
+
+    A line longer than REDACT_MAX_CHARS is read up to there. The word that the limit splits goes with the rest —
+    half of a token is not token-shaped any more — and a note counts what was not read."""
+    if len(line) > REDACT_MAX_CHARS:
+        total, i = len(line), REDACT_MAX_CHARS
+        while i > 0 and not line[i - 1].isspace():
+            i -= 1
+        head = line[:i].rstrip()
+        note = "<%d character(s) of the line not read>" % (total - len(head))
+        return (redact(head) + " " + note) if head else note
     line = _QUERY_RE.sub(_redact_query, line)
+    urls = [(m.start(), m.end()) for m in _URL_RE.finditer(line)]
+    user_parts = [(m.end(1), m.end() - 1) for m in _USERINFO_RE.finditer(line)]   # each URL's user part, up to its `@`
+
+    def outside(m) -> bool:
+        return not any(a <= m.start() < b for a, b in urls)
+
+    def after(sep) -> str:
+        return "<redacted>" if (sep or "").endswith("=") else " <redacted>"
+
+    cuts = []
+    for m in _CRED_WORD_RE.finditer(line):
+        if not outside(m):
+            continue
+        if m.group("sep"):
+            cuts.append((m.end("sep"), after(m.group("sep"))))
+            break
+        if _value_follows(line, m.end("word"), urls):
+            cuts.append((m.end("word"), " <redacted>"))
+            break
     m = _CRED_KEY_RE.search(line)
     if m:
-        line = line[:m.end("sep")] + ("<redacted>" if m.group("sep").endswith("=") else " <redacted>")
-    line = _ADD_HEADER_RE.sub(lambda m: m.group(1) + " <redacted>", line)
-    line = _BEARER_RE.sub(lambda m: m.group(1) + " <redacted>", line)
+        cuts.append((m.end("sep"), after(m.group("sep"))))
+    for rx in (_SCHEME_RE, _ADD_HEADER_RE):
+        m = rx.search(line)
+        if m:
+            cuts.append((m.end(), " <redacted>"))
+    if cuts:
+        end, tail = min(cuts)
+        # a cut inside a URL's user part (a field name or `--add-header` in a password, a key as the user name) would
+        # keep the start of that part and drop the `@` the rule below looks for: nothing of the part is kept
+        for a, b in user_parts:
+            if a < end <= b:
+                end, tail = a, "<redacted>"
+                break
+        prefix = line[:end]
+        line = prefix + tail + _closers(prefix)
+    # the user parts that the kept line still holds whole. After the cut, never before it: a key inside a user part
+    # (`https://sid:…@host`) is a field, and the cut it makes takes the rest of the line with it
+    line = _USERINFO_RE.sub(lambda m: m.group(1) + "<redacted>@", line)
     line = _PATH_RE.sub("<path>", line)
     return _TOKEN_RE.sub("<redacted>", line)
 
@@ -397,7 +524,8 @@ def one_video(url: str, args, mnemon: str, emit) -> Outcome:
         return _one_video(o, url, args, mnemon, emit)
     except ME.Timeout as t:
         o.done("failed", "timeout after %.1fs in stage %s (budget %gs); the yt-dlp process group was terminated" % (t.elapsed, t.stage, args.timeout))
-        keep_diagnostics(o, t.stage, t.elapsed, "timeout", None, o.detail, True)
+        # the tool's stderr up to the teardown (Supervisor keeps it on the Timeout): stderr.txt through redact()
+        keep_diagnostics(o, t.stage, t.elapsed, "timeout", None, o.detail, True, getattr(t, "stderr", b""))
         return o
 
 

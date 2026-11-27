@@ -396,11 +396,27 @@ def read_folder(sources: str, name: str, snapshot: dict) -> dict:
     return rec
 
 
+def _file_text_pair(a: dict, b: dict) -> bool:
+    """Capture contracts A14: a plain-text file captured before the rule (a file-kind identity of its bytes) and the
+    same bytes on the text route (a text-kind identity) are one resource. Proved from the stored hashes alone, either
+    order: the text revision's `resource_sha256` is sha256("text:" + its `capture.text_sha256`) and the file
+    revision's is sha256("file:" + that same hash). Nothing is rewritten; the historical source.md keeps its key."""
+    for old, new in ((a, b), (b, a)):
+        t = (new.get("text_sha256") or "").strip()
+        if t and new["resource_sha256"] == hashlib.sha256(("text:" + t).encode()).hexdigest() \
+                and old["resource_sha256"] == hashlib.sha256(("file:" + t).encode()).hexdigest():
+            return True
+    return False
+
+
 def resource_relation(a: dict, b: dict) -> str:
     """same · different · incomparable — by `resource_sha256` when both carry it (the deciding
-    key), else by the canonical URL (current version) when both have one (S1)."""
+    key; the file-kind and text-kind identities of one plain-text file are one, A14), else by the
+    canonical URL (current version) when both have one (S1)."""
     if a["resource_sha256"] and b["resource_sha256"]:
-        return "same" if a["resource_sha256"] == b["resource_sha256"] else "different"
+        if a["resource_sha256"] == b["resource_sha256"] or _file_text_pair(a, b):
+            return "same"
+        return "different"
     if a["canonical"] and b["canonical"]:
         return "same" if a["canonical"] == b["canonical"] else "different"
     return "incomparable"
