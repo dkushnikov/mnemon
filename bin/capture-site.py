@@ -32,9 +32,11 @@ the worker's own teardown and manifest write after its deadline) — so an in-pr
 the deadline cannot outlive it. A watchdog kill is exit 124 with `error_class: timeout` (the `--report`
 of fetch-bundle; stderr for map). The supervisor allocates map's staging directory (`mnemon-map-*`, passed
 as the hidden `--_work`) and removes it after the worker ends, killed or not, so a watchdog kill leaves no
-directory behind. Test hook (honoured only under MNEMON_TEST_HOOKS=1): MNEMON_TEST_MAP_HANG=1
+directory behind. Test hooks (honoured only under MNEMON_TEST_HOOKS=1): MNEMON_TEST_MAP_HANG=1
 makes the map worker hang in C code that no signal handler interrupts (proc.hang) — the proof that the
-watchdog's kill, not the worker's cooperation, ends the phase. The discovery patterns themselves are bounded
+watchdog's kill, not the worker's cooperation, ends the phase; MNEMON_TEST_SITE_PACE_S=<seconds> replaces
+the one-second interval between two requests to one host (site.PACE_S) in map and fetch-bundle, for the
+fixtures that test structure, not pacing (site.pace_s). The discovery patterns themselves are bounded
 (site._HREF, site._LOC), so a hostile landing is a linear scan, not a hang. Stdlib only, python 3.9.
 """
 from __future__ import annotations
@@ -93,7 +95,7 @@ def common_policy(args):
         config.pop("connect_timeout", None)
         config.pop("read_timeout", None)
     policy = policymod.Policy.from_config(config)
-    policy.min_interval_s = site.PACE_S
+    policy.min_interval_s = site.pace_s()       # PACE_S; only the test hook of site.pace_s changes it
     return policy, config
 
 

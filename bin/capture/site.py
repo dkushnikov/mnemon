@@ -13,11 +13,13 @@ the matching pages, `--exclude` then removes, and the cap keeps pages under the 
 then by role priority, then in discovery order. `fetch_bundle` owns the
 page loop and its deadline: every included page through the chain of §3.3 (host and robots eligibility
 checked per hop, against the destination origin's robots), ≥ 1 s
-between requests to one host, `NN.html` + `NN.fetch.json` per page, `plan.json` (a byte copy) and
-`manifest.json` last — the manifest binds every member with its size and hash and carries the acquisition
-dispositions (`captured`, `fetch-failed`, `skipped-timeout`). `verify_bundle` recomputes the manifest hash
-and every member (no symlink, no escaping path). `assemble` converts every captured page in process and
-writes the composite with the `mnemon-site/1` report (conversion dispositions, the aggregate completeness).
+between requests to one host (PACE_S; the mapper keeps it too — `pace_s` names the one test hook that
+changes it, MNEMON_TEST_SITE_PACE_S, honoured only under MNEMON_TEST_HOOKS=1), `NN.html` + `NN.fetch.json`
+per page, `plan.json` (a byte copy) and `manifest.json` last — the manifest binds every member with its
+size and hash and carries the acquisition dispositions (`captured`, `fetch-failed`, `skipped-timeout`).
+`verify_bundle` recomputes the manifest hash and every member (no symlink, no escaping path). `assemble`
+converts every captured page in process and writes the composite with the `mnemon-site/1` report
+(conversion dispositions, the aggregate completeness).
 Stdlib only, python 3.9.
 """
 from __future__ import annotations
@@ -41,6 +43,7 @@ from . import report as reportmod
 PRODUCT_TOKEN = "mnemon"
 DEFAULT_MAX_PAGES = 40
 PACE_S = 1.0
+PACE_HOOK = "MNEMON_TEST_SITE_PACE_S"
 MAP_PAGE_CAP = 1000000
 # sitemap indexes are followed two levels deep (an index → an index → a urlset), at most this many
 # sitemaps and URLs read per map (G22)
@@ -722,6 +725,26 @@ def _safe_member(path: str) -> bool:
         and "\\" not in path
 
 
+def pace_s() -> float:
+    """The interval kept between two requests to one host by the mapper and by fetch-bundle: PACE_S.
+    Test hook, honoured only under MNEMON_TEST_HOOKS=1: MNEMON_TEST_SITE_PACE_S=<seconds> replaces it, for
+    the fixtures that test what a plan or a bundle holds rather than its pacing; a value that is not a
+    finite number ≥ 0 is ignored with a warning. Without the master switch the variable is ignored and
+    `policy.warn_ignored_hooks` names it; no instance key and no flag reaches it."""
+    value = policymod.hook(PACE_HOOK)
+    if value is None:
+        return PACE_S
+    try:
+        seconds = float(value)
+    except ValueError:
+        seconds = -1.0
+    if not 0.0 <= seconds < float("inf"):       # NaN, negative and infinite values fail this test
+        print("WARNING: %s=%r ignored: not a finite number of seconds >= 0 (pacing stays %g s)" % (PACE_HOOK, value, PACE_S),
+              file=sys.stderr)
+        return PACE_S
+    return seconds
+
+
 def fetch_bundle(plan: dict, plan_bytes: bytes, out_dir: str, policy: policymod.Policy, *, site_timeout: float = 900.0,
                  acquire_timeout: float = 300.0, render_timeout: float = 90.0, render: str = "auto", external_mode: str = "off",
                  fetchers=("firecrawl", "jina"), render_cmd: Optional[str] = None, render_max_bytes: int = 20000000,
@@ -732,7 +755,7 @@ def fetch_bundle(plan: dict, plan_bytes: bytes, out_dir: str, policy: policymod.
     landing_host = urlsplit(landing_url).hostname or ""
     hosts = list(plan.get("hosts") or [landing_host])
     os.makedirs(out_dir, exist_ok=True)
-    policy.min_interval_s = max(policy.min_interval_s, PACE_S)
+    policy.min_interval_s = max(policy.min_interval_s, pace_s())
     robots_cache = RobotsCache(policy, deadline)       # every origin's robots, fetched on first use (A10)
     included = [p for p in plan["pages"] if p.get("include")]
     included.sort(key=lambda p: (0 if p.get("role") == "landing" else 1, int(p["n"])))

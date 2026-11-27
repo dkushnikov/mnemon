@@ -930,6 +930,42 @@ RWT_RE="$(re_escape "$RWT")"
 # tag names this fixture expects — release/2001-01-01, -2 — never depend on the clock
 FROZEN=2001-01-01
 hooked() { env MNEMON_TEST_HOOKS=1 MNEMON_RELEASE_DATE="$FROZEN" "$@"; }
+# The real smoke runs the whole tests/test_config.sh of the release worktree. The first release, the
+# ignored-hook case and the doctor-crash case run the real smoke. The cases about the tag and the
+# push (the tag failure, the second release on one date, the failed push) use the gated seam
+# instead: MNEMON_SMOKE_CMD under `hooked` runs a stand-in that writes a
+# marker with the engine's HEAD, the release tags and origin/release at the moment the smoke step
+# runs — the proof that the step ran after the ff-merge and before the tag and the push.
+SMOKE_MARK="$TEST_TMPDIR/smoke.mark"
+SMOKE_STANDIN="$TEST_TMPDIR/smoke-standin.sh"
+cat > "$SMOKE_STANDIN" <<'EOF'
+# <marker> <engine worktree> <origin>: the state at the moment the release's smoke step runs
+{
+  echo "head=$(git -C "$2" rev-parse HEAD)"
+  echo "tags=$(git -C "$2" tag -l 'release/*' | tr '\n' ' ')"
+  echo "origin=$(git -C "$3" rev-parse -q --verify refs/heads/release || echo none)"
+} > "$1"
+EOF
+SEAM_SMOKE="$(printf '%q ' bash "$SMOKE_STANDIN" "$SMOKE_MARK" "$RWT" "$ORIGIN")"
+SEAM_SMOKE="${SEAM_SMOKE% }"
+release_tags() { git -C "$REPO" tag -l 'release/*' | tr '\n' ' '; }
+mark_get() { sed -n "s/^$1=//p" "$SMOKE_MARK" 2>/dev/null || true; }
+seam_arm() {   # before a seam case: no marker; the tags and origin/release as they stand
+  rm -f "$SMOKE_MARK"
+  SEAM_TAGS="$(release_tags)"
+  SEAM_ORIGIN="$(git -C "$ORIGIN" rev-parse -q --verify refs/heads/release || echo none)"
+}
+seam_check() {   # <case> <ERE of the first release step after the smoke>
+  local smoke_at next_at
+  assert_contains "$out" "release: smoke — MNEMON_SMOKE_CMD override (MNEMON_TEST_HOOKS=1): $SEAM_SMOKE" "$1: the smoke step ran, through the gated seam"
+  assert_file_exists "$SMOKE_MARK" "$1: ...the seam wrote its marker"
+  assert_eq "$(mark_get head)" "$(git -C "$REPO" rev-parse main)" "$1: ...on the merged commit (after the ff-merge)"
+  assert_eq "$(mark_get tags)" "$SEAM_TAGS" "$1: ...before the tag (no new release tag at smoke time)"
+  assert_eq "$(mark_get origin)" "$SEAM_ORIGIN" "$1: ...before the push (origin/release unmoved at smoke time)"
+  smoke_at=$(printf '%s\n' "$out" | grep -n '^release: smoke — ' | head -1 | cut -d: -f1 || true)
+  next_at=$(printf '%s\n' "$out" | grep -n -E "$2" | head -1 | cut -d: -f1 || true)
+  [[ -n "$smoke_at" && -n "$next_at" && "$smoke_at" -lt "$next_at" ]] && pass "$1: ...printed before the step after it" || fail "$1: ...printed before the step after it" "smoke line $smoke_at, next line $next_at"
+}
 run hooked env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --dry-run
 assert_eq "$rc" "0" "release --dry-run exits 0"
 assert_contains "$out" "1. lock:   $LOCK" "dry-run prints the lock step"
@@ -1079,8 +1115,10 @@ NEW_MAIN=$(git -C "$REPO" rev-parse --short main)
 # with git's own message, nothing pushed, no tag, the rollback printed; the engine stays at the new commit
 printf '#!/bin/sh\necho "gpg-stub: no secret key" >&2\nexit 2\n' > "$STUBBIN/gpg-fail"; chmod +x "$STUBBIN/gpg-fail"
 git -C "$REPO" config tag.gpgsign true; git -C "$REPO" config gpg.program "$STUBBIN/gpg-fail"
-run hooked env PATH="$STUBBIN:$PATH" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
+seam_arm
+run hooked env PATH="$STUBBIN:$PATH" MNEMON_SMOKE_CMD="$SEAM_SMOKE" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
 assert_eq "$rc" "1" "a tag that cannot be created fails the release"
+seam_check "tag failure" 'could not create the tag'
 assert_contains "$out" "could not create the tag $TODAY_TAG-2 on $NEW_MAIN — nothing was pushed; the engine stands at $NEW_MAIN" "...saying what happened and where the engine is"
 assert_contains "$out" "  git: " "...with git's own message"
 assert_contains "$out" "mnemon release --rollback $TODAY_TAG   # = $PREV_REL" "...and the rollback"
@@ -1237,8 +1275,10 @@ printf '# fourth change\n' >> "$REPO/tests/test-helper.sh"
 g "$REPO" commit -q -am "fourth change on main"
 run hooked env MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release --dry-run
 assert_contains "$out" "6. tag:    git -C $RWT tag -a $TODAY_TAG-2 -m 'mnemon release $TODAY_TAG-2' $(git -C "$REPO" rev-parse --short main)" "dry-run names the next free tag: -2 on a date that already has a release"
-run hooked env PATH="$STUBBIN:$PATH" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
+seam_arm
+run hooked env PATH="$STUBBIN:$PATH" MNEMON_SMOKE_CMD="$SEAM_SMOKE" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
 assert_eq "$rc" "0" "the second release on one date succeeds"
+seam_check "second release on one date" '^release: tag '
 assert_eq "$(git -C "$REPO" rev-parse "$TODAY_TAG-2^{commit}")" "$(git -C "$REPO" rev-parse main)" "...tagged release/<date>-2 on the released commit"
 assert_eq "$(git -C "$ORIGIN" rev-parse "refs/tags/$TODAY_TAG-2^{commit}")" "$(git -C "$REPO" rev-parse main)" "...pushed with the branch"
 assert_contains "$out" "released $(git -C "$REPO" rev-parse --short main) → $RWT ($TODAY_TAG-2)" "...and the last line names the -2 tag"
@@ -1251,8 +1291,10 @@ g "$REPO" commit -q -am "third change on main"
 THIRD_MAIN=$(git -C "$REPO" rev-parse --short main)
 BEFORE_PUSH=$(git -C "$ORIGIN" rev-parse release)
 git -C "$REPO" remote set-url origin "$TEST_TMPDIR/no-such-origin.git"
-run hooked env PATH="$STUBBIN:$PATH" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
+seam_arm
+run hooked env PATH="$STUBBIN:$PATH" MNEMON_SMOKE_CMD="$SEAM_SMOKE" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
 assert_eq "$rc" "3" "a failed push exits 3"
+seam_check "failed push" '^release: tag '
 assert_contains "$out" "released locally to $RWT, push failed: nodes will not see $THIRD_MAIN" "push failure names the engine and the sha nodes will miss"
 assert_contains "$out" "git -C $RWT push --atomic origin release refs/tags/$TODAY_TAG-3" "push failure prints the push of the branch and the tag to retry by hand"
 assert_contains "$out" "  git: " "push failure shows git's own message"
@@ -1278,12 +1320,20 @@ sed -e 's|^  doctor)   cmd_doctor .*$|  doctor)   echo "doctor: simulated crash"
 mv "$REPO/bin/mnemon.new" "$REPO/bin/mnemon"
 chmod +x "$REPO/bin/mnemon"
 assert_eq "$(grep -c 'simulated crash' "$REPO/bin/mnemon" || true)" "1" "fixture: the doctor dispatch line was replaced"
+# The smoke is the real one; only the config suite of this commit is a sentinel that passes (the
+# first release ran the real tests/test_config.sh). A green step prints only the log's last line, a
+# failing one the whole log, so the sentinel's first line shows which branch the smoke took.
+printf '#!/usr/bin/env bash\necho "config-test sentinel: started"\necho "config-test sentinel: green"\n' > "$REPO/tests/test_config.sh"
 g "$REPO" commit -q -am "doctor crashes"
 CRASH_MAIN=$(git -C "$REPO" rev-parse --short main)
 THIRD_REL=$(git -C "$RWT" rev-parse --short HEAD)
 BEFORE_CRASH=$(git -C "$ORIGIN" rev-parse release)
 run hooked env PATH="$STUBBIN:$PATH" MNEMON_HOME="$RWT" "$REPO/bin/mnemon" release
 assert_eq "$rc" "1" "a crashing doctor (exit 9) fails the smoke"
+assert_not_contains "$out" "MNEMON_SMOKE_CMD" "the crashing-doctor release runs the real smoke, not the seam"
+assert_contains "$out" "release: smoke — bash $RWT/tests/test_config.sh" "...with its config-suite step"
+assert_contains "$out" "  config-test sentinel: green" "...which ran the sentinel of the released commit"
+assert_not_contains "$out" "config-test sentinel: started" "...and passed (only the doctor rule fails this smoke)"
 assert_contains "$out" "doctor: simulated crash" "the smoke shows doctor's output"
 assert_contains "$out" "doctor exited 9" "...and names the unexpected exit code"
 assert_contains "$out" "smoke failed on $RWT @ $CRASH_MAIN. Nothing was pushed" "a crashing doctor publishes nothing"
