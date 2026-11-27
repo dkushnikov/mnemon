@@ -69,6 +69,16 @@ EXPORTS = (
     "SITE_TIMEOUT",
     "THIN_WORDS",
     "EXTRACT_MAX_PARTS",
+    "OCR_LANGUAGES",
+    "IMAGE_READER_MODEL",
+    "IMAGE_READER_EFFORT",
+    "IMAGE_READER_MAX_USD",
+    "IMAGE_TIMEOUT",
+    "IMAGE_MAX_BYTES",
+    "IMAGE_MAX_PIXELS",
+    "IMAGE_MAX_EDGE",
+    "IMAGE_MIN_WITNESS_SHARE",
+    "IMAGE_MISS_ALLOWANCE",
     "DOCTOR_THIN_WORDS",
     "DOCTOR_STUB_WORDS",
     "DOCTOR_ARXIV_WORDS",
@@ -86,7 +96,8 @@ EXPORTS = (
 # key as (key, VAR, type, default) — the same table as MNEMON_CONFIG_KEYS in
 # bin/mnemon-config.sh (the loader validates and exports it) and as `mnemon config
 # keys` prints it; tests/test_config.sh asserts the three agree. Types: str ·
-# enum:a,b · int · num; an empty default means unset.
+# enum:a,b · int · num · langs · level (capture layer §21.8); an empty default means
+# unset. The values are validated by the shell loader, never here.
 CONFIG_KEYS = (
     ("extract_timeout", "EXTRACT_TIMEOUT", "num", "900"),
     ("extract_inline_max_bytes", "EXTRACT_INLINE_MAX_BYTES", "int", "400000"),
@@ -106,6 +117,17 @@ CONFIG_KEYS = (
     ("site_timeout", "SITE_TIMEOUT", "num", "900"),
     ("thin_words", "THIN_WORDS", "int", "60"),
     ("extract_max_parts", "EXTRACT_MAX_PARTS", "int", "8"),
+    # the image origin (capture layer §21.8): the witness's languages, the reader's call, the caps, the floor
+    ("ocr_languages", "OCR_LANGUAGES", "langs", "eng"),
+    ("image_reader_model", "IMAGE_READER_MODEL", "str", "haiku"),
+    ("image_reader_effort", "IMAGE_READER_EFFORT", "level", "high"),
+    ("image_reader_max_usd", "IMAGE_READER_MAX_USD", "num", "0.05"),
+    ("image_timeout", "IMAGE_TIMEOUT", "num", "120"),
+    ("image_max_bytes", "IMAGE_MAX_BYTES", "int", "7000000"),
+    ("image_max_pixels", "IMAGE_MAX_PIXELS", "int", "50000000"),
+    ("image_max_edge", "IMAGE_MAX_EDGE", "int", "8000"),
+    ("image_min_witness_share", "IMAGE_MIN_WITNESS_SHARE", "num", "90"),
+    ("image_miss_allowance", "IMAGE_MISS_ALLOWANCE", "int", "20"),
     # the data doctor's thresholds (vault store S3/S7, O4): the radius lives in the charter, not here
     ("doctor_thin_words", "DOCTOR_THIN_WORDS", "int", "300"),
     ("doctor_stub_words", "DOCTOR_STUB_WORDS", "int", "40"),

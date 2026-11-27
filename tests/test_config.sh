@@ -136,6 +136,79 @@ done
 printf 'vault_path: %s/vault5\nfetch_timeout: 0.5\nextract_max_usd: 1.25\n' "$TEST_TMPDIR" > "$TEST_TMPDIR/frac.yaml"
 load_config "$TEST_TMPDIR/frac.yaml"
 assert_eq "$FETCH_TIMEOUT $EXTRACT_MAX_USD" "0.5 1.25" "fractional values are accepted where a number (not an integer) is expected"
+
+# --- Test 5e: the image origin's ten keys (capture layer §21.8): the table's rows, the defaults, the
+#     types `langs` and `level`, the 0-100 range of the share, the exports, the single-value check ---
+echo "--- image origin keys (§21.8) ---"
+image_rows='ocr_languages langs eng
+image_reader_model str haiku
+image_reader_effort level high
+image_reader_max_usd num 0.05
+image_timeout num 120
+image_max_bytes int 7000000
+image_max_pixels int 50000000
+image_max_edge int 8000
+image_min_witness_share num 90
+image_miss_allowance int 20'
+missing_rows=""
+while IFS= read -r row; do
+  printf '%s\n' "$(mnemon_config_keys)" | grep -qxF -- "$row" || missing_rows="$missing_rows [$row]"
+done <<< "$image_rows"
+assert_eq "$missing_rows" "" "the table holds the ten rows of §21.8 with their types and defaults (key type default)"
+assert_eq "$(mnemon_config_keys | grep -cE '^(ocr_languages|image_[a-z_]+) ')" "10" "...and no other image key"
+load_config "$TMPCONFIG5"
+assert_eq "$OCR_LANGUAGES|$IMAGE_READER_MODEL|$IMAGE_READER_EFFORT|$IMAGE_READER_MAX_USD|$IMAGE_TIMEOUT" "eng|haiku|high|0.05|120" "defaults: ocr_languages eng, image_reader_model haiku, image_reader_effort high, image_reader_max_usd 0.05, image_timeout 120"
+assert_eq "$IMAGE_MAX_BYTES|$IMAGE_MAX_PIXELS|$IMAGE_MAX_EDGE|$IMAGE_MIN_WITNESS_SHARE|$IMAGE_MISS_ALLOWANCE" "7000000|50000000|8000|90|20" "defaults: image_max_bytes 7000000, image_max_pixels 50000000, image_max_edge 8000, image_min_witness_share 90, image_miss_allowance 20"
+image_exports="OCR_LANGUAGES IMAGE_READER_MODEL IMAGE_READER_EFFORT IMAGE_READER_MAX_USD IMAGE_TIMEOUT IMAGE_MAX_BYTES IMAGE_MAX_PIXELS IMAGE_MAX_EDGE IMAGE_MIN_WITNESS_SHARE IMAGE_MISS_ALLOWANCE"
+child_saw="$(bash -c 'for v in "$@"; do printf "%s=%s " "$v" "${!v-UNSET}"; done' _ $image_exports)"
+assert_eq "$child_saw" "OCR_LANGUAGES=eng IMAGE_READER_MODEL=haiku IMAGE_READER_EFFORT=high IMAGE_READER_MAX_USD=0.05 IMAGE_TIMEOUT=120 IMAGE_MAX_BYTES=7000000 IMAGE_MAX_PIXELS=50000000 IMAGE_MAX_EDGE=8000 IMAGE_MIN_WITNESS_SHARE=90 IMAGE_MISS_ALLOWANCE=20 " "after a load the ten names are exported: a child process sees each with its value"
+not_listed=""
+for v in $image_exports; do
+  case " $(echo $MNEMON_EXPORT_NAMES) " in *" $v "*) ;; *) not_listed="$not_listed $v" ;; esac
+done
+assert_eq "$not_listed" "" "...and each is in MNEMON_EXPORT_NAMES (the resolution stamp covers them)"
+# refused at load (exit 2), the message naming the key
+nine="eng+rus+deu+fra+spa+ita+por+nld+pol"
+for bad in "ocr_languages: english" "ocr_languages: eng+" "ocr_languages: ENG" "ocr_languages: $nine" "ocr_languages: eng+eng" \
+           "ocr_languages: rus+eng+rus" "ocr_languages: +eng" "ocr_languages: chi_SIM" "ocr_languages: en" \
+           "image_min_witness_share: -1" "image_min_witness_share: 101" "image_min_witness_share: 100.5" \
+           "image_reader_effort: HIGH" "image_reader_effort: none" "image_reader_effort: minimal" "image_reader_effort: 3" \
+           "image_reader_max_usd: abc" "image_timeout: inf" "image_max_bytes: 1.5" "image_max_pixels: -1" \
+           "image_max_edge: 8000.0" "image_miss_allowance: twenty"; do
+  printf 'vault_path: %s/vault5\n%s\n' "$TEST_TMPDIR" "$bad" > "$TEST_TMPDIR/bad.yaml"
+  rc=0; msg="$( (load_config "$TEST_TMPDIR/bad.yaml") 2>&1 )" || rc=$?
+  assert_eq "$rc" "2" "'$bad' is refused at config load (exit 2)"
+  assert_contains "$msg" "ERROR: ${bad%%:*} " "...naming the key"
+done
+rc=0; msg="$( (printf 'vault_path: %s/vault5\nocr_languages: eng+eng\n' "$TEST_TMPDIR" > "$TEST_TMPDIR/bad.yaml"; load_config "$TEST_TMPDIR/bad.yaml") 2>&1 )" || rc=$?
+assert_contains "$msg" "names the language code eng twice" "a repeated code is named in the refusal"
+# accepted at load, the value exported as written (the order of the codes kept, nothing sorted)
+accepted=""
+for good in "ocr_languages|rus+eng" "ocr_languages|chi_sim" "ocr_languages|eng+rus+deu+fra+spa+ita+por+nld" "ocr_languages|deu_latf+eng" \
+            "image_min_witness_share|0" "image_min_witness_share|90" "image_min_witness_share|100" "image_min_witness_share|99.5" \
+            "image_reader_effort|low" "image_reader_effort|medium" "image_reader_effort|high" "image_reader_effort|xhigh" "image_reader_effort|max"; do
+  key="${good%%|*}"; val="${good#*|}"; var="$(mnemon_config_var_of "$key")"
+  printf 'vault_path: %s/vault5\n%s: %s\n' "$TEST_TMPDIR" "$key" "$val" > "$TEST_TMPDIR/good.yaml"
+  rc=0; got="$( (load_config "$TEST_TMPDIR/good.yaml" >/dev/null && printf '%s' "${!var}") 2>&1 )" || rc=$?
+  [[ "$rc $got" == "0 $val" ]] || accepted="$accepted [$key: $val → rc=$rc '$got']"
+done
+assert_eq "$accepted" "" "accepted: ocr_languages rus+eng, chi_sim, eight codes, deu_latf+eng; image_min_witness_share 0, 90, 100, 99.5; each of the five effort levels"
+printf 'vault_path: %s/vault5\nocr_languages: "rus+eng"   # quoted, a comment after\nimage_reader_model: sonnet # c\n' "$TEST_TMPDIR" > "$TEST_TMPDIR/good.yaml"
+load_config "$TEST_TMPDIR/good.yaml"
+assert_eq "$OCR_LANGUAGES $IMAGE_READER_MODEL" "rus+eng sonnet" "a quoted ocr_languages and a commented image_reader_model are read as the other keys are"
+# one value from another script (the gateway's --ocr-languages, §21.8): the same check, through the table
+rc=0; msg="$(mnemon_config_check ocr_languages eng+eng --ocr-languages 2>&1)" || rc=$?
+assert_eq "$rc" "1" "mnemon_config_check ocr_languages eng+eng: refused (status 1)"
+assert_contains "$msg" "ERROR: ocr_languages names the language code eng twice, got 'eng+eng' (--ocr-languages)" "...one ERROR line that names the key, the value and where it came from"
+rc=0; msg="$(mnemon_config_check ocr_languages ENG --ocr-languages 2>&1)" || rc=$?
+assert_eq "$rc" "1" "mnemon_config_check ocr_languages ENG: refused (status 1)"
+rc=0; msg="$(mnemon_config_check ocr_languages rus+eng --ocr-languages 2>&1)" || rc=$?
+assert_eq "$rc|$msg" "0|" "mnemon_config_check ocr_languages rus+eng: accepted (status 0, nothing printed)"
+rc=0; msg="$(_mnemon_check_config_value ocr_languages "$nine" langs --ocr-languages 2>&1)" || rc=$?
+assert_eq "$rc" "1" "_mnemon_check_config_value <key> <value> langs <where>: nine codes refused (status 1)"
+rc=0; msg="$(mnemon_config_check no_such_key x --flag 2>&1)" || rc=$?
+assert_eq "$rc" "1" "mnemon_config_check: an unknown key is refused"
+
 # three-way agreement: the bash table, the python table, the dispatcher
 table_sh="$(mnemon_config_keys)"
 table_py="$(python3 - "$MNEMON_ROOT/bin" <<'PY'
@@ -182,6 +255,16 @@ site_max_pages: 41
 site_timeout: 901
 thin_words: 61
 extract_max_parts: 9
+ocr_languages: rus+eng
+image_reader_model: sonnet
+image_reader_effort: max
+image_reader_max_usd: 0.06
+image_timeout: 121
+image_max_bytes: 7000001
+image_max_pixels: 50000001
+image_max_edge: 8001
+image_min_witness_share: 91
+image_miss_allowance: 21
 doctor_thin_words: 301
 doctor_stub_words: 41
 doctor_arxiv_words: 601
@@ -204,6 +287,7 @@ while read -r key typ def; do
   if printf '%s\n' "$dump" | grep -qxF -- "$var=$want"; then shown=$((shown + 1)); else unshown="$unshown $key($var=$want)"; fi
 done <<< "$table_sh"
 assert_eq "$unshown" "" "config dump shows every §5 key of an instance that sets it, with the set value ($shown keys)"
+assert_eq "$("$MNEMON_ROOT/bin/mnemon" --instance keys5set config get ocr_languages) $("$MNEMON_ROOT/bin/mnemon" --instance keys5set config get image_reader_effort)" "rus+eng max" "config get answers an image key an instance sets (§21.8)"
 python3 - "$MNEMON_ROOT/bin" "$CFG_DIR/instances/keys5.yaml" <<'PY' && pass "lib_config.load_config exposes every table variable" || fail "lib_config.load_config exposes every table variable" "missing or wrong"
 import sys
 sys.path.insert(0, sys.argv[1])

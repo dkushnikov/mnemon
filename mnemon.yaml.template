@@ -80,6 +80,26 @@ auto_detect_origin: true
 # site_timeout: 900                 # seconds for site mapping and for the bundle fetch loop
 # thin_words: 60                    # a page with fewer visible words is thin (rendered once)
 
+# Image origin (optional; `mnemon add --origin image`, docs/specs/2026-10-15-capture-layer.md §21.8).
+# A capture binds its witness's languages (`ocr_languages`, or --ocr-languages for one capture);
+# the reader's model, the caps and the floor are limits read at run time, like convert_timeout:
+# change one and replay, and the report records the values the attempt ran under. A value outside
+# its type or range is refused at config load (exit 2).
+# ocr_languages: eng                # the witness's tesseract language codes, in order, joined by +
+#                                   # (eng, rus+eng, chi_sim): one to eight codes, none twice
+# image_reader_model: haiku         # the model of the reader's call, as --model takes it
+# image_reader_effort: high         # the reader's effort level: low | medium | high | xhigh | max
+# image_reader_max_usd: 0.05        # the reader's --max-budget-usd (its one call per attempt)
+# image_timeout: 120                # seconds for one image: the envelope check, the witness,
+#                                   # the reader's call and the comparison
+# image_max_bytes: 7000000          # the input's size cap, in bytes
+# image_max_pixels: 50000000        # the cap on width × height, in pixels
+# image_max_edge: 8000              # the cap on the longer side, in pixels
+# image_min_witness_share: 90       # the floor: the percentage (0 to 100) of the witness's words
+#                                   # that must stand in the reading
+# image_miss_allowance: 20          # the floor: the witness's words that may be missing whatever
+#                                   # the share; the floor refuses only a reading that fails both
+
 # Data doctor thresholds (optional; `mnemon doctor --data`, docs/specs/2026-10-16-vault-store.md
 # S3/S7). The ratification radius (seeds, drafts, queues) is declared in the charter's
 # `## Radius` section, never here.
