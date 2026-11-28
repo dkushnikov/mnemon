@@ -581,6 +581,7 @@ Canonicalization and dedup by canonical URL, the capture layer (resolve · fetch
 - 2026-11-27 — **the revision of A15: the capture-text of an image is a model's reading, witnessed locally** (§18 rewritten in place; the maintainer's decision of this day, after a probe on real phone screenshots and a measurement of three readers — capture layer §9 and §21.9). What changed in this contract: the capture-text is the reading of a small vision model, made under the extractor's fence, and tesseract's text of the same raw is compared with it before anything is published; the exception to D1 and D3 for this origin is stated as one, with what stays of both (§18 «Where this stands»); a new failure class, `reading-mismatch`, for a gross loss against the witness and for a reading that shares no word with it — both numbers of that rule wait for the maintainer's word; the reader's failures on the existing classes; the frontmatter keys `reader_*`, `witness_*` and the comparison's five numbers in place of the `ocr_*` keys; `read_history` in place of `ocr_history`, with the hash of every attempt's reading; the fence for the reader — its argv, a sixth probe `image-reader` that gates the image origin alone, and a check of every call's `init` event (§18 «§4»). Unchanged: identity, the raw and its publication through A12's path, the steps S0–S4 and S8–S9, the boundary rows of a raw, the refusals of §3.1, the fidelity value `recognized`.
 - 2026-11-27 — **the maintainer's decisions on the two rules the revision proposed** (capture layer §9, §21.5): the floor of a gross loss is 10 % and 20 words of the witness's words, and a reading of which the witness confirms no word is refused. Both are the class `reading-mismatch` of §18 «§3.6». No key and no row of this contract changes with them.
 - 2026-11-27 — **A15 implemented** on the branch `feat/image-input`: the gateway's image path in `bin/knowledge-gateway.sh` and `bin/lib-capture.sh`, the worker `bin/capture-image.py` over `bin/capture/{image,ocr_tesseract,image_reader,read_compare,proc}.py`, the sixth probe and its record writer in `bin/fence-probe.sh`, tested by `tests/test_image.sh`, `tests/test_fence_probe.sh`, the image sections of `tests/test_gateway.sh` and `tests/test_raw_integrity.sh`, and the worker's and adapters' suites in `tests/capture_layer/`. What the code settled where §18 was silent is written in: the restored sequence in `OCR_SEQUENCE` (§3.1), the crash point `after-report-frozen` (§3.4), the outcome rows of a raw the envelope check cannot read and of the witness's three new probe reasons, `fence-unprobed` again on a replay of a kept image (§3.6), the values `mnemon fence-probe` gives the sixth probe (§4.7), and the suites («Tests»). No key and no decision changed. The gates before the merge: the branch's worker on the four real screenshots, four of four `agree`; the live gate at `high`, 15 of 15 items passed; the fence probe on Claude Code 2.1.328, probes 1, 2, 4, 5 and 6 true and probe 3 skipped as A9 documents; two rounds of a second reader's code review, five findings, all fixed with tests. The numbers are in capture layer §9.
+- 2026-11-28 — **A16** (§19, v4.8), with capture layer A21: the comparison of an image counts the witness's numbers that the reading lacks. In this contract: one more frontmatter key, `capture.witness_missing_numbers`; a stored report of either schema, `mnemon-capture-image/1` or `/2`, read as it is and never rewritten; three more notes on stderr for a published image revision. No state, no step, no exit code and no `RESULT:` line changes. Specification first; the implementing change follows on the same branch.
 
 ## 12. Amendments v4.1 (binding)
 
@@ -705,6 +706,8 @@ These amendments are **binding** and win over §3–§9 where they differ (the s
 - Tests: `tests/test_capture_lanes.sh` (`.txt` with Markdown-looking text and CRLF: body, `RESULT:source_sha256`, request, locator, method, fidelity, origin; `.TXT` and `.text`; a BOM; invalid UTF-8; an empty or whitespace-only text on each door (stdin, `--file-text`, `--file`, a card) refused as `no-text`, one visible character captured; an extensionless file typed `text/plain` and one typed otherwise, through a stub `file`; `.md` stays `file`; `--origin file`; `--canonical-url` and its duplicate; the file-kind predecessor as a duplicate and `--recapture` over it, both keys kept, and the data doctor reporting no cross-resource edge for the pair while an explicit `--supersedes` of another resource still is one; an origin-file receipt finished by the repeated `--file` request, and a crashed one reconverted on its file route; `--help`), `tests/test_capture.sh` (the extensionless `.bin` case names `--origin file`, the route it tests).
 
 ## 18. Amendment v4.7 — the image origin (binding; 2026-11-26, revised 2026-11-27)
+
+**Amended by A16 (§19, 2026-11-28):** one more key of the comparison in `source.md`, and the stored report of either schema. Where §19 differs from this section, §19 wins.
 
 ### A15 — An image is a file input whose capture-text is a model's reading, witnessed locally (`bin/knowledge-gateway.sh`, `bin/lib-capture.sh`, `bin/fence-probe.sh`; spec §3.1–§3.4, §3.6, §4, §6; the mechanics of reading, witnessing and comparing are capture layer A20, §21 there)
 
@@ -893,3 +896,50 @@ The reader's call stands under Contract B. What changes against the extractor, a
 #### Tests
 
 The required tests are listed once, in capture layer §21.13; the persistence ones are in `tests/test_image.sh`, a suite of its own apart from `tests/test_capture.sh` (the steps and their crash hooks, the boundary rows, the outcome table row by row against the RESULT lines, the exits and the receipt, the `read_history` entries, the frontmatter keys and their serialization, no URL key and no word of the image in an image's frontmatter, the bound request, the preflight with and without the reader's probe entry, the dry run), `tests/test_gateway.sh` (every refusal of §3.1 above, also through `--dry-run`; the batch items) and `tests/test_raw_integrity.sh` (section 10: the image raw under A12's rules). The record's writer of §4 is tested in `tests/test_fence_probe.sh`. `tests/test_ingest.sh` is unchanged — an image payload with a null origin is still `unsupported`.
+
+## 19. Amendment v4.8 — the image comparison counts the witness's numbers; the report of the earlier shape (binding; 2026-11-28)
+
+### A16 — One more number of the comparison in `source.md`; a stored report of either schema is read as it is (`bin/lib-capture.sh` `cap_convert_image`, `cap_image_fields`, `cap_source_frontmatter`, `cap_image_notes`; spec §3.2–§3.4, §3.6 as A15 left them; the rule, the report and the notes are capture layer A21, §22 there)
+
+**Why.** The comparison of A15 counted the witness's missing words and no missing number: on one real screenshot a reading lacked three numeric tokens, and nothing recorded it. Capture layer A21 counts them (rule `mnemon-read-compare/2`), lists what the reading lacks, and renames two keys of the report (`mnemon-capture-image/2`). This amendment states what that changes in the persistence contract. It changes little: one frontmatter key, the schema that a receipt's report may carry, and the notes on stderr. No state, no step, no exit code and no `RESULT:` line changes, and no refusal is added.
+
+#### §3.2 — artifacts
+
+- **The receipt's report.** `capture_report.text` holds the report of the latest attempt that reached S5 (A15 §3.2). An attempt of this engine writes `mnemon-capture-image/2`. A receipt written before this amendment holds `mnemon-capture-image/1`. Both are valid stored reports, and the engine rewrites neither: there is no migration. `read_history` keeps its keys; `verdict` and `share` have the same meaning under both rules.
+- **The archive sidecar** `<revision>.report.json` keeps its shape `mnemon-capture-report/1`. Its `text` member is the image report as it was frozen, of either schema. The bytes stand under the recorded `report_sha256` (§12 A6), so a sidecar of a `/1` report stays a `/1` report.
+- **Text of the image in the report.** A `/2` report holds two list objects: the reading's unconfirmed words and numbers, as before, and the witness's missing words and numbers (capture layer §22.3). Both are text of the image. They are kept where the capture-text is kept — the receipt and the sidecar — and they never reach the frontmatter or a `RESULT:` line.
+
+#### §3.3 — `source.md`
+
+```yaml
+capture:
+  compare_rule: "mnemon-read-compare/2"
+  witness_share: 95.9
+  witness_missing_words: 8
+  witness_missing_numbers: 4          # numbers that the witness read and the text does not hold; new
+  compared_words: 187
+  unconfirmed_words: 1
+  unconfirmed_numbers: 2
+```
+
+- **The new key.** `witness_missing_numbers` follows `witness_missing_words`. It is a bare integer, from the report's `comparison.missing_numbers` (`cap_image_fields`), written only when the report gives an integer. Every revision that this engine publishes carries it, zero included. `witness_missing_words` now comes from `comparison.missing_words`: the same number under its new name.
+- **Three states.** The key absent: the revision was compared by rule `mnemon-read-compare/1`, which did not count the witness's numbers. Zero: they were counted, and each has a partner in the text. Above zero: so many have none. An absent key never reads as zero; `capture.compare_rule` names the rule.
+- **A published `source.md` is immutable** (D7). A revision published before this amendment keeps its frontmatter: rule `/1`, no such key. A new comparison of that image is a new reading, and a new reading of a published image is a new revision (`--recapture`, A15 §3.4).
+- **Consumers.** Nothing in the engine reads the new key. Outside the engine the `source-add` skill reads six keys for its report, the five of A15 §3.3 and this one (capture layer §22.5).
+
+#### §3.4 — states, receipt and recovery
+
+No row changes. Two points follow from §3.2 above.
+
+- **A replay, a resume and a duplicate of a published revision read nothing again** (A15 §3.4), whatever schema the stored report has. Their notes come from that report. A `/1` report gives the two lines about unconfirmed words and numbers, as it did, and no line about missing numbers (capture layer §22.4).
+- **A replay before publication is a whole new attempt.** It writes a `/2` report, also when an earlier attempt of the same capture left a `/1` report in the receipt: the new report replaces the old one in the one receipt update of S7.
+
+#### §3.6 — `RESULT:` and exit codes
+
+- **No line and no exit code changes.** The outcome table of A15 §3.6 stands. The new count is information: `reading-mismatch` is decided by the same two rules over words.
+- **On stderr**, for a published image revision, three lines are new (capture layer §22.4): the count and the list of the witness's numbers that the text does not hold, and the path of the frozen report. The path is the receipt's `report_path`; it is printed only while `report_state` is `published` and the file exists.
+- **`RESULT:title=` can carry text of the image.** For an image revision the title that the library shows is the extract's title, else the title that the caller gave (§3.6, A11). The extractor writes its title from the image's text, so the line can hold words of the image. A feeder that must pass on no text of an image treats that line, and the two notes that list numbers, as content of the image (capture layer §22.5).
+
+#### Tests
+
+The rows are listed once, in capture layer §22.6. The persistence ones are in `tests/test_image.sh`: the frontmatter key in its three states, the notes and the path line on a fresh capture, a replay and a duplicate, the replay of a revision whose receipt holds a `/1` report, and a fresh attempt whose worker writes a `/1` report.
