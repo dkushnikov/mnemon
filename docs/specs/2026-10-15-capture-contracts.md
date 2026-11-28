@@ -907,7 +907,7 @@ The required tests are listed once, in capture layer §21.13; the persistence on
 
 - **The receipt's report.** `capture_report.text` holds the report of the latest attempt that reached S5 (A15 §3.2). An attempt of this engine writes `mnemon-capture-image/2`. A receipt written before this amendment holds `mnemon-capture-image/1`. Both are valid stored reports, and the engine rewrites neither: there is no migration. `read_history` keeps its keys; `verdict` and `share` have the same meaning under both rules.
 - **The archive sidecar** `<revision>.report.json` keeps its shape `mnemon-capture-report/1`. Its `text` member is the image report as it was frozen, of either schema. The bytes stand under the recorded `report_sha256` (§12 A6), so a sidecar of a `/1` report stays a `/1` report.
-- **Text of the image in the report.** A `/2` report holds two list objects: the reading's unconfirmed words and numbers, as before, and the witness's missing words and numbers (capture layer §22.3). Both are text of the image. They are kept where the capture-text is kept — the receipt and the sidecar — and they never reach the frontmatter or a `RESULT:` line.
+- **Text of the image in the report.** A `/2` report holds two list objects: the reading's unconfirmed words and numbers, as before, and the witness's missing words and numbers (capture layer §22.3). Both are text of the image. They are kept where the capture-text is kept — the receipt and the sidecar — and they never reach the frontmatter or a `RESULT:` line. This narrows one sentence of A15 §3.2, «the witness text is never published»: the witness text as a whole is still never published, and it still lives only in the attempt dir. The report holds those of its words and numbers that found no partner in the reading, at most 200 of each.
 
 #### §3.3 — `source.md`
 
@@ -922,16 +922,16 @@ capture:
   unconfirmed_numbers: 2
 ```
 
-- **The new key.** `witness_missing_numbers` follows `witness_missing_words`. It is a bare integer, from the report's `comparison.missing_numbers` (`cap_image_fields`), written only when the report gives an integer. Every revision that this engine publishes carries it, zero included. `witness_missing_words` now comes from `comparison.missing_words`: the same number under its new name.
+- **The new key.** `witness_missing_numbers` follows `witness_missing_words`. It is a bare integer, from the report's `comparison.missing_numbers` (`cap_image_fields`), written only when the report gives an integer. Every image revision that this engine publishes carries it, zero included, also a revision without `witness_share`: numbers are compared when neither text has a word. `witness_missing_words` now comes from `comparison.missing_words`: the same number under its new name.
 - **Three states.** The key absent: the revision was compared by rule `mnemon-read-compare/1`, which did not count the witness's numbers. Zero: they were counted, and each has a partner in the text. Above zero: so many have none. An absent key never reads as zero; `capture.compare_rule` names the rule.
 - **A published `source.md` is immutable** (D7). A revision published before this amendment keeps its frontmatter: rule `/1`, no such key. A new comparison of that image is a new reading, and a new reading of a published image is a new revision (`--recapture`, A15 §3.4).
-- **Consumers.** Nothing in the engine reads the new key. Outside the engine the `source-add` skill reads six keys for its report, the five of A15 §3.3 and this one (capture layer §22.5).
+- **Consumers.** In the engine one reader takes the new key: `cap_image_notes`, and only when the ledger holds no report of the reading. It then prints the count from the frontmatter and says that the list is unavailable, as it does for the two unconfirmed counts (capture layer §22.4). Outside the engine the `source-add` skill reads six keys for its report, the five of A15 §3.3 and this one (capture layer §22.5).
 
 #### §3.4 — states, receipt and recovery
 
 No row changes. Two points follow from §3.2 above.
 
-- **A replay, a resume and a duplicate of a published revision read nothing again** (A15 §3.4), whatever schema the stored report has. Their notes come from that report. A `/1` report gives the two lines about unconfirmed words and numbers, as it did, and no line about missing numbers (capture layer §22.4).
+- **A replay, a resume and a duplicate of a published revision read nothing again** (A15 §3.4), whatever schema the stored report has. Their notes come from that report. A `/1` report gives the two lines about unconfirmed words and numbers, as it did, and no line about missing numbers (capture layer §22.4). A sidecar that such a replay publishes again from the receipt is serialized from the stored report as it is, and it keeps its recorded hash (§12 A6).
 - **A replay before publication is a whole new attempt.** It writes a `/2` report, also when an earlier attempt of the same capture left a `/1` report in the receipt: the new report replaces the old one in the one receipt update of S7.
 
 #### §3.6 — `RESULT:` and exit codes
@@ -942,4 +942,4 @@ No row changes. Two points follow from §3.2 above.
 
 #### Tests
 
-The rows are listed once, in capture layer §22.6. The persistence ones are in `tests/test_image.sh`: the frontmatter key in its three states, the notes and the path line on a fresh capture, a replay and a duplicate, the replay of a revision whose receipt holds a `/1` report, and a fresh attempt whose worker writes a `/1` report.
+The rows are listed once, in capture layer §22.6. The persistence ones are in `tests/test_image.sh`: the frontmatter key in its three states, the notes and the path line on a fresh capture, a replay and a duplicate, the replay, the resume and the duplicate of a revision whose receipt holds a `/1` report, and a fresh attempt whose worker writes a `/1` report (a worker fault; with exit 124 still the timeout).
