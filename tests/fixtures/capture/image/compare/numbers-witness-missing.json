@@ -1,0 +1,39 @@
+{
+  "name": "numbers-witness-missing",
+  "what": "A witness number absent from the reading (rule /2): words sales rose times march = 4 in each, all matched ('in' is a short run). Witness numbers 4 2026 = 2, reading 4 = 1; 4 is matched, 2026 has no partner: missing 1. 2 - 1 = 1 - 0: the two directions agree. No threshold: agree.",
+  "reading": "Sales rose 4 times in March.\n",
+  "witness": "Sales rose 4 times in March 2026.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/2",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 4,
+    "found": 4,
+    "missing_words": 0,
+    "share": 100.0,
+    "witness_numbers": 2,
+    "missing_numbers": 1,
+    "reading_words": 4,
+    "unconfirmed_words": 0,
+    "reading_numbers": 1,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "missing_lists": {
+      "words": [],
+      "numbers": [
+        "2026"
+      ],
+      "truncated": false
+    },
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

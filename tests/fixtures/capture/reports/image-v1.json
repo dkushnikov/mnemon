@@ -1,0 +1,111 @@
+{
+ "done": {
+  "schema": "mnemon-capture-image/1",
+  "stage": "done",
+  "failure": null,
+  "method": "read:claude-haiku-5-5",
+  "converter": "image-reader",
+  "completeness": "unknown",
+  "validation": {
+   "outcome": "ok",
+   "reason": null,
+   "detected": "png",
+   "format": "png",
+   "input_extension": "png",
+   "extension_matches": true,
+   "width": 1320,
+   "height": 2868,
+   "pixels": 3785760,
+   "bytes": 1306624,
+   "orientation": 1,
+   "trailing_bytes": 0,
+   "limits": {
+    "max_bytes": 7000000,
+    "max_pixels": 50000000,
+    "max_edge": 8000
+   }
+  },
+  "witness": {
+   "adapter": "ocr-tesseract/1",
+   "backend": "tesseract",
+   "version": "5.5.4",
+   "detail": "leptonica-1.87.0",
+   "tessdata_dir": "/opt/tessdata",
+   "languages": "eng",
+   "data": [
+    [
+     "eng",
+     "f74ce87b9feb3a67bbbbfb569698286c7dc2f869482e074d555ae22b1d88f4b6"
+    ]
+   ],
+   "options": {
+    "oem": "default",
+    "psm": "3",
+    "variables": {
+     "tessedit_create_tsv": "1",
+     "tessedit_create_txt": "1"
+    }
+   },
+   "missing": [],
+   "text_sha256": "c55787267a1e41311a8c160606bc077ecaa24cea9f88ac67b87e30e0509962c2",
+   "words": 255,
+   "confidence": {
+    "unit": "tesseract-word-0-100",
+    "mean": 91.4,
+    "min": 0.0,
+    "items": 255
+   }
+  },
+  "execution": "7d7190fb3c795be02192f72dd439b10a0b06d27b2d0610b8db161500329230aa",
+  "reader": {
+   "adapter": "image-reader/1",
+   "claude_code": "2.1.328",
+   "model": "haiku",
+   "model_id": "claude-haiku-5-5",
+   "effort": "high",
+   "max_usd": 0.05,
+   "cost_usd": 0.0021,
+   "duration_ms": 11800,
+   "turns": 2,
+   "output_tokens": 2610,
+   "thinking_tokens": 1940,
+   "text_sha256": "d70afca615203838da3d858e60dda12f900e83e4a6fb03a63cfadb8576ca8985"
+  },
+  "previous_text": null,
+  "comparison": {
+   "rule": "mnemon-read-compare/1",
+   "verdict": "agree",
+   "floor": {
+    "min_share": 90.0,
+    "allowance": 20
+   },
+   "witness_words": 194,
+   "found": 186,
+   "missing": 8,
+   "share": 95.9,
+   "reading_words": 187,
+   "unconfirmed_words": 1,
+   "reading_numbers": 9,
+   "unconfirmed_numbers": 2,
+   "hyphen_joined": 0,
+   "unconfirmed": {
+    "words": [
+     "example"
+    ],
+    "numbers": [
+     "12",
+     "3.4"
+    ],
+    "truncated": false
+   }
+  },
+  "result": {
+   "lines": 31,
+   "words": 235,
+   "chars": 1410,
+   "bytes": 1468
+  },
+  "error": null,
+  "elapsed_ms": 13200
+ }
+}

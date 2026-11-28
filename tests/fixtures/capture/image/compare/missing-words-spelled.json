@@ -1,0 +1,41 @@
+{
+  "name": "missing-words-spelled",
+  "what": "The missing words spelled as the witness text spells them, in its order, a joined pair included (rule /2). Witness runs Amber Note Book notebookshelf AMBER Cellar; the reading's runs amber notebook shelf. The reading's pair notebook-/shelf is joined against the witness's whole word notebookshelf (fold notebooksheif); the witness's pair Note-/Book is joined against the reading's whole word notebook, which the reading's own repair then took into its pair (2 joins). Witness words amber notebook notebooksheif amber ceiiar = 5, reading words amber notebooksheif = 2. Matched: Amber, notebookshelf. Missing, in the witness's order: NoteBook (the joined pair, its two halves written together), AMBER (the second amber), Cellar (3). Found 2, share 40.0; 3 within the allowance: agree.",
+  "reading": "amber notebook-\nshelf\n",
+  "witness": "Amber Note-\nBook notebookshelf AMBER Cellar\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/2",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 5,
+    "found": 2,
+    "missing_words": 3,
+    "share": 40.0,
+    "witness_numbers": 0,
+    "missing_numbers": 0,
+    "reading_words": 2,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 2,
+    "missing_lists": {
+      "words": [
+        "NoteBook",
+        "AMBER",
+        "Cellar"
+      ],
+      "numbers": [],
+      "truncated": false
+    },
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

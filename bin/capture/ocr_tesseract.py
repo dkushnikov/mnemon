@@ -582,18 +582,20 @@ def recognize(raw_path: str, scratch_dir: str, p: Probe, languages: str, *, dead
 
 
 def witness_report(p: Optional[Probe], languages: str, w: Optional[Witness]) -> dict:
-    """The `witness` object of §21.7. Without a probe (a refusal of the envelope) only the request is known;
-    after the probe what it read; after the run its text's hash, words and confidence, when it succeeded."""
+    """The `witness` object of §21.7, under the key names of §22.3. Without a probe (a refusal of the envelope)
+    only the request is known; after the probe what it read; after the run its text's hash, words and
+    confidence, when it succeeded. What the installation lacks is the key `absent` (it was `missing` in a
+    `mnemon-capture-image/1` report); the probe document keeps its key `missing` (probe_document)."""
     done = w is not None and w.failure is None and not w.deadline_hit
     if p is None:
-        missing = None
+        absent = None
     elif w is not None:
-        missing = list(w.missing)
+        absent = list(w.missing)
     else:
-        missing = list(p.missing)
+        absent = list(p.missing)
     return {"adapter": ADAPTER, "backend": BACKEND,
             "version": p.version if p else None, "detail": p.detail if p else None,
             "tessdata_dir": p.tessdata_dir if p else None, "languages": languages,
-            "data": p.data if p else None, "options": OPTIONS, "missing": missing,
+            "data": p.data if p else None, "options": OPTIONS, "absent": absent,
             "text_sha256": w.text_sha256 if done else None, "words": w.words if done else None,
             "confidence": w.confidence if done else None}

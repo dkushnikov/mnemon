@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# test_image.sh — the image origin through the gateway (docs/specs/2026-10-15-capture-contracts.md §18,
-# amendment A15; docs/specs/2026-10-15-capture-layer.md §21, amendment A20): identity and the raw, the steps
-# and their crash hooks, the replay at every boundary, the outcome table against the RESULT lines, the history
-# of readings, the frontmatter keys, the reader's preflight, the notes on stderr. Everything runs against stubs:
+# test_image.sh — the image origin through the gateway (docs/specs/2026-10-15-capture-contracts.md §18 and §19,
+# amendments A15 and A16; docs/specs/2026-10-15-capture-layer.md §21 and §22, amendments A20 and A21): identity
+# and the raw, the steps and their crash hooks, the replay at every boundary, the outcome table against the
+# RESULT lines, the history of readings, the frontmatter keys, the reader's preflight, the notes on stderr, the
+# report of either schema (section 14). Everything runs against stubs:
 # the stub tesseract through the test hook OCR_CMD, the stub reader behind the stub `claude`
 # (tests/fixtures/capture/image/); no network, no model, no real recognizer.
 source "$(dirname "$0")/test-helper.sh"
@@ -61,6 +62,28 @@ cfg_with() {   # <name> <yaml line>… → prints the path of a config with thos
 says_kept() { assert_contains "$err" "the image is kept" "$1: the message says the image is kept"; assert_not_contains "$err" "nothing was kept" "$1: ...and never that nothing was kept"; }
 says_none_kept() { assert_contains "$err" "nothing was kept" "$1: the message says nothing was kept"; assert_not_contains "$err" "the image is kept" "$1: ...and never that the image is kept"; }
 says_neither() { assert_not_contains "$err" "the image is kept" "$1: the message says nothing about the image being kept"; assert_not_contains "$err" "nothing was kept" "$1: ...nor that nothing was kept"; }
+# the NOTE lines of a published image revision, by kind, in their order on stderr (capture layer §22.4)
+note_order() {
+  local line order=""
+  while IFS= read -r line; do
+    case "$line" in
+      "NOTE: the local recognizer does not confirm "*) order="$order unconfirmed" ;;
+      "NOTE: unconfirmed numbers: "*) order="$order unconfirmed-list" ;;
+      "NOTE: the local recognizer read "*) order="$order missing" ;;
+      "NOTE: missing numbers: "*) order="$order missing-list" ;;
+      "NOTE: the reading's report: "*) order="$order path" ;;
+    esac
+  done <<< "$err"
+  printf '%s' "${order# }"
+}
+path_line() { printf '%s\n' "$err" | sed -n "s/^NOTE: the reading's report: //p"; }
+# the path line names the owner's sidecar: <the receipt's report_path>, a file, of the image report's schema
+path_names() {   # <owner capture id> <schema> <label>
+  local want
+  want="$(rget "$1" '.report_path')"
+  assert_eq "$(path_line)" "$want" "$3: the path line names the report_path of the owner's receipt"
+  assert_eq "$(jq -r '.text.schema' "$want" 2>/dev/null)" "$2" "$3: ...a file that exists, its text.schema $2"
+}
 STUB_TEXT_SHA="$(python3 - "$MNEMON_ROOT" "$IMGFIX/stub-text.txt" <<'PY'
 import hashlib, sys
 sys.path.insert(0, sys.argv[1] + "/bin")
@@ -106,14 +129,15 @@ assert_eq "$(capfm "$src" witness_version)" '"5.5.4"' "witness_version quoted"
 assert_eq "$(capfm "$src" witness_adapter)" '"ocr-tesseract/1"' "witness_adapter"
 assert_eq "$(capfm "$src" witness_languages)" '"eng"' "witness_languages"
 [[ "$(capfm "$src" witness_execution)" =~ ^\"[0-9a-f]{64}\"$ ]] && pass "witness_execution: the witness's key" || fail "witness_execution" "$(capfm "$src" witness_execution)"
-assert_eq "$(capfm "$src" compare_rule)" '"mnemon-read-compare/1"' "compare_rule"
+assert_eq "$(capfm "$src" compare_rule)" '"mnemon-read-compare/2"' "compare_rule names rule /2 (contracts A16 §3.3)"
 assert_eq "$(capfm "$src" witness_share)" "100.0" "witness_share: a bare decimal with one fractional digit"
 assert_eq "$(capfm "$src" witness_missing_words)" "0" "witness_missing_words"
+assert_eq "$(capfm "$src" witness_missing_numbers)" "0" "witness_missing_numbers: a capture without such numbers carries the key with 0"
 assert_eq "$(capfm "$src" unconfirmed_words)" "0" "unconfirmed_words"
 assert_eq "$(capfm "$src" unconfirmed_numbers)" "0" "unconfirmed_numbers"
 [[ "$(capfm "$src" compared_words)" =~ ^[1-9][0-9]*$ ]] && pass "compared_words: a bare integer" || fail "compared_words" "$(capfm "$src" compared_words)"
 keys="$(fmblock "$src" | sed -n '/^capture:/,$p' | sed -n 's/^  \([a-z_0-9]*\):.*/\1/p' | tr '\n' ' ')"
-assert_eq "$keys" "method fidelity raw_store raw_kind raw_sha256 raw_bytes text_sha256 text_bytes converter completeness image_format image_pixels reader_adapter reader_claude_code witness_backend witness_version witness_adapter witness_languages witness_execution compare_rule witness_share witness_missing_words compared_words unconfirmed_words unconfirmed_numbers engine " "the capture: block in the order of contracts A15 §3.3"
+assert_eq "$keys" "method fidelity raw_store raw_kind raw_sha256 raw_bytes text_sha256 text_bytes converter completeness image_format image_pixels reader_adapter reader_claude_code witness_backend witness_version witness_adapter witness_languages witness_execution compare_rule witness_share witness_missing_words witness_missing_numbers compared_words unconfirmed_words unconfirmed_numbers engine " "the capture: block in the order of contracts A15 §3.3, witness_missing_numbers after witness_missing_words (A16)"
 for key in url canonical_url final_url posted_url declared_canonical_url folded_sources published; do
   assert_eq "$(fm "$src" "$key")" "" "an image's source.md carries no $key"
 done
@@ -127,13 +151,13 @@ assert_eq "$(rget i-1 '.raw_sha256')" "$(sha_of "$shot")" "receipt raw_sha256 = 
 assert_eq "$(rget i-1 '.request.input_sha256')" "$(sha_of "$shot")" "...the hash bound at S1"
 assert_eq "$(rget i-1 '.request.ocr_languages')" "eng" "the request binds ocr_languages"
 assert_eq "$(rget i-1 '.request.origin')" "image" "...and the origin"
-assert_eq "$(rget i-1 '.capture_report.text.schema')" "mnemon-capture-image/1" "the receipt holds the worker's report"
+assert_eq "$(rget i-1 '.capture_report.text.schema')" "mnemon-capture-image/2" "the receipt holds the worker's report, of the schema /2"
 assert_eq "$(rget i-1 '.read_history | length')" "1" "read_history: one entry per attempt that ran the worker"
 assert_eq "$(rget i-1 '.read_history[0] | keys | join(" ")')" "attempt claude_code cost_usd failure_class languages outcome output_tokens reader_adapter reader_model_id share text_sha256 thinking_tokens verdict witness_execution" "...with the keys of contracts A15 §3.2"
 assert_eq "$(rget i-1 '.read_history[0] | "\(.attempt) \(.outcome) \(.failure_class) \(.verdict) \(.text_sha256) \(.languages)"')" "1 agreed null agree $STUB_TEXT_SHA eng" "...attempt 1 agreed"
 [[ "$(rget i-1 '.read_history[0].cost_usd')" != "null" ]] && pass "...with the cost of its call" || fail "read_history cost" "null"
 assert_file_exists "$ARCHIVE/$rev.report.json" "the archive sidecar is published"
-assert_eq "$(jq -r '.text.schema' "$ARCHIVE/$rev.report.json")" "mnemon-capture-image/1" "...with the image report in its text member"
+assert_eq "$(jq -r '.text.schema' "$ARCHIVE/$rev.report.json")" "mnemon-capture-image/2" "...with the image report in its text member"
 assert_eq "$(jq -r '.schema' "$ARCHIVE/$rev.report.json")" "mnemon-capture-report/1" "...the sidecar's shape unchanged"
 assert_contains "$(cat "$STUB_DIR/call-1.stdin")" "Origin: image" "the extractor's prompt says the content was read from an image"
 assert_contains "$(cat "$STUB_DIR/call-1.stdin")" "File: shot-1.png" "...and carries the image's basename"
@@ -150,7 +174,9 @@ assert_eq "$(jq -r 'index("--input-format") != null and index("stream-json") != 
 assert_contains "$(cat "$VSTATE/runs/i-1/attempt-1/argv.txt" 2>/dev/null)" "--output-format json" "...the extractor's argv keeps argv.txt"
 assert_not_contains "$(cat "$VSTATE/runs/i-1/attempt-1/argv.txt" 2>/dev/null)" "--input-format" "...and it is the extractor's, not the reader's"
 assert_eq "$(jq -r 'index("--output-format") as $i | if $i == null then "" else .[$i + 1] end' "$VSTATE/runs/i-1/attempt-1/argv.json" 2>/dev/null)" "json" "...and argv.json"
-assert_eq "$err" "" "nothing on stderr when the witness confirms every word"
+# every count at zero: stderr holds the path line alone (capture layer §22.4 item 3), naming the published sidecar
+assert_eq "$err" "NOTE: the reading's report: $ARCHIVE/$rev.report.json" "every count at zero: stderr holds only the path of the reading's report"
+assert_eq "$(rget i-1 '.report_path') $(rget i-1 '.report_state')" "$ARCHIVE/$rev.report.json published" "...the path that the receipt records, published"
 assert_eq "$(staging_left)" "0" "no staging left"
 
 # JPEG bytes under a .png name: read by content
@@ -169,6 +195,13 @@ assert_eq "$rc" "0" "the same bytes again exit 0"
 assert_eq "$(result status)" "skipped-duplicate" "...skipped-duplicate"
 assert_eq "$(result revision)" "$rev" "...naming the stored revision"
 assert_eq "$(tess_calls) $(reader_calls) $(stub_calls)" "0 0 0" "...no witness, no reader, no extractor"
+assert_eq "$(printf '%s\n' "$err" | grep '^NOTE:')" "NOTE: the reading's report: $ARCHIVE/$rev.report.json" "...and, every count at zero, the path line its only NOTE (§22.4 item 3)"
+path_names i-1 mnemon-capture-image/2 "the duplicate"
+# through an alias: the path of the owner's receipt (§22.4 item 3)
+run_gw --origin image --file "$shot" --capture-id i-alias
+assert_eq "$rc $(result revision)" "0 $rev" "a request under another id resolves to the stored revision"
+path_names i-1 mnemon-capture-image/2 "through an alias"
+assert_eq "$(rget i-alias '.report_path // "none"')" "none" "...the alias's own receipt records no report path: the path is the owner's"
 # the same bytes that once failed as a file are the same resource
 both="$(mkimg both.png)"
 stub_reset
@@ -210,6 +243,12 @@ MNEMON_TEST_READER_MODE=other-text run_gw --origin image --file "$note" --captur
 assert_eq "$rc" "0" "a reading with small differences is published"
 assert_contains "$err" "NOTE: the local recognizer does not confirm 1 word(s) and 1 number(s) of the text" "the counts go to stderr"
 assert_contains "$err" "NOTE: unconfirmed numbers: 88" "...with the unconfirmed numbers"
+# the other direction (capture layer §22.4 item 2): the witness read 87, the reading holds 88 in its place
+assert_contains "$err" "NOTE: the local recognizer read 1 number(s) that the text does not hold" "the missing numbers' count goes to stderr"
+assert_contains "$err" "NOTE: missing numbers: 87" "...with the witness's number that the text does not hold"
+assert_eq "$(note_order)" "unconfirmed unconfirmed-list missing missing-list path" "...the lines in the order of §22.4: the two pairs, then the path"
+path_names i-note mnemon-capture-image/2 "i-note"
+assert_eq "$(capfm "$(src_of i-note)" witness_missing_numbers)" "1" "...and capture.witness_missing_numbers to the frontmatter"
 assert_eq "$(capfm "$(src_of i-note)" unconfirmed_words)" "1" "...and to the frontmatter"
 assert_eq "$(capfm "$(src_of i-note)" unconfirmed_numbers)" "1" "...both counts"
 assert_eq "$(capfm "$(src_of i-note)" witness_missing_words)" "1" "...and the witness's missing word"
@@ -218,26 +257,41 @@ assert_not_contains "$(fmblock "$(src_of i-note)")" "team" "the unconfirmed word
 stub_reset
 run_gw --capture-id i-note
 assert_contains "$err" "NOTE: unconfirmed numbers: 88" "a replay prints the notes again, from the stored report"
+assert_contains "$err" "NOTE: missing numbers: 87" "...the missing numbers too"
+assert_eq "$(note_order)" "unconfirmed unconfirmed-list missing missing-list path" "...in the same order, the path last"
+path_names i-note mnemon-capture-image/2 "the replay"
 assert_eq "$(tess_calls) $(reader_calls)" "0 0" "...with no new comparison"
 # a resume that reports the revision: the extraction failed after the publication, --resume finishes it
 noter="$(mkimg note-resume.png)"
 MNEMON_TEST_READER_MODE=other-text STUB_MODE=exit1 run_gw --origin image --file "$noter" --capture-id i-noter
 assert_eq "$rc $(result status)" "4 captured" "a published reading whose extraction failed: captured"
 assert_contains "$err" "NOTE: unconfirmed numbers: 88" "...the notes printed"
+assert_eq "$(note_order)" "unconfirmed unconfirmed-list missing missing-list path" "...both pairs and the path for a captured revision"
+assert_contains "$err" "NOTE: missing numbers: 87" "...the missing numbers listed"
+path_names i-noter mnemon-capture-image/2 "the captured revision"
 stub_reset
 run_gw --resume i-noter
 assert_eq "$rc $(result status)" "0 extracted" "--resume finishes the extraction"
 assert_contains "$err" "NOTE: unconfirmed numbers: 88" "...and a resume prints the notes again"
+assert_eq "$(note_order)" "unconfirmed unconfirmed-list missing missing-list path" "...both pairs and the path, from the stored report"
+path_names i-noter mnemon-capture-image/2 "the resume"
 assert_eq "$(tess_calls) $(reader_calls)" "0 0" "...reading nothing"
 run_gw --origin image --file "$note"
 assert_eq "$(result status)" "skipped-duplicate" "a duplicate"
 assert_contains "$err" "NOTE: the local recognizer does not confirm 1 word(s) and 1 number(s) of the text" "...prints them too"
+assert_eq "$(note_order)" "unconfirmed unconfirmed-list missing missing-list path" "...both pairs and the path"
+path_names i-note mnemon-capture-image/2 "the duplicate of i-note"
 # without a readable report the first line says so
 cp "$(receipt i-note)" "$TEST_TMPDIR/i-note.receipt"
 jq '.capture_report.text = null' "$TEST_TMPDIR/i-note.receipt" > "$(receipt i-note)"
 run_gw --origin image --file "$note"
 assert_contains "$err" "the list is unavailable" "without a stored report the note says that the list is unavailable"
 assert_not_contains "$err" "unconfirmed numbers:" "...and lists nothing"
+# §22.4 «Without a readable report»: the count of missing numbers from the frontmatter, its list unavailable, no path
+assert_contains "$err" "NOTE: the local recognizer read 1 number(s) that the text does not hold (the list is unavailable: this ledger holds no report of the reading)" "...the missing numbers' count from capture.witness_missing_numbers, the list unavailable"
+assert_not_contains "$err" "missing numbers:" "...no list of missing numbers"
+assert_not_contains "$err" "the reading's report:" "...and no path line without a readable report"
+assert_eq "$(note_order)" "unconfirmed missing" "...one line of each pair"
 cp "$TEST_TMPDIR/i-note.receipt" "$(receipt i-note)"
 
 # ---------------------------------------------------------------------------------------------
@@ -359,7 +413,8 @@ stub_reset
 envr="$(mkimg env-resume.png)"
 run_gw --origin image --file "$envr" --ocr-languages rus+eng --capture-id i-envr
 assert_eq "$rc" "3" "a missing language model: exit 3, no fallback to another sequence"
-assert_eq "$(rget i-envr '.capture_report.text.witness.missing | join(",")')" "lang:rus" "...the report names what is missing"
+assert_eq "$(rget i-envr '.capture_report.text.witness.absent | join(",")')" "lang:rus" "...the report names what is absent (witness.absent, capture layer §22.3)"
+assert_eq "$(rget i-envr '.capture_report.text.witness | has("missing")')" "false" "...and has no key witness.missing"
 assert_eq "$(tess_runs) $(reader_calls)" "0 0" "...no run under eng alone, no model call"
 reserved="$(rget i-envr '.revision')"
 rm -f "$envr"
@@ -506,6 +561,7 @@ assert_file_exists "$(src_of i-pub)" "...the source is published"
 t0="$(tess_calls)"; r0="$(reader_calls)"
 OCR_CMD="$TEST_TMPDIR/no-tesseract-here" MNEMON_TEST_READER_MODE=error run_gw --resume i-pub
 assert_eq "$rc" "0" "--resume of an extract-failed capture finishes without the stubs"
+assert_eq "$(printf '%s\n' "$err" | grep '^NOTE:')" "NOTE: the reading's report: $(rget i-pub '.report_path')" "...a resume with every count at zero prints the path line alone (§22.4 item 3)"
 assert_eq "$(( $(tess_calls) - t0 )) $(( $(reader_calls) - r0 ))" "0 0" "...no witness, no reader"
 OCR_CMD="$TEST_TMPDIR/no-tesseract-here" run_gw --capture-id i-pub
 assert_eq "$rc" "0" "a replay of an extracted capture"
@@ -529,7 +585,7 @@ row() {
   [[ "$stage" == "-" ]] || assert_eq "$(rget "$id" '.stage')" "$stage" "$id: receipt stage $stage"
   if [[ "$raw" == "yes" ]]; then
     assert_eq "$(rget "$id" '.raw_published')" "true" "$id: the raw is retained"
-    assert_eq "$(rget "$id" '.capture_report.text.schema')" "mnemon-capture-image/1" "$id: the report is in the receipt"
+    assert_eq "$(rget "$id" '.capture_report.text.schema')" "mnemon-capture-image/2" "$id: the report is in the receipt"
   fi
   assert_eq "$(result revision)$(result path)" "" "$id: no revision in RESULT"
   assert_eq "$(rget "$id" '.source_published')" "false" "$id: nothing published"
@@ -605,6 +661,7 @@ assert_eq "$(body_sha "$onechar")" "$(printf 'x\n' | shasum -a 256 | cut -c1-64)
 assert_eq "$(rget t-onechar '.capture_report.text.comparison | "\(.verdict) \(.share)"')" "agree null" "...verdict agree, share null"
 assert_eq "$(fmblock "$onechar" | grep -c '^  witness_share:')" "0" "...no witness_share key: absent when the witness has no word (contracts A15 §3.3)"
 assert_eq "$(capfm "$onechar" witness_missing_words) $(capfm "$onechar" compared_words) $(capfm "$onechar" unconfirmed_words) $(capfm "$onechar" unconfirmed_numbers)" "0 0 0 0" "...the four counts are there"
+assert_eq "$(capfm "$onechar" witness_missing_numbers)" "0" "...and witness_missing_numbers: a revision without witness_share carries the key too (contracts A16 §3.3)"
 
 # the gateway's own reading of the worker's exit, row by row (a fake worker through the seam)
 cat > "$TEST_TMPDIR/fake-worker.sh" <<'FAKE'
@@ -646,7 +703,7 @@ assert_eq "$(rget f-badid '.source_published')" "false" "...nothing published"
 jq '.done.comparison.unconfirmed_numbers = 25 | .done.comparison.unconfirmed.numbers = [range(101; 126) | tostring]' "$REPORTS/image.json" > "$TEST_TMPDIR/image-25.json"
 FAKE_FIXTURE="$TEST_TMPDIR/image-25.json" fake f-25 0 done yes
 assert_contains "$err" "NOTE: unconfirmed numbers: $(jq -rn '[range(101; 121) | tostring] | join(" ")') … (the first twenty of 25)" "25 unconfirmed numbers: the NOTE lists the first twenty"
-assert_not_contains "$err" "121" "...and no more"
+assert_not_contains "$(printf '%s\n' "$err" | grep '^NOTE: unconfirmed numbers:')" "121" "...and no more"
 # a stored number keeps every character but control characters and whitespace: the comparison counts a number by
 # \d, so Unicode decimal digits (Arabic-Indic, fullwidth) are numbers and are listed as they stand (§21.10)
 python3 - "$REPORTS/image.json" "$TEST_TMPDIR/image-unicode.json" <<'PY'
@@ -663,6 +720,44 @@ want="$(python3 -c 'print(" ".join([chr(0x661) + chr(0x662) + chr(0x663), chr(0x
 FAKE_FIXTURE="$TEST_TMPDIR/image-unicode.json" fake f-uni 0 done yes
 assert_eq "$rc" "0" "a report with Unicode digits among the unconfirmed numbers: published"
 assert_eq "$(printf '%s\n' "$err" | grep '^NOTE: unconfirmed numbers:')" "NOTE: unconfirmed numbers: $want" "...the NOTE lists the Arabic-Indic and the fullwidth number; a control character, spaces and a line end are dropped"
+# the notes of the missing numbers (capture layer §22.4 item 2), from the report's missing_lists: zero → neither line,
+# the pair of unconfirmed numbers then stands alone
+jq '.done.comparison.missing_numbers = 0 | .done.comparison.missing_lists.numbers = [] | .done.comparison.witness_numbers = 7' "$REPORTS/image.json" > "$TEST_TMPDIR/image-nomiss.json"
+FAKE_FIXTURE="$TEST_TMPDIR/image-nomiss.json" fake f-nomiss 0 done yes
+assert_eq "$rc" "0" "a report with unconfirmed numbers and no missing number: published"
+assert_eq "$(note_order)" "unconfirmed unconfirmed-list path" "...missing_numbers 0: neither line of the pair, the pair of unconfirmed numbers alone, then the path"
+assert_eq "$(capfm "$(src_of f-nomiss)" witness_missing_numbers)" "0" "...capture.witness_missing_numbers 0"
+FAKE_FIXTURE="$REPORTS/image.json" fake f-miss4 0 done yes
+assert_eq "$(note_order)" "unconfirmed unconfirmed-list missing missing-list path" "the fixture's done report: both pairs, then the path"
+assert_contains "$err" "NOTE: the local recognizer read 4 number(s) that the text does not hold" "...the count of comparison.missing_numbers"
+assert_eq "$(printf '%s\n' "$err" | grep '^NOTE: missing numbers:')" "NOTE: missing numbers: 10.15 11.30 4 128" "...the list of comparison.missing_lists.numbers, as the witness text spells them"
+assert_eq "$(capfm "$(src_of f-miss4)" witness_missing_numbers)" "4" "...and capture.witness_missing_numbers from comparison.missing_numbers"
+assert_eq "$(capfm "$(src_of f-miss4)" witness_missing_words)" "8" "...capture.witness_missing_words from comparison.missing_words"
+# at most twenty, then the tail
+jq '.done.comparison.missing_numbers = 25 | .done.comparison.missing_lists.numbers = [range(201; 226) | tostring] | .done.comparison.witness_numbers = 32' "$REPORTS/image.json" > "$TEST_TMPDIR/image-miss25.json"
+FAKE_FIXTURE="$TEST_TMPDIR/image-miss25.json" fake f-miss25 0 done yes
+assert_contains "$err" "NOTE: the local recognizer read 25 number(s) that the text does not hold" "25 missing numbers: the count line"
+assert_eq "$(printf '%s\n' "$err" | grep '^NOTE: missing numbers:')" "NOTE: missing numbers: $(jq -rn '[range(201; 221) | tostring] | join(" ")') … (the first twenty of 25)" "...the first twenty, then the tail"
+assert_eq "$(capfm "$(src_of f-miss25)" witness_missing_numbers)" "25" "...the frontmatter key holds the whole count"
+# the character rule of §21.10 on the new list: control characters and whitespace removed, a number left empty dropped
+python3 - "$REPORTS/image.json" "$TEST_TMPDIR/image-miss-unicode.json" <<'PY2'
+import json, sys
+rep = json.load(open(sys.argv[1], encoding="utf-8"))
+nums = [chr(0x661) + chr(0x662) + chr(0x663), chr(0xFF14) + chr(0xFF15) + chr(0xFF16),
+        "7" + chr(0x1F) + "8", "9" + chr(0x20) + "0" + chr(0x3000) + chr(0x0A), chr(0x85) + chr(0x20) + chr(0x2028)]
+c = rep["done"]["comparison"]
+c["missing_numbers"] = len(nums)
+c["witness_numbers"] = c["reading_numbers"] - c["unconfirmed_numbers"] + len(nums)
+c["missing_lists"]["numbers"] = nums
+with open(sys.argv[2], "w", encoding="utf-8") as fh:
+    json.dump(rep, fh, ensure_ascii=True)
+PY2
+want="$(python3 -c 'print(" ".join([chr(0x661) + chr(0x662) + chr(0x663), chr(0xFF14) + chr(0xFF15) + chr(0xFF16), "78", "90"]))')"
+FAKE_FIXTURE="$TEST_TMPDIR/image-miss-unicode.json" fake f-miss-uni 0 done yes
+assert_eq "$rc" "0" "a report with Unicode digits, a control character, whitespace and an empty entry among the missing numbers: published"
+assert_eq "$(printf '%s\n' "$err" | grep '^NOTE: missing numbers:')" "NOTE: missing numbers: $want" "...the list keeps the Arabic-Indic and the fullwidth number, drops a control character and whitespace, and drops a number left empty"
+assert_contains "$err" "NOTE: the local recognizer read 5 number(s) that the text does not hold" "...the count line names the report's count"
+assert_eq "$(printf '%s\n' "$err" | grep -c '^NOTE: missing numbers:')" "1" "...one line"
 fake f-notext 0 done no
 assert_eq "$rc $(result error_class) $(result retryable) $(rget f-notext '.stage')" "1 convert true worker" "exit 0 with a right report and no capture.md: the worker's fault — convert, retryable, stage worker"
 assert_eq "$(rget f-notext '.source_published') $(rget f-notext '.text_sha256')" "false null" "...nothing published, no text hash taken"
@@ -744,6 +839,146 @@ assert_contains "$out" "Reader: NOT ready — the run would exit 3 before the im
 assert_contains "$out" "mnemon fence-probe" "...with the command"
 assert_eq "$(reader_calls)" "0" "...no model call"
 write_image_probe_record
+
+# ---------------------------------------------------------------------------------------------
+echo "--- 14. the witness's numbers that the text lacks; the report of either schema (capture layer §22, contracts A16) ---"
+# through the real worker: the witness's mode `numbers` is the text of `ok` and a line `10:15 - 11:30`
+stub_reset
+run_gw --origin image --file "$(mkimg nums-plain.png)" --capture-id i-nums-plain
+assert_eq "$rc $(result status)" "0 extracted" "(a capture whose witness reads no number that the text lacks)"
+plain_out="$out"
+stub_reset
+MNEMON_TEST_TESSERACT_MODE=numbers run_gw --origin image --file "$(mkimg nums.png)" --capture-id i-nums
+assert_eq "$rc $(result status)" "0 extracted" "a witness text with numbers that the reading lacks: published, never refused"
+assert_eq "$(capfm "$(src_of i-nums)" witness_missing_numbers)" "4" "capture.witness_missing_numbers holds the count (contracts A16 §3.3)"
+assert_eq "$(capfm "$(src_of i-nums)" compare_rule)" '"mnemon-read-compare/2"' "...with compare_rule mnemon-read-compare/2"
+assert_eq "$(capfm "$(src_of i-nums)" witness_missing_words)" "0" "...and no missing word"
+assert_eq "$(note_order)" "missing missing-list path" "the pair of missing numbers without the pair of unconfirmed ones, then the path"
+assert_contains "$err" "NOTE: the local recognizer read 4 number(s) that the text does not hold" "...the count"
+assert_eq "$(printf '%s\n' "$err" | grep '^NOTE: missing numbers:')" "NOTE: missing numbers: 10 15 11 30" "...the list, in the witness's order"
+path_names i-nums mnemon-capture-image/2 "i-nums"
+assert_eq "$(rget i-nums '.capture_report.text.comparison.missing_lists.numbers | join(" ")')" "10 15 11 30" "the receipt's report holds the list"
+assert_eq "$(jq -r '.text.comparison.missing_lists.numbers | join(" ")' "$(rget i-nums '.report_path')")" "10 15 11 30" "...and so does the archive sidecar"
+assert_not_contains "$(fmblock "$(src_of i-nums)")" "11 30" "...the list never reaches the frontmatter"
+# the comparison's lists add no RESULT line and put nothing into one (§22.4 «Not changed»)
+result_block() { printf '%s\n' "$1" | grep '^RESULT:' | sed -E 's/^(RESULT:(capture_id|revision|path)=).*/\1<id>/; s/[0-9a-f]{64}/<sha>/g'; }
+assert_eq "$(result_block "$out")" "$(result_block "$plain_out")" "the RESULT block of a capture with missing numbers equals the block without them, line for line, but for the ids and hashes"
+assert_eq "$(result_block "$out" | wc -l | tr -d ' ')" "$(result_block "$plain_out" | wc -l | tr -d ' ')" "...as many RESULT lines"
+# the path line is absent when the freeze failed, without archive_dir, and while the sidecar's publication is pending
+stub_reset
+MNEMON_TEST_TESSERACT_MODE=numbers MNEMON_TEST_REPORT_FREEZE_FAIL=1 run_gw --origin image --file "$(mkimg nums-nofreeze.png)" --capture-id i-nofreeze
+assert_eq "$rc $(rget i-nofreeze '.report_state')" "0 null" "a capture whose report freeze fails is published, with no frozen report"
+assert_eq "$(note_order)" "missing missing-list" "...its notes from the receipt's report, and no path line"
+stub_reset
+MNEMON_TEST_TESSERACT_MODE=numbers run_cfg "$TEST_TMPDIR/noarchive.yaml" --origin image --file "$(mkimg nums-noarchive.png)" --capture-id i-noarchive
+assert_eq "$rc $(rget i-noarchive '.report_state')" "0 null" "an instance without archive_dir: published, no sidecar"
+assert_eq "$(note_order)" "missing missing-list" "...the notes, and no path line"
+cat > "$TEST_TMPDIR/tess-ro.sh" <<RO
+#!/usr/bin/env bash
+# the stub tesseract that makes the archive read-only while the worker runs: the raw is published, the sidecar is not
+chmod 555 "$ARCHIVE"
+exec "$IMGFIX/stub-tesseract.py" "\$@"
+RO
+chmod +x "$TEST_TMPDIR/tess-ro.sh"
+stub_reset
+OCR_CMD="$TEST_TMPDIR/tess-ro.sh" run_gw --origin image --file "$(mkimg pending.png)" --capture-id i-pending
+chmod 755 "$ARCHIVE"
+assert_eq "$rc $(result status) $(result report)" "0 extracted failed" "the sidecar's publication fails after the source exists: published, RESULT:report=failed"
+assert_eq "$(rget i-pending '.report_state')" "pending" "...report_state pending"
+assert_eq "$(note_order)" "" "...no path line while the publication is pending (every count at zero)"
+run_gw --capture-id i-pending
+assert_eq "$rc $(result report) $(rget i-pending '.report_state')" "0 ok published" "the replay repairs the sidecar"
+assert_eq "$(note_order)" "path" "...and then prints the path line"
+path_names i-pending mnemon-capture-image/2 "after the repair"
+# the sidecar on disk while the receipt still says pending (the window between the sidecar's rename and the receipt
+# update): the receipt decides — no path line on a duplicate, which repairs nothing of the owner's
+cp "$(receipt i-pending)" "$TEST_TMPDIR/i-pending.receipt"
+jq '.report_state = "pending"' "$TEST_TMPDIR/i-pending.receipt" > "$(receipt i-pending)"
+run_gw --origin image --file "$TEST_TMPDIR/pending.png"
+assert_eq "$rc $(result status) $(rget i-pending '.report_state')" "0 skipped-duplicate pending" "a duplicate while the owner's receipt says pending"
+assert_file_exists "$(rget i-pending '.report_path')" "...the sidecar is on disk"
+assert_eq "$(note_order)" "" "...and no path line: report_state is not published"
+cp "$TEST_TMPDIR/i-pending.receipt" "$(receipt i-pending)"
+
+# a stored /1 report stays readable (J4): a revision published before A21, its receipt and its sidecar of the /1
+# shape, its frontmatter without witness_missing_numbers — made here from a published revision, the way the
+# earlier engine left it
+export FAKE_FIXTURE="$REPORTS/image.json"
+STUB_MODE=exit1 fake i-v1 0 done yes
+assert_eq "$rc $(result status)" "4 captured" "(a published image revision whose extraction failed)"
+v1rev="$(rget i-v1 '.revision')"
+python3 - "$(receipt i-v1)" "$REPORTS/image-v1.json" "$(src_of i-v1)" <<'PY2'
+import hashlib, json, os, sys
+receipt_path, fixture, source = sys.argv[1:4]
+receipt = json.load(open(receipt_path, encoding="utf-8"))
+v1 = json.load(open(fixture, encoding="utf-8"))["done"]
+receipt["capture_report"]["text"] = v1
+cr = receipt["capture_report"]
+report = {"schema": "mnemon-capture-report/1", "fetch": cr.get("fetch"), "text": cr.get("text"),
+          "site": cr.get("site"), "media": receipt.get("media_meta")}
+data = (json.dumps(report, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
+receipt["report_sha256"] = hashlib.sha256(data).hexdigest()
+targets = [receipt["report_path"]]
+if receipt.get("attempt_dir") and os.path.isfile(os.path.join(receipt["attempt_dir"], "report.json")):
+    targets.append(os.path.join(receipt["attempt_dir"], "report.json"))
+for target in targets:
+    with open(target, "wb") as fh:
+        fh.write(data)
+with open(receipt_path, "w", encoding="utf-8") as fh:
+    json.dump(receipt, fh, indent=1, ensure_ascii=False)
+text = open(source, encoding="utf-8").read()
+head, sep, body = text.partition("\n---\n")
+head = "\n".join(l for l in head.split("\n") if not l.startswith("  witness_missing_numbers:"))
+head = head.replace('compare_rule: "mnemon-read-compare/2"', 'compare_rule: "mnemon-read-compare/1"')
+open(source, "w", encoding="utf-8").write(head + sep + body)
+PY2
+assert_eq "$(rget i-v1 '.capture_report.text.schema') $(capfm "$(src_of i-v1)" compare_rule)" 'mnemon-capture-image/1 "mnemon-read-compare/1"' "(the receipt holds the /1 report, the frontmatter names rule /1)"
+v1sha="$(rget i-v1 '.report_sha256')"
+v1_notes() {   # <label>
+  assert_eq "$rc" "0" "$1: exit 0"
+  assert_eq "$(note_order)" "unconfirmed unconfirmed-list path" "$1: the two lines of §21.10 and the path line, no line about missing numbers"
+  assert_contains "$err" "NOTE: the local recognizer does not confirm 1 word(s) and 2 number(s) of the text" "$1: ...the counts of the /1 report"
+  assert_contains "$err" "NOTE: unconfirmed numbers: 12 3.4" "$1: ...its unconfirmed numbers"
+  path_names i-v1 mnemon-capture-image/1 "$1"
+  assert_eq "$(fmblock "$(src_of i-v1)" | grep -c '^  witness_missing_numbers:')" "0" "$1: ...the frontmatter without witness_missing_numbers"
+}
+stub_reset
+run_gw --resume i-v1
+assert_eq "$(result status)" "extracted" "a resume of the /1 revision finishes the extraction"
+v1_notes "the resume of a /1 revision"
+run_gw --capture-id i-v1
+v1_notes "the replay of a /1 revision"
+run_gw --origin image --file "$TEST_TMPDIR/i-v1.png"
+assert_eq "$(result status)" "skipped-duplicate" "a duplicate of the /1 revision"
+v1_notes "the duplicate of a /1 revision"
+assert_eq "$(tess_calls) $(reader_calls)" "0 0" "...nothing read again"
+rm -f "$ARCHIVE/$v1rev.report.json"
+run_gw --origin image --file "$TEST_TMPDIR/i-v1.png"
+assert_eq "$(rget i-v1 '.report_state') $(note_order)" "published unconfirmed unconfirmed-list" "the receipt says published and the file is gone: a duplicate prints no path line"
+run_gw --capture-id i-v1
+assert_eq "$rc $(result report)" "0 ok" "a /1 sidecar removed: the replay publishes it again from the receipt"
+assert_eq "$(shasum -a 256 "$ARCHIVE/$v1rev.report.json" | cut -c1-64) $(rget i-v1 '.report_sha256')" "$v1sha $v1sha" "...with its recorded hash"
+assert_eq "$(jq -r '.text.schema' "$ARCHIVE/$v1rev.report.json")" "mnemon-capture-image/1" "...still a /1 report"
+v1_notes "the replay that published the /1 sidecar again"
+# an unpublished capture whose receipt holds a /1 report of an earlier attempt: the replay is a new attempt, /2
+stub_reset
+MNEMON_TEST_READER_MODE=error run_gw --origin image --file "$(mkimg v1-unpub.png)" --capture-id i-v1u
+assert_eq "$rc $(result error_class)" "1 convert" "(a capture that published nothing)"
+cp "$(receipt i-v1u)" "$TEST_TMPDIR/i-v1u.receipt"
+jq --slurpfile v "$REPORTS/image-v1.json" '.capture_report.text = $v[0].done' "$TEST_TMPDIR/i-v1u.receipt" > "$(receipt i-v1u)"
+assert_eq "$(rget i-v1u '.capture_report.text.schema')" "mnemon-capture-image/1" "(the receipt holds the /1 report of an earlier attempt)"
+run_gw --capture-id i-v1u
+assert_eq "$rc $(result status)" "0 extracted" "the replay publishes"
+assert_eq "$(rget i-v1u '.capture_report.text.schema')" "mnemon-capture-image/2" "...and writes a /2 report in place of the /1 one"
+assert_eq "$(capfm "$(src_of i-v1u)" witness_missing_numbers) $(capfm "$(src_of i-v1u)" compare_rule)" '0 "mnemon-read-compare/2"' "...its revision carries the key and rule /2"
+# a worker's report of the schema /1 on a fresh attempt is no readable report (§22.3 «A fresh report is /2»)
+FAKE_FIXTURE="$REPORTS/image-v1.json" fake f-v1 0 done yes
+assert_eq "$rc $(result error_class) $(result retryable) $(rget f-v1 '.stage')" "1 convert true worker" "a fresh /1 report with exit 0: the gateway's own worker fault (convert, retryable, stage worker)"
+assert_eq "$(rget f-v1 '.read_history[0].outcome') $(rget f-v1 '.capture_report.text')" "worker-fault null" "...outcome worker-fault, no report in the receipt"
+assert_eq "$(rget f-v1 '.source_published')" "false" "...nothing published"
+FAKE_FIXTURE="$REPORTS/image-v1.json" fake f-v1t 124 done no
+assert_eq "$rc $(result error_class) $(result retryable) $(rget f-v1t '.stage')" "1 timeout false null" "a fresh /1 report with exit 124: the timeout, the stage unknown"
+unset FAKE_FIXTURE
 [[ -n "$PROBE_STUB" ]] && export MNEMON_CAPTURE_IMAGE_CMD="$PROBE_STUB"
 
 cleanup_capture_test

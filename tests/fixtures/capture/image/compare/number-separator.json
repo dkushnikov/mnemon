@@ -1,12 +1,12 @@
 {
   "name": "number-separator",
-  "what": "A number with and without its separator: 12.3 is not 123, 1,000 is not 1000. Words revenue million from units = 4 in each, all matched. Reading numbers 123 1000 2026 = 3; 123 and 1000 unconfirmed. The full stop after 2026 is no inner separator.",
+  "what": "A number with and without its separator: 12.3 is not 123, 1,000 is not 1000. Words revenue million from units = 4 in each, all matched. Reading numbers 123 1000 2026 = 3; 123 and 1000 unconfirmed. The full stop after 2026 is no inner separator. Rule /2: the witness's numbers 12.3 1,000 2026 = 3, 12.3 and 1,000 without a partner in the reading: 2 missing.",
   "reading": "Revenue 123 million from 1000 units in 2026.\n",
   "witness": "Revenue 12.3 million from 1,000 units in 2026.\n",
   "min_share": 90,
   "allowance": 20,
   "expected": {
-    "rule": "mnemon-read-compare/1",
+    "rule": "mnemon-read-compare/2",
     "verdict": "agree",
     "floor": {
       "min_share": 90.0,
@@ -14,13 +14,23 @@
     },
     "witness_words": 4,
     "found": 4,
-    "missing": 0,
+    "missing_words": 0,
     "share": 100.0,
+    "witness_numbers": 3,
+    "missing_numbers": 2,
     "reading_words": 4,
     "unconfirmed_words": 0,
     "reading_numbers": 3,
     "unconfirmed_numbers": 2,
     "hyphen_joined": 0,
+    "missing_lists": {
+      "words": [],
+      "numbers": [
+        "12.3",
+        "1,000"
+      ],
+      "truncated": false
+    },
     "unconfirmed": {
       "words": [],
       "numbers": [

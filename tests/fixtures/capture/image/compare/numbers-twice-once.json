@@ -1,0 +1,40 @@
+{
+  "name": "numbers-twice-once",
+  "what": "A number twice in the witness text and once in the reading (rule /2): words gate row gate = 3 in each, all matched. Witness numbers 7 3 7 = 3, reading 7 = 1. Matched with multiplicity in the witness's order: the first 7 is matched, so 3 and the second 7 are missing, in that order (2). One 7 is missing, and it is the second occurrence: it stands after 3 in the list. 3 - 2 = 1 - 0.",
+  "reading": "Gate 7, row, gate.\n",
+  "witness": "Gate 7, row 3, gate 7.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/2",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 3,
+    "found": 3,
+    "missing_words": 0,
+    "share": 100.0,
+    "witness_numbers": 3,
+    "missing_numbers": 2,
+    "reading_words": 3,
+    "unconfirmed_words": 0,
+    "reading_numbers": 1,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "missing_lists": {
+      "words": [],
+      "numbers": [
+        "3",
+        "7"
+      ],
+      "truncated": false
+    },
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

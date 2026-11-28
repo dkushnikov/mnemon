@@ -24,6 +24,8 @@ Modes, by `MNEMON_TEST_TESSERACT_MODE` (unset or empty: `ok`):
   half          the first half of the words of `stub-text.txt`, its lines kept
   double        `stub-text.txt` and as many other words again (words of three letters or more, by the rule of
                 §21.5): more than the allowance, so the reading lacks half of what the witness saw
+  numbers       `stub-text.txt` and a last line `10:15 - 11:30` (an overlay's time range): four numbers that the
+                stub reader's text does not hold and no word, so the reading lacks numbers only (§22.2)
   non-utf8      bytes in `out.txt` that do not decode as UTF-8
   no-tsv        `out.txt` alone;  bad-tsv  an `out.tsv` with a row that does not parse
   big-out       an `out.txt` of 16 MiB and one byte (a sparse file: cheap to write)
@@ -63,6 +65,7 @@ OTHER_WORDS = ("brillig", "slithy", "toves", "gyre", "gimble", "wabe", "mimsy", 
                "outgrabe", "jabberwock", "frumious", "bandersnatch", "vorpal", "manxome", "tumtum", "uffish", "tulgey",
                "galumphing", "beamish", "frabjous", "chortled", "callooh", "callay")
 JUNK = "Brillig slithy toves gyre gimble wabe.\nMimsy borogoves mome raths outgrabe.\n"
+NUMBERS_LINE = "10:15 - 11:30\n"
 
 
 def count(kind: str) -> None:
@@ -146,6 +149,8 @@ def text_of_mode() -> str:
         return half_text(base)
     if MODE == "double":
         return double_text(base)
+    if MODE == "numbers":
+        return base.rstrip("\n") + "\n" + NUMBERS_LINE
     return base
 
 

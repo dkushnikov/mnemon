@@ -6,7 +6,7 @@
   "min_share": 90,
   "allowance": 20,
   "expected": {
-    "rule": "mnemon-read-compare/1",
+    "rule": "mnemon-read-compare/2",
     "verdict": "agree",
     "floor": {
       "min_share": 90.0,
@@ -14,13 +14,20 @@
     },
     "witness_words": 6,
     "found": 6,
-    "missing": 0,
+    "missing_words": 0,
     "share": 100.0,
+    "witness_numbers": 0,
+    "missing_numbers": 0,
     "reading_words": 6,
     "unconfirmed_words": 0,
     "reading_numbers": 0,
     "unconfirmed_numbers": 0,
     "hyphen_joined": 0,
+    "missing_lists": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    },
     "unconfirmed": {
       "words": [],
       "numbers": [],

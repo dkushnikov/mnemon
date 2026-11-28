@@ -1,7 +1,9 @@
-"""§21.5 (the comparison of two readings of one image, rule `mnemon-read-compare/1`), §21.7 (the `comparison`
-object of the report and the `failure` of a refusal) and §21.13 «Comparison fixtures»: every fixture of
-`tests/fixtures/capture/image/compare/` gives its whole comparison object; the floor's arithmetic is exact; the
-share is rounded half to even from the integers; the unconfirmed lists are cut at 200; the function is pure."""
+"""§21.5 and §22.2 (the comparison of two readings of one image, rule `mnemon-read-compare/2`: rule `/1` plus the
+witness's numbers, the missing numbers and the two lists of what the reading lacks), §21.7 and §22.3 (the
+`comparison` object of the report and the `failure` of a refusal), §21.13 «Comparison fixtures» and §22.6: every
+fixture of `tests/fixtures/capture/image/compare/` gives its whole comparison object; the floor's arithmetic is
+exact; the share is rounded half to even from the integers; each list object is cut at 200 on its own flag; the
+counts of the two directions agree; the function is pure."""
 from __future__ import annotations
 
 import ast
@@ -51,6 +53,19 @@ SPEC_FIXTURES = {
     "an empty witness text": ["empty-witness"],
 }
 
+# §22.6, the rows of new fixtures of rule /2 → the fixture that holds each
+SPEC_FIXTURES_A21 = {
+    "a witness number absent from the reading": ["numbers-witness-missing"],
+    "a number twice in the witness text and once in the reading (one missing, the second occurrence)":
+        ["numbers-twice-once"],
+    "a reading with no number and a witness text with some": ["numbers-reading-none"],
+    "a number with and without its separator, counted in both directions": ["number-separator"],
+    "numbers missing while every word matches (agree)": ["numbers-missing-words-agree"],
+    "no word in either text, a number missing (agree, share null)": ["numbers-no-word"],
+    "the missing words spelled as the witness text spells them, in its order, a joined pair included":
+        ["missing-words-spelled"],
+}
+
 # the table of edges of §21.5, row by row: fixture → (verdict, share); `no-text` is refused before the comparison
 EDGE_ROWS = {
     "edge-empty-reading": ("no-text", None),
@@ -63,10 +78,13 @@ EDGE_ROWS = {
     "hyphen-short-halves": ("agree", 100.0),
 }
 
-REPORT_KEYS = ["rule", "verdict", "floor", "witness_words", "found", "missing", "share", "reading_words",
-               "unconfirmed_words", "reading_numbers", "unconfirmed_numbers", "hyphen_joined", "unconfirmed"]
-COUNT_KEYS = ["witness_words", "found", "missing", "reading_words", "unconfirmed_words", "reading_numbers",
-              "unconfirmed_numbers", "hyphen_joined"]
+# the key order of the JSON example of §22.3
+REPORT_KEYS = ["rule", "verdict", "floor", "witness_words", "found", "missing_words", "share", "witness_numbers",
+               "missing_numbers", "reading_words", "unconfirmed_words", "reading_numbers", "unconfirmed_numbers",
+               "hyphen_joined", "missing_lists", "unconfirmed"]
+COUNT_KEYS = ["witness_words", "found", "missing_words", "witness_numbers", "missing_numbers", "reading_words",
+              "unconfirmed_words", "reading_numbers", "unconfirmed_numbers", "hyphen_joined"]
+LIST_KEYS = ["words", "numbers", "truncated"]
 FIXTURE_KEYS = {"name", "what", "reading", "witness", "min_share", "allowance", "expected"}
 
 LOSS_FAILURE = {"class": "reading-mismatch", "acquisition": "words-missing", "reason": "loss", "retryable": False}
@@ -116,6 +134,11 @@ class FixtureSet(unittest.TestCase):
             for name in names:
                 self.assertIn(name, BY_NAME, "§21.13 «%s»: fixture %s missing" % (item, name))
 
+    def test_every_row_of_the_a21_list_has_its_fixture(self):
+        for item, names in SPEC_FIXTURES_A21.items():
+            for name in names:
+                self.assertIn(name, BY_NAME, "§22.6 «%s»: fixture %s missing" % (item, name))
+
     def test_every_row_of_the_edge_table_has_its_fixture(self):
         for name in EDGE_ROWS:
             self.assertIn(name, BY_NAME, "§21.5 edge row: fixture %s missing" % name)
@@ -131,9 +154,11 @@ class FixtureSet(unittest.TestCase):
                     self.assertEqual(f["raises"], "ValueError")
                 else:
                     self.assertEqual(keys, FIXTURE_KEYS)
-                    self.assertEqual(list(f["expected"]), REPORT_KEYS, "the key order of §21.7")
+                    self.assertEqual(list(f["expected"]), REPORT_KEYS, "the key order of §22.3")
                     self.assertEqual(list(f["expected"]["floor"]), ["min_share", "allowance"])
-                    self.assertEqual(list(f["expected"]["unconfirmed"]), ["words", "numbers", "truncated"])
+                    self.assertEqual(list(f["expected"]["missing_lists"]), LIST_KEYS)
+                    self.assertEqual(list(f["expected"]["unconfirmed"]), LIST_KEYS)
+                    self.assertNotIn("missing", f["expected"], "a /2 object has no key named missing (J3)")
                 self.assertTrue(f["what"].strip())
                 self.assertIsInstance(f["reading"], str)
                 self.assertIsInstance(f["witness"], str)
@@ -156,14 +181,25 @@ class EveryFixture(unittest.TestCase):
         for f in COMPARED:
             with self.subTest(fixture=f["name"]):
                 c, report = run(f)
-                self.assertEqual(c.found + c.missing, c.witness_words)
+                self.assertEqual(c.found + c.missing_words, c.witness_words)
                 self.assertEqual(c.reading_words - c.unconfirmed_words, c.found)
                 self.assertEqual(len(c.unconfirmed_word_list), c.unconfirmed_words)
                 self.assertEqual(len(c.unconfirmed_number_list), c.unconfirmed_numbers)
+                self.assertEqual(len(c.missing_word_list), c.missing_words)
+                self.assertEqual(len(c.missing_number_list), c.missing_numbers)
                 self.assertLessEqual(c.unconfirmed_numbers, c.reading_numbers)
+                self.assertLessEqual(c.missing_numbers, c.witness_numbers)
+                # §22.2: the two directions agree on the matched numbers
+                self.assertEqual(c.witness_numbers - c.missing_numbers, c.reading_numbers - c.unconfirmed_numbers)
                 self.assertEqual(c.share is None, c.witness_words == 0)
                 for key in COUNT_KEYS:
                     self.assertIs(type(report[key]), int, key)
+                # nothing was cut in a fixture: each list's length equals its count
+                for obj, words_key, numbers_key in (("missing_lists", "missing_words", "missing_numbers"),
+                                                    ("unconfirmed", "unconfirmed_words", "unconfirmed_numbers")):
+                    self.assertFalse(report[obj]["truncated"], obj)
+                    self.assertEqual(len(report[obj]["words"]), report[words_key], obj)
+                    self.assertEqual(len(report[obj]["numbers"]), report[numbers_key], obj)
 
     def test_the_rows_of_the_edge_table(self):
         for name, (verdict, share) in EDGE_ROWS.items():
@@ -189,7 +225,7 @@ class EveryFixture(unittest.TestCase):
                           run(BY_NAME["edge-reading-no-word-21"])[0].witness_words), (0, 21))
         c, _ = run(BY_NAME["edge-none-matched-loss-holds"])
         self.assertEqual(c.found, 0)
-        self.assertGreater(c.missing, BY_NAME["edge-none-matched-loss-holds"]["allowance"],
+        self.assertGreater(c.missing_words, BY_NAME["edge-none-matched-loss-holds"]["allowance"],
                            "the condition of loss holds too")
         c, _ = run(BY_NAME["hyphen-short-halves"])
         self.assertEqual((c.witness_words, c.hyphen_joined), (1, 1))
@@ -212,7 +248,8 @@ class EveryFixture(unittest.TestCase):
                 self.assertIs(type(report["floor"]["allowance"]), int)
                 self.assertIn(type(report["share"]), (float, type(None)))
                 self.assertIs(type(report["unconfirmed"]["truncated"]), bool)
-                self.assertEqual(report["rule"], "mnemon-read-compare/1")
+                self.assertIs(type(report["missing_lists"]["truncated"]), bool)
+                self.assertEqual(report["rule"], "mnemon-read-compare/2")
 
 
 class Floor(unittest.TestCase):
@@ -238,7 +275,7 @@ class Floor(unittest.TestCase):
 
     def test_188_of_209_is_loss_shown_as_90(self):
         c, report = run(BY_NAME["floor-188-of-209"])
-        self.assertEqual((c.found, c.witness_words, c.missing), (188, 209, 21))
+        self.assertEqual((c.found, c.witness_words, c.missing_words), (188, 209, 21))
         self.assertEqual(c.verdict, "loss", "89.95 % is under 90 %: the rounded share is never used")
         self.assertEqual(report["share"], 90.0)
         self.assertEqual(RC.failure_of(c), LOSS_FAILURE)
@@ -337,6 +374,56 @@ class Lists(unittest.TestCase):
         self.assertFalse(report["unconfirmed"]["truncated"])
 
 
+class MissingLists(unittest.TestCase):
+    """§22.3 «The lists»: `missing_lists` holds at most 200 of each, in the witness's order, `truncated` when one of
+    the two was cut; it is cut apart from `unconfirmed`, and each object keeps its own flag. §22.2: no threshold."""
+
+    def report(self, reading, witness):
+        c = RC.compare(reading, witness, min_share=90, allowance=1000)
+        return c, RC.as_report(c, min_share=90, allowance=1000)
+
+    def test_exactly_200_missing_words_are_not_cut(self):
+        extra = words(200)
+        c, report = self.report("anchor\n", "anchor " + " ".join(extra) + "\n")
+        self.assertEqual((c.missing_words, len(c.missing_word_list)), (200, 200))
+        self.assertEqual(report["missing_lists"], {"words": extra, "numbers": [], "truncated": False})
+
+    def test_201_missing_words_are_cut_and_the_count_is_whole(self):
+        extra = words(201)
+        c, report = self.report("anchor\n", "anchor " + " ".join(extra) + "\n")
+        self.assertEqual(c.missing_word_list, extra, "the comparison keeps all of them, in the witness's order")
+        self.assertEqual(report["missing_lists"]["words"], extra[:200])
+        self.assertTrue(report["missing_lists"]["truncated"])
+        self.assertEqual(report["missing_words"], 201, "the count is the whole count")
+        self.assertEqual(RC.LIST_LIMIT, 200)
+
+    def test_more_than_200_missing_numbers_are_cut(self):
+        numbers = [str(n) for n in range(250)]
+        c, report = self.report("anchor\n", "anchor " + " ".join(numbers) + "\n")
+        self.assertEqual((c.witness_numbers, c.missing_numbers), (250, 250))
+        self.assertEqual(c.missing_number_list, numbers)
+        self.assertEqual(report["missing_lists"]["numbers"], numbers[:200])
+        self.assertEqual(report["missing_lists"]["words"], [])
+        self.assertTrue(report["missing_lists"]["truncated"])
+        self.assertEqual(report["missing_numbers"], 250)
+        # §22.2 «No threshold»: a reading that keeps the witness's words and lacks every number of it agrees
+        self.assertEqual((c.verdict, RC.failure_of(c)), ("agree", None))
+        c = RC.compare("anchor\n", "anchor " + " ".join(numbers) + "\n", min_share=90, allowance=0)
+        self.assertEqual(c.verdict, "agree", "no count of rule /2 enters the verdict, whatever the floor")
+
+    def test_missing_lists_cut_while_unconfirmed_is_whole(self):
+        extra = words(205)
+        c, report = self.report("anchor 7\n", "anchor " + " ".join(extra) + "\n")
+        self.assertTrue(report["missing_lists"]["truncated"])
+        self.assertEqual(report["unconfirmed"], {"words": [], "numbers": ["7"], "truncated": False})
+
+    def test_unconfirmed_cut_while_missing_lists_is_whole(self):
+        extra = words(205)
+        c, report = self.report("anchor " + " ".join(extra) + "\n", "anchor 7 beacon\n")
+        self.assertTrue(report["unconfirmed"]["truncated"])
+        self.assertEqual(report["missing_lists"], {"words": ["beacon"], "numbers": ["7"], "truncated": False})
+
+
 class Tokens(unittest.TestCase):
 
     def counts(self, reading, witness):
@@ -373,6 +460,16 @@ class Tokens(unittest.TestCase):
         c = RC.compare("12\n34\n", "12-\n34\n", min_share=90, allowance=20)
         self.assertEqual((c.reading_numbers, c.unconfirmed_numbers, c.hyphen_joined), (2, 0, 0))
 
+    def test_missing_numbers_are_matched_by_value_and_multiplicity_in_the_witness_order(self):
+        # §22.2: the matching that leaves the unconfirmed numbers, with the two texts exchanged
+        c = RC.compare("7\n", "7 3 7 5\n", min_share=90, allowance=20)
+        self.assertEqual((c.witness_numbers, c.missing_numbers, c.missing_number_list), (4, 3, ["3", "7", "5"]),
+                         "the first 7 is matched: the second occurrence stands after 3")
+        c = RC.compare("1,000 1.000 007 7\n", "1.000 7\n", min_share=90, allowance=20)
+        self.assertEqual((c.witness_numbers, c.missing_numbers), (2, 0))
+        c = RC.compare("1.000 7\n", "1,000 1.000 007 7\n", min_share=90, allowance=20)
+        self.assertEqual(c.missing_number_list, ["1,000", "007"], "the two directions mirror each other")
+
     def test_letters_are_letters_of_any_script_and_a_mark_breaks_a_run(self):
         self.assertEqual(self.counts("дом λόγος\n", "дом λόγος\n"), (2, 2, 0))
         # a combining mark (category Mn) is no letter: 'cafe' + U+0301 + 'xyz' is two runs
@@ -402,7 +499,11 @@ class Purity(unittest.TestCase):
                 self.assertEqual(r1, r2)
                 self.assertEqual((f["reading"], f["witness"]), (reading, witness))
                 r1["unconfirmed"]["words"].append("x")
+                r1["missing_lists"]["words"].append("x")
+                r1["missing_lists"]["numbers"].append("1")
                 self.assertEqual(c1.unconfirmed_word_list, c2.unconfirmed_word_list, "the report shares no list")
+                self.assertEqual(c1.missing_word_list, c2.missing_word_list, "the report shares no list")
+                self.assertEqual(c1.missing_number_list, c2.missing_number_list, "the report shares no list")
 
     def test_the_module_imports_no_file_process_or_clock(self):
         path = os.path.join(BIN, "capture", "read_compare.py")
@@ -417,14 +518,14 @@ class Purity(unittest.TestCase):
         self.assertLessEqual(imported, {"__future__", "re", "collections", "fractions", "typing"}, imported)
 
     def test_the_interface(self):
-        self.assertEqual(RC.RULE, "mnemon-read-compare/1")
+        self.assertEqual(RC.RULE, "mnemon-read-compare/2")
         self.assertEqual(RC.LIST_LIMIT, 200)
         self.assertEqual(list(RC.Comparison._fields), [
-            "verdict", "witness_words", "found", "missing", "share", "reading_words", "unconfirmed_words",
-            "reading_numbers", "unconfirmed_numbers", "hyphen_joined", "unconfirmed_word_list",
-            "unconfirmed_number_list"])
+            "verdict", "witness_words", "found", "missing_words", "share", "witness_numbers", "missing_numbers",
+            "reading_words", "unconfirmed_words", "reading_numbers", "unconfirmed_numbers", "hyphen_joined",
+            "missing_word_list", "missing_number_list", "unconfirmed_word_list", "unconfirmed_number_list"])
         with self.assertRaises(ValueError):
-            RC.failure_of(RC.Comparison("maybe", 0, 0, 0, None, 0, 0, 0, 0, 0, [], []))
+            RC.failure_of(RC.Comparison("maybe", 0, 0, 0, None, 0, 0, 0, 0, 0, 0, 0, [], [], [], []))
         self.assertTrue(math.isclose(RC.as_report(run(BY_NAME["equal-texts"])[0], min_share="90.5",
                                                   allowance=0)["floor"]["min_share"], 90.5))
 
