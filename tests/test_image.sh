@@ -978,6 +978,18 @@ assert_eq "$(rget f-v1 '.read_history[0].outcome') $(rget f-v1 '.capture_report.
 assert_eq "$(rget f-v1 '.source_published')" "false" "...nothing published"
 FAKE_FIXTURE="$REPORTS/image-v1.json" fake f-v1t 124 done no
 assert_eq "$rc $(result error_class) $(result retryable) $(rget f-v1t '.stage')" "1 timeout false null" "a fresh /1 report with exit 124: the timeout, the stage unknown"
+# exit 1 and exit 3 with a /1 report that names a failure: still no readable report, so the gateway's own
+# worker fault and never the failure that the report names; the same two reports under /2 are that failure
+jq '{envelope: (.envelope | .schema = "mnemon-capture-image/1"), probe: (.probe | .schema = "mnemon-capture-image/1")}' "$REPORTS/image.json" > "$TEST_TMPDIR/image-v1-failures.json"
+FAKE_FIXTURE="$TEST_TMPDIR/image-v1-failures.json" fake f-v1e1 1 envelope no
+assert_eq "$rc $(result error_class) $(result retryable) $(rget f-v1e1 '.stage')" "1 convert true worker" "a fresh /1 report with exit 1 and a failure: the worker fault, not the failure it names"
+assert_eq "$(rget f-v1e1 '.read_history[0].outcome') $(rget f-v1e1 '.capture_report.text')" "worker-fault null" "...outcome worker-fault, no report in the receipt"
+FAKE_FIXTURE="$TEST_TMPDIR/image-v1-failures.json" fake f-v1e3 3 probe no
+assert_eq "$rc $(result error_class) $(result retryable) $(rget f-v1e3 '.stage')" "1 convert true worker" "a fresh /1 report with exit 3 and an environment failure: the worker fault, exit 1"
+FAKE_FIXTURE="$REPORTS/image.json" fake f-v2e1 1 envelope no
+assert_eq "$rc $(result error_class) $(result retryable)" "1 unsupported false" "...the same report under /2 with exit 1: the failure it names"
+FAKE_FIXTURE="$REPORTS/image.json" fake f-v2e3 3 probe no
+assert_eq "$rc $(result error_class) $(result retryable)" "3 environment true" "...and under /2 with exit 3: the environment failure"
 unset FAKE_FIXTURE
 [[ -n "$PROBE_STUB" ]] && export MNEMON_CAPTURE_IMAGE_CMD="$PROBE_STUB"
 
