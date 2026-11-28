@@ -197,6 +197,82 @@ class Scoring(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+# --- the scorer reads the report of either schema (capture layer §22.3, §22.6) ----------------------------------
+
+REPORTS = os.path.join(ROOT, "tests", "fixtures", "capture", "reports")
+
+
+def report_fixture(name: str) -> dict:
+    with open(os.path.join(REPORTS, name), encoding="utf-8") as fh:
+        return json.load(fh)["done"]
+
+
+class ReportFacts(unittest.TestCase):
+    """The scorer takes the count of missing words from either schema (`missing_words`, else a numeric
+    `missing`), records `missing_numbers` with no threshold, and puts no entry of a list into its stdout or its
+    summary."""
+
+    def test_the_count_of_missing_words_from_a_v2_and_from_a_v1_report(self):
+        v2 = score.facts(report_fixture("image.json"))
+        self.assertEqual(v2["report_schema"], "mnemon-capture-image/2")
+        self.assertEqual((v2["missing_words"], v2["missing_numbers"], v2["witness_numbers"]), (8, 4, 11))
+        v1 = score.facts(report_fixture("image-v1.json"))
+        self.assertEqual(v1["report_schema"], "mnemon-capture-image/1")
+        self.assertEqual((v1["missing_words"], v1["missing_numbers"], v1["witness_numbers"]), (8, None, None),
+                         "a /1 report did not count the numbers: none, never zero")
+        odd = dict(report_fixture("image-v1.json"))
+        odd["comparison"] = dict(odd["comparison"], missing=["not", "a", "count"])
+        self.assertIsNone(score.facts(odd)["missing_words"], "only a numeric `missing` is the count")
+        self.assertNotIn("missing", score.facts(report_fixture("image.json")), "the facts name the unit")
+
+    def judge_and_summarize(self, report: dict, list_entries):
+        tmp = tempfile.mkdtemp(prefix="image-gate-facts-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        item_dir = os.path.join(tmp, "run", "post")
+        os.makedirs(os.path.join(item_dir, "attempt"))
+        with open(os.path.join(item_dir, "attempt", "report.json"), "w", encoding="utf-8") as fh:
+            json.dump(report, fh)
+        with open(os.path.join(item_dir, "attempt", "reading.txt"), "w", encoding="utf-8") as fh:
+            fh.write("a reading\n")
+        judged = subprocess.run([sys.executable, os.path.join(HERE, "score.py"), "judge", "--seq", "1", "--name",
+                                 "post", "--dir", item_dir, "--rc", "0", "--checks", "agree",
+                                 "--out", os.path.join(item_dir, "item.json")],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        summarized = subprocess.run([sys.executable, os.path.join(HERE, "score.py"), "summary", "--run",
+                                     os.path.join(tmp, "run"), "--effort", "high", "--model", "haiku",
+                                     "--max-usd", "0.05"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        with open(os.path.join(tmp, "run", "summary.md"), encoding="utf-8") as fh:
+            summary = fh.read()
+        printed = (judged.stdout + judged.stderr + summarized.stdout + summarized.stderr).decode("utf-8")
+        self.assertEqual((judged.returncode, summarized.returncode), (0, 0), printed)
+        for entry in list_entries:
+            self.assertNotIn(entry, printed, "no entry of a list on stdout or stderr")
+            self.assertNotIn(entry, summary, "no entry of a list in the summary")
+        return judged.stdout.decode("utf-8"), summary
+
+    def test_missing_numbers_are_recorded_and_no_list_entry_is_printed(self):
+        report = json.loads(json.dumps(report_fixture("image.json")))
+        c = report["comparison"]
+        c["missing_lists"] = {"words": ["zyxwvutsr"] * 8, "numbers": ["98765.4321", "86420.13579", "77777.333",
+                                                                     "66666.222"], "truncated": False}
+        c["unconfirmed"] = {"words": ["qponmlkj"], "numbers": ["55555.111", "44444.999"], "truncated": False}
+        line, summary = self.judge_and_summarize(report, ["zyxwvutsr", "98765.4321", "86420.13579", "77777.333",
+                                                          "66666.222", "qponmlkj", "55555.111", "44444.999"])
+        self.assertIn("missing 8 words 4 numbers", line)
+        self.assertIn("missing numbers", summary.split("\n|---", 1)[0], "a column of its own")
+        row = [r for r in summary.splitlines() if r.startswith("| 1 |")][0].split(" | ")
+        header = [r for r in summary.splitlines() if r.startswith("| #")][0].split(" | ")
+        self.assertEqual(row[header.index("missing numbers")], "4")
+        self.assertEqual(row[header.index("missing words")], "8")
+
+    def test_a_v1_report_records_no_missing_numbers(self):
+        line, summary = self.judge_and_summarize(report_fixture("image-v1.json"), ["example", "3.4"])
+        self.assertIn("missing 8 words - numbers", line, "not counted reads as a dash, never as zero")
+        row = [r for r in summary.splitlines() if r.startswith("| 1 |")][0].split(" | ")
+        header = [r for r in summary.splitlines() if r.startswith("| #")][0].split(" | ")
+        self.assertEqual((row[header.index("missing words")], row[header.index("missing numbers")]), ("8", "-"))
+
+
 # --- the wrapper and the lifecycle check ----------------------------------------------------------------------
 
 FAKE_CLIENT = r'''
