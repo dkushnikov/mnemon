@@ -1,0 +1,39 @@
+{
+  "name": "numbers-no-word",
+  "what": "No word in either text, a number missing (rule /2): OK and ok are short runs, so neither text has a word: share null, and the reading has no word, so it is not no-confirmation: agree. Witness numbers 12 7 = 2, reading 12 = 1; 7 is missing.",
+  "reading": "OK 12\n",
+  "witness": "ok 12 7\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/2",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 0,
+    "found": 0,
+    "missing_words": 0,
+    "share": null,
+    "witness_numbers": 2,
+    "missing_numbers": 1,
+    "reading_words": 0,
+    "unconfirmed_words": 0,
+    "reading_numbers": 1,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "missing_lists": {
+      "words": [],
+      "numbers": [
+        "7"
+      ],
+      "truncated": false
+    },
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

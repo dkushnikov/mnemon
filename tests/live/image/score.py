@@ -27,6 +27,10 @@ to the JSON files in the snapshot):
   score.py probe-missing --probe <mnemon-ocr-probe/1 json> --token <lang:rus>
   score.py summary --run <run dir> --effort <level> --model <model> --max-usd <usd> --tessdata-prefix <set|unset>
 
+`judge` reads the image report of either schema, `mnemon-capture-image/2` or `/1` (capture layer §22.3): the
+count of the missing words from `missing_words`, else a numeric `missing`; the missing numbers with no
+threshold. It records the counts of the two list objects, never an entry of them.
+
 Exit 0 for a pass (`mark` of an item not run, `summary` with no failure), 1 for a failure, 2 on a usage
 error. Stdlib only, python 3.9.
 """
@@ -169,9 +173,22 @@ def _load_json(path: str):
         return None
 
 
+def _missing_words(report):
+    """The count of the witness's missing words from a report of either schema (capture layer §22.3):
+    `comparison.missing_words` of a /2 report, else a numeric `comparison.missing` of a /1 report."""
+    for key in ("missing_words", "missing"):
+        value = _get(report, "comparison", key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+    return None
+
+
 def facts(report) -> dict:
-    """The numbers of one report (mnemon-capture-image/1) that the gate records — never a text."""
+    """The numbers of one report (mnemon-capture-image/2, or /1 from an earlier run) that the gate records —
+    never a text: no entry of the two list objects. `missing_numbers` and `witness_numbers` are recorded with
+    no threshold; a /1 report did not count them, and they stay None, never zero."""
     return {
+        "report_schema": _get(report, "schema"),
         "stage": _get(report, "stage"),
         "failure_class": _get(report, "failure", "class"),
         "failure_acquisition": _get(report, "failure", "acquisition"),
@@ -185,7 +202,9 @@ def facts(report) -> dict:
         "share": _get(report, "comparison", "share"),
         "witness_words": _get(report, "comparison", "witness_words"),
         "found": _get(report, "comparison", "found"),
-        "missing": _get(report, "comparison", "missing"),
+        "missing_words": _missing_words(report),
+        "witness_numbers": _get(report, "comparison", "witness_numbers"),
+        "missing_numbers": _get(report, "comparison", "missing_numbers"),
         "reading_words": _get(report, "comparison", "reading_words"),
         "unconfirmed_words": _get(report, "comparison", "unconfirmed_words"),
         "reading_numbers": _get(report, "comparison", "reading_numbers"),
@@ -321,8 +340,8 @@ def item_line(item: dict) -> str:
     if f.get("failure_class"):
         parts.append("failure %s" % _failure_text(f))
     if f.get("verdict"):
-        parts.append("verdict %s, share %s, missing %s, unconfirmed %s words %s numbers"
-                     % (f["verdict"], _num(f.get("share")), _num(f.get("missing")),
+        parts.append("verdict %s, share %s, missing %s words %s numbers, unconfirmed %s words %s numbers"
+                     % (f["verdict"], _num(f.get("share")), _num(f.get("missing_words")), _num(f.get("missing_numbers")),
                         _num(f.get("unconfirmed_words")), _num(f.get("unconfirmed_numbers"))))
     if item.get("words"):
         parts.append("truth words %d, missing %d" % (item["words"]["truth_words"], item["words"]["missing"]))
@@ -356,7 +375,8 @@ def write_json(path: str, obj) -> None:
 
 # --- the summary ----------------------------------------------------------------------------------------------
 
-COLUMNS = ("#", "item", "result", "exit", "stage", "failure", "verdict", "share %", "missing", "unconfirmed words",
+COLUMNS = ("#", "item", "result", "exit", "stage", "failure", "verdict", "share %", "missing words", "missing numbers",
+           "unconfirmed words",
            "unconfirmed numbers", "hyphen joined", "truth words missing", "AI right", "columns", "reader s",
            "cost $", "thinking tokens", "output tokens", "elapsed s", "same reading", "lifecycle")
 
@@ -368,7 +388,8 @@ def _row(item: dict):
     lc = item.get("lifecycle") or {}
     return [str(item.get("seq")), item.get("name", "?"), status or "?", _num(item.get("rc")), _num(f.get("stage")),
             "-" if not f.get("failure_class") else _failure_text(f),
-            _num(f.get("verdict")), _num(f.get("share")), _num(f.get("missing")), _num(f.get("unconfirmed_words")),
+            _num(f.get("verdict")), _num(f.get("share")), _num(f.get("missing_words")), _num(f.get("missing_numbers")),
+            _num(f.get("unconfirmed_words")),
             _num(f.get("unconfirmed_numbers")), _num(f.get("hyphen_joined")),
             "-" if not w else "%d of %d" % (w["missing"], w["truth_words"]),
             "-" if not item.get("ai") else "%d of %d" % (item["ai"]["right"], item["ai"]["truth_ai"]),
@@ -404,7 +425,8 @@ def summary(args) -> int:
              "of the page in order, `AI` right 25 of 25, `agree` on every read image, the 8 001 px column `too-large`, "
              "the rotated JPEG `unsupported`/`rotated` with no model call, five equal witness texts, the lifecycle "
              "of every run. Recorded with no threshold: the reader's time, cost and tokens, the share, the missing "
-             "and unconfirmed counts, whether two readings of the post are equal.", "",
+             "words, the witness's numbers that the reading lacks (`-`: a report that did not count them), the "
+             "unconfirmed counts, whether two readings of the post are equal.", "",
              "| " + " | ".join(COLUMNS) + " |", "|" + "---|" * len(COLUMNS)]
     other = []
     for item in items:

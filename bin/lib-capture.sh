@@ -2211,7 +2211,10 @@ cap_acquire_image() {
 # read by the table of capture layer §21.6, one row per exit; the report and the read_history entry
 # reach the receipt in ONE update on every outcome, before the failure exits. On the verdict `agree`
 # the same update carries the text hash and clears the frozen report identity an earlier attempt
-# left (a source is never published beside the report of another reading, A15 §3.4).
+# left (a source is never published beside the report of another reading, A15 §3.4). The worker and
+# the gateway are one checkout: a fresh report is `mnemon-capture-image/2`, and a report of another
+# schema counts as no readable report (capture layer §22.3) — exit 0, 1 or 3 with it is the gateway's
+# own worker fault, and exit 124 is the timeout before any schema is judged.
 cap_convert_image() {
   local report="$ATTEMPT_DIR/capture-image.json" out="$ATTEMPT_DIR/capture.md" rc=0 prev rj="" kind="" why=""
   local f_class="" f_retry="" f_acq="" r_stage="" verdict="" r_error="" outcome="" o_class="" entry rnull
@@ -2235,7 +2238,7 @@ cap_convert_image() {
     if [[ -f "$ATTEMPT_DIR/argv.$pair" ]]; then mv -f "$ATTEMPT_DIR/argv.$pair" "$ATTEMPT_DIR/reader-argv.$pair"; fi
   done
   if [[ -s "$report" ]]; then
-    rj="$(jq -c 'select(type == "object" and .schema == "mnemon-capture-image/1")' "$report" 2>/dev/null || true)"
+    rj="$(jq -c 'select(type == "object" and .schema == "mnemon-capture-image/2")' "$report" 2>/dev/null || true)"
   fi
   if [[ -n "$rj" ]]; then
     { IFS= read -r f_class; IFS= read -r f_retry; IFS= read -r f_acq; IFS= read -r r_stage; IFS= read -r verdict; IFS= read -r r_error; } <<< "$(printf '%s' "$rj" | jq -r '
@@ -2322,8 +2325,10 @@ cap_convert_image() {
 }
 
 # The chain fields and the frontmatter keys of an image revision from the worker's report (the image
-# twin of cap_text_fields; contracts A15 §3.3). One string of the model reaches the frontmatter: the
-# model id in `method`, and only when it matches the pattern — else the capture fails.
+# twin of cap_text_fields; contracts A15 §3.3, A16 §3.3), always a fresh `/2` report: the count of the
+# witness's missing words from `comparison.missing_words`, of its missing numbers from
+# `comparison.missing_numbers`. One string of the model reaches the frontmatter: the model id in
+# `method`, and only when it matches the pattern — else the capture fails.
 cap_image_fields() {   # <report json>
   local vals method
   vals="$(printf '%s' "$1" | jq -r '
@@ -2332,11 +2337,13 @@ cap_image_fields() {   # <report json>
       (.method | line), (.validation.format | line), ("\(.validation.width)x\(.validation.height)"),
       (.reader.adapter | line), (.reader.claude_code | line), (.witness.backend | line), (.witness.version | line),
       (.witness.adapter | line), (.witness.languages | line), (.execution | line), (.comparison.rule | line),
-      (.comparison.share | if . == null then "" else one end), (.comparison.missing | line),
+      (.comparison.share | if . == null then "" else one end), (.comparison.missing_words | line),
+      (.comparison.missing_numbers | line),
       (.comparison.reading_words | line), (.comparison.unconfirmed_words | line), (.comparison.unconfirmed_numbers | line)')"
   { IFS= read -r method; IFS= read -r IMG_FORMAT; IFS= read -r IMG_PIXELS; IFS= read -r IMG_READER_ADAPTER; IFS= read -r IMG_READER_CC
     IFS= read -r IMG_WITNESS_BACKEND; IFS= read -r IMG_WITNESS_VERSION; IFS= read -r IMG_WITNESS_ADAPTER; IFS= read -r IMG_WITNESS_LANGS
-    IFS= read -r IMG_WITNESS_EXEC; IFS= read -r IMG_COMPARE_RULE; IFS= read -r IMG_SHARE; IFS= read -r IMG_MISSING
+    IFS= read -r IMG_WITNESS_EXEC; IFS= read -r IMG_COMPARE_RULE; IFS= read -r IMG_SHARE; IFS= read -r IMG_MISSING_WORDS
+    IFS= read -r IMG_MISSING_NUMBERS
     IFS= read -r IMG_COMPARED; IFS= read -r IMG_UNCONF_WORDS; IFS= read -r IMG_UNCONF_NUMBERS; } <<< "$vals"
   if [[ ! "$method" =~ ^read:[A-Za-z0-9._:@-]{1,100}$ ]]; then
     FAIL_CLASS=convert; FAIL_RETRYABLE=true; FAIL_STAGE=reader
@@ -2348,41 +2355,72 @@ cap_image_fields() {   # <report json>
   return 0
 }
 
-# The notes of a published image revision, on stderr (capture layer §21.10): what the local recognizer
-# does not confirm, from the report that the receipt of the revision's owner holds — a replay and a
-# duplicate read nothing again, so the lines never come from a new comparison. The skill's report
-# reads them (§21.12 item 4).
+# The notes of a published image revision, on stderr (capture layer §21.10, §22.4): from the report that
+# the receipt of the revision's owner holds, of either schema — a replay, a resume and a duplicate read
+# nothing again, so the lines never come from a new comparison. In this order: what the local recognizer
+# does not confirm (the pair of §21.10); what it read and the text does not hold (the pair of missing
+# numbers — a `/2` report only: a `/1` report did not count them, and «not counted» is not zero); the
+# path of the frozen report, when the receipt's report_state is `published` and the file exists. Each pair
+# depends on its own count. Without a readable report the counts come from the frontmatter, the first
+# line of each pair says that the list is unavailable, and no path is printed. The skill's report reads
+# these lines (§21.12 item 4, §22.5).
 cap_image_notes() {   # <revision>
   local f="$VAULT_PATH/Sources/$1/source.md" cid rj="" words="" numbers="" list="" more=""
+  local missing="" mlist="" mmore="" state="" rpath=""
+  local why="(the list is unavailable: this ledger holds no report of the reading)"
   [[ -f "$f" && "$(_mnemon_yaml_literal origin "$f")" == "image" ]] || return 0
   cid="$(_mnemon_yaml_literal capture_id "$f")"
   if [[ -n "$cid" ]] && cap_receipt_exists "$cid"; then
-    rj="$(cap_receipt_get "$cid" '.capture_report.text | select(type == "object" and .schema == "mnemon-capture-image/1" and (.comparison | type) == "object") | tojson' 2>/dev/null || true)"
+    rj="$(cap_receipt_get "$cid" '.capture_report.text | select(type == "object" and (.schema == "mnemon-capture-image/1" or .schema == "mnemon-capture-image/2") and (.comparison | type) == "object") | tojson' 2>/dev/null || true)"
   fi
   if [[ -n "$rj" ]]; then
     # a stored number is listed as it stands — the comparison counts a number by \d, which holds every Unicode
     # decimal digit (Arabic-Indic, fullwidth) — less its control characters (C0, DEL, C1) and its whitespace
-    # (the code points str.isspace names), so the NOTE stays one line of the image's own characters
-    { IFS= read -r words; IFS= read -r numbers; IFS= read -r list; IFS= read -r more; } <<< "$(printf '%s' "$rj" | jq -r '
+    # (the code points str.isspace names), so the NOTE stays one line of the image's own characters; the same
+    # rule for both lists. The count of missing numbers exists in a /2 report only.
+    { IFS= read -r words; IFS= read -r numbers; IFS= read -r list; IFS= read -r more
+      IFS= read -r missing; IFS= read -r mlist; IFS= read -r mmore; } <<< "$(printf '%s' "$rj" | jq -r '
         def shown: explode | map(select(. > 32 and . != 127 and (. < 128 or . > 160) and . != 5760
                                         and (. < 8192 or . > 8202) and . != 8232 and . != 8233 and . != 8239
                                         and . != 8287 and . != 12288)) | implode;
-        (.comparison.unconfirmed_words // 0), (.comparison.unconfirmed_numbers // 0),
-        ((.comparison.unconfirmed.numbers // []) | map(tostring | shown) | map(select(length > 0)) | .[0:20] | join(" ")),
-        (if (.comparison.unconfirmed_numbers // 0) > 20 then "yes" else "" end)')"
+        def listed: map(tostring | shown) | map(select(length > 0)) | .[0:20] | join(" ");
+        (.schema == "mnemon-capture-image/2") as $v2
+        | (.comparison.unconfirmed_words // 0), (.comparison.unconfirmed_numbers // 0),
+          ((.comparison.unconfirmed.numbers // []) | listed),
+          (if (.comparison.unconfirmed_numbers // 0) > 20 then "yes" else "" end),
+          (if $v2 then (.comparison.missing_numbers // 0) else "" end),
+          (if $v2 then ((.comparison.missing_lists.numbers // []) | listed) else "" end),
+          (if $v2 and (.comparison.missing_numbers // 0) > 20 then "yes" else "" end)')"
+    state="$(cap_receipt_get "$cid" '.report_state // ""' 2>/dev/null || true)"
+    rpath="$(cap_receipt_get "$cid" '.report_path // ""' 2>/dev/null || true)"
   else
     words="$(cap_py nested "$f" capture unconfirmed_words)"
     numbers="$(cap_py nested "$f" capture unconfirmed_numbers)"
+    missing="$(cap_py nested "$f" capture witness_missing_numbers)"
   fi
   [[ "$words" =~ ^[0-9]+$ ]] || words=0
   [[ "$numbers" =~ ^[0-9]+$ ]] || numbers=0
-  [[ "$words" -gt 0 || "$numbers" -gt 0 ]] || return 0
-  if [[ -z "$rj" ]]; then
-    echo "NOTE: the local recognizer does not confirm $words word(s) and $numbers number(s) of the text (the list is unavailable: this ledger holds no report of the reading)" >&2
-    return 0
+  [[ "$missing" =~ ^[0-9]+$ ]] || missing=0
+  if [[ "$words" -gt 0 || "$numbers" -gt 0 ]]; then
+    if [[ -z "$rj" ]]; then
+      echo "NOTE: the local recognizer does not confirm $words word(s) and $numbers number(s) of the text $why" >&2
+    else
+      echo "NOTE: the local recognizer does not confirm $words word(s) and $numbers number(s) of the text" >&2
+      if [[ "$numbers" -gt 0 ]]; then echo "NOTE: unconfirmed numbers: $list${more:+ … (the first twenty of $numbers)}" >&2; fi
+    fi
   fi
-  echo "NOTE: the local recognizer does not confirm $words word(s) and $numbers number(s) of the text" >&2
-  if [[ "$numbers" -gt 0 ]]; then echo "NOTE: unconfirmed numbers: $list${more:+ … (the first twenty of $numbers)}" >&2; fi
+  if [[ "$missing" -gt 0 ]]; then
+    if [[ -z "$rj" ]]; then
+      echo "NOTE: the local recognizer read $missing number(s) that the text does not hold $why" >&2
+    else
+      echo "NOTE: the local recognizer read $missing number(s) that the text does not hold" >&2
+      echo "NOTE: missing numbers: $mlist${mmore:+ … (the first twenty of $missing)}" >&2
+    fi
+  fi
+  # the path of the owner's frozen report, last on the line; never without a readable report in the ledger
+  if [[ -n "$rj" && "$state" == "published" && -n "$rpath" && -f "$rpath" ]]; then
+    echo "NOTE: the reading's report: $(cap_oneline "$rpath")" >&2
+  fi
   return 0
 }
 
@@ -2840,8 +2878,8 @@ cap_capx_reset() {
   CAPX_MISSING=""; CAPX_GLUED=""; CAPX_HEADINGS_MISSING=""; CAPX_REPAIRS=""; CAPX_HTTP_STATUS=""; CAPX_EGRESS=""; CAPX_BLOCKED_KIND=""
   SITE_PAGES=""
   IMG_FORMAT=""; IMG_PIXELS=""; IMG_READER_ADAPTER=""; IMG_READER_CC=""; IMG_WITNESS_BACKEND=""; IMG_WITNESS_VERSION=""
-  IMG_WITNESS_ADAPTER=""; IMG_WITNESS_LANGS=""; IMG_WITNESS_EXEC=""; IMG_COMPARE_RULE=""; IMG_SHARE=""; IMG_MISSING=""
-  IMG_COMPARED=""; IMG_UNCONF_WORDS=""; IMG_UNCONF_NUMBERS=""
+  IMG_WITNESS_ADAPTER=""; IMG_WITNESS_LANGS=""; IMG_WITNESS_EXEC=""; IMG_COMPARE_RULE=""; IMG_SHARE=""; IMG_MISSING_WORDS=""
+  IMG_MISSING_NUMBERS=""; IMG_COMPARED=""; IMG_UNCONF_WORDS=""; IMG_UNCONF_NUMBERS=""
 }
 
 # Re-create capture-text from the retained, published raw (RAW_PATH, RAW_KIND from the receipt)
@@ -2992,8 +3030,9 @@ cap_source_frontmatter() {   # > stdout
   [[ -n "${CAPX_HTTP_STATUS:-}" ]] && printf '  http_status: %s\n' "$CAPX_HTTP_STATUS"
   [[ -n "${CAPX_EGRESS:-}" ]] && printf '  egress: %s\n' "$CAPX_EGRESS"
   [[ -n "${CAPX_BLOCKED_KIND:-}" ]] && printf '  blocked_kind: %s\n' "$CAPX_BLOCKED_KIND"
-  # the image origin's keys (contracts A15 §3.3): who read, who witnessed, how far the two agreed —
-  # after `completeness`, before `engine`, in this order; versions and ids quoted, counts bare
+  # the image origin's keys (contracts A15 §3.3, A16 §3.3): who read, who witnessed, how far the two
+  # agreed — after `completeness`, before `engine`, in this order; versions and ids quoted, counts bare;
+  # witness_missing_numbers after witness_missing_words, only when the report gave an integer
   if [[ "$ORIGIN" == "image" && -n "${IMG_FORMAT:-}" ]]; then
     printf '  image_format: %s\n' "$(cap_plain "$IMG_FORMAT")"
     printf '  image_pixels: %s\n' "$(cap_q "$IMG_PIXELS")"
@@ -3006,7 +3045,8 @@ cap_source_frontmatter() {   # > stdout
     printf '  witness_execution: %s\n' "$(cap_q "$IMG_WITNESS_EXEC")"
     printf '  compare_rule: %s\n' "$(cap_q "$IMG_COMPARE_RULE")"
     [[ "$IMG_SHARE" =~ ^[0-9]+\.[0-9]$ ]] && printf '  witness_share: %s\n' "$IMG_SHARE"
-    [[ "$IMG_MISSING" =~ ^[0-9]+$ ]] && printf '  witness_missing_words: %s\n' "$IMG_MISSING"
+    [[ "$IMG_MISSING_WORDS" =~ ^[0-9]+$ ]] && printf '  witness_missing_words: %s\n' "$IMG_MISSING_WORDS"
+    [[ "$IMG_MISSING_NUMBERS" =~ ^[0-9]+$ ]] && printf '  witness_missing_numbers: %s\n' "$IMG_MISSING_NUMBERS"
     [[ "$IMG_COMPARED" =~ ^[0-9]+$ ]] && printf '  compared_words: %s\n' "$IMG_COMPARED"
     [[ "$IMG_UNCONF_WORDS" =~ ^[0-9]+$ ]] && printf '  unconfirmed_words: %s\n' "$IMG_UNCONF_WORDS"
     [[ "$IMG_UNCONF_NUMBERS" =~ ^[0-9]+$ ]] && printf '  unconfirmed_numbers: %s\n' "$IMG_UNCONF_NUMBERS"
@@ -3245,7 +3285,8 @@ cap_result() {
   # only after an extraction (or a bookmark) that ran the reindex hook (§12 A8); a replay from the files prints none
   [[ ( "$status" == extracted || "$status" == bookmarked ) && -n "${REINDEX_STATUS:-}" ]] && printf 'RESULT:reindex=%s\n' "$REINDEX_STATUS"
   [[ "$replayed" == true ]] && printf 'RESULT:replayed=true\n'
-  # a published image revision: what its one reading left unconfirmed, from the stored report (stderr)
+  # a published image revision: what its one reading left unconfirmed and what it lacks, and the path of
+  # its frozen report, from the stored report of either schema (stderr; capture layer §22.4)
   if [[ -n "$rev" ]]; then
     case "$status" in extracted|captured|skipped-duplicate) cap_image_notes "$rev" ;; esac
   fi

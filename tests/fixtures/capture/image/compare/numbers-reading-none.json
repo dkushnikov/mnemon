@@ -1,0 +1,40 @@
+{
+  "name": "numbers-reading-none",
+  "what": "A reading with no number and a witness text with some (rule /2): words the meeting moved may = 4 in each, all matched ('to' and 'on' are short runs). Witness numbers 10.30 12 = 2, the reading none: both missing, in the witness's order. The reading keeps every word and lacks every number, and it agrees: no count of rule /2 enters the verdict.",
+  "reading": "The meeting moved to May.\n",
+  "witness": "The meeting moved to 10.30 on 12 May.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/2",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 4,
+    "found": 4,
+    "missing_words": 0,
+    "share": 100.0,
+    "witness_numbers": 2,
+    "missing_numbers": 2,
+    "reading_words": 4,
+    "unconfirmed_words": 0,
+    "reading_numbers": 0,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "missing_lists": {
+      "words": [],
+      "numbers": [
+        "10.30",
+        "12"
+      ],
+      "truncated": false
+    },
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

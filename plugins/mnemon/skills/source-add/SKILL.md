@@ -55,7 +55,7 @@ A vault that should always capture into its own instance sets the variable in it
 { "env": { "MNEMON_INSTANCE": "<name>" } }
 ```
 
-Claude Code sessions started in that vault then never need `--instance`. Add it only when the user names another library explicitly.
+Claude Code sessions started in that vault then never need `--instance`. Add it only on the user's word. The user's word is one of two things: the user names another library in the request, or a standing rule of the project that the session works in routes the capture to another library. The request wins over a standing rule. When the request names no library and the standing rules name more than one, or you cannot tell whether a standing rule applies, use the session's own instance, and say in the report that the routing was unclear.
 
 **Scripts, jobs and callers other than Claude Code** (a cron job, a producer, a shell alias, another agent runtime): the `.claude/settings.json` binding is read by Claude Code sessions only — nothing else sees it. Such a caller passes `--instance <name>` or `--config <path>` before the command on every invocation (`mnemon --instance work add --url …`), or exports `MNEMON_INSTANCE` itself; without a selector the engine falls back to `~/.config/mnemon/default`, which may be another library.
 
@@ -77,7 +77,7 @@ The text comes from `pdftotext -layout` (Poppler) and is published as `source.md
 
 ## Image or screenshot
 
-Use this section when the user hands over an image — a PNG or JPEG file, or a screenshot that exists as a local file — or says "save this screenshot". The engine reads the image's text itself. This session looks at the image, captures the documents it points to, decides whether the image itself is captured, and reports. Every command here runs through the one path form of How to Execute, step 2.
+Use this section when the user hands over an image — a PNG or JPEG file, or a screenshot that exists as a local file — or says "save this screenshot". The engine reads the image's text itself. This session looks at the image, captures the documents it points to, decides whether the image itself is captured, and reports. Every command here runs through the one path form of How to Execute, step 2. Put the instance selector that step 2 of this section chooses before the command, on every command of this section. A short form in a table row or a sentence, such as `mnemon add --capture-id <id>`, stands for that full form.
 
 **1. Look first, and say where the image goes.** Look at the image before any command (the Read tool opens a file). You need it for the meta-reading (step 2) and to choose the witness's languages (step 5). An image with no local file cannot be captured itself: ask for the file when step 4 needs it; the documents it points to can still be captured (step 3). Tell the user where the image goes: this session's model sees the pixels now. When the image itself is captured, the engine sends it once more, to the model that the user's `claude` uses, to read its text, and checks that reading on this machine with tesseract. An image that only points to a document is not captured, and the engine sends nothing of it.
 
@@ -90,6 +90,12 @@ Use this section when the user hands over an image — a PNG or JPEG file, or a 
   - A bare address in a sentence is a mention.
 - **Several documents shown:** capture each. **A URL and an identifier that name one document:** one capture — the engine's identity would answer a second one `skipped-duplicate`.
 - **Read the address character for character.** Never complete or derive one: a cut or elided address is not an address. Build an `https` address yourself in two cases only: an arXiv identifier, with the version the image shows when it shows one (`https://arxiv.org/abs/2401.12345v2`), and a DOI (`https://doi.org/` and the DOI, percent-encoded).
+- **Choose the instance now, for every capture of this section.** Use the first rule that applies.
+  1. The user names a library in the request.
+  2. A standing rule of the project that this session works in routes the capture. A rule that routes by subject takes the subject from what the image shows.
+  3. Else this session's own instance, with no selector.
+
+  When the request names no library and the standing rules name more than one, or you cannot tell whether a standing rule applies, use the third rule of this list. The documents that the image points to go to the same instance as the image would, also when the image itself is not captured. Pass the same selector, in the same form (`--instance <name>` or `--config <path>`), to every later command about these captures: a retry by id, `--resume`, `config get`. The report says the outcome in its `Instance:` line (step 6) in two cases: the captures went to another instance than this session's own, or the routing was unclear.
 
 **3. Capture each document the image points to — at once, without a question.** It is an ordinary URL capture. It does not wait for the language choice: the languages are chosen only before the image itself is captured. It takes no `--title` and no `--author` from the image: the engine acquires the document's own.
 
@@ -117,6 +123,7 @@ The two captures by `RESULT:status` — `failed` is the only failure of the docu
 
 - This explicit command is the only image capture in version 1. An image is never auto-detected: `--file shot.png` without `--origin image` fails `unsupported`, and its message names `--origin image`.
 - **Whose name.** Pass `--title` and `--author` when the user names them or the image shows them plainly. They are the image's own: the author of the post, not the authors of a document it points to. Where the image leaves it unclear whose name it shows, pass none. What the user names wins over what the image shows.
+- **A caption that came with the image.** The item that carried the image can have a title or a caption of its own: a note, a reminder, a message, a file name. The caption is the user's naming in two cases: the user wrote it, or the user confirms it in the request, whoever wrote it first. Then it is «what the user names»: pass it as `--title`, and it wins over a title that the image shows. In every other case the caption gives no `--title`: a program or an agent wrote or rewrote it and the user did not confirm it, or you cannot tell who wrote it. The image's own title still counts, by the rule above.
 - `--intent` as the user said it. The path given is context, not evidence: the engine keeps the bytes.
 - `--dry-run` shows the witness's probe — tesseract found, its version, each language model present as a file — and whether the fence probe record holds the image entry. It cannot show that a language model loads or that `claude` is logged in: only a run shows those. It exits 0 also when the run would exit 3.
 - **The engine takes no part in the meta-reading.** It reads no address and fetches nothing for an image capture. An image's `source.md` carries no URL key. The document and the screenshot are separate resources, and neither supersedes the other.
@@ -127,11 +134,25 @@ The two captures by `RESULT:status` — `failed` is the only failure of the docu
 
 *The image.* `RESULT:completeness=unknown` is normal for an image. The text was read from the image by a model (`capture.fidelity: recognized`) and checked against a local recognizer; the image is kept as the raw. Name the comparison on every image capture, in exactly one of three forms. Forms 1 and 2 apply only when `RESULT:status` is `extracted`, `captured` or `skipped-duplicate`. For them, read the `capture:` block of the `source.md` under `RESULT:path` with the Read tool (`RESULT:path` is relative to the vault root; `mnemon [--instance <name>] config get vault_path` prints the root).
 
-1. **Published, with a share** — the block carries `capture.witness_share`. Say the share with the missing count beside it, `capture.witness_missing_words`: «tesseract's words found in the text: 98.7 % — 4 of tesseract's words not found». Then say the two counts `capture.unconfirmed_words` and `capture.unconfirmed_numbers`.
+1. **Published, with a share** — the block carries `capture.witness_share`. Say the share with the missing count beside it, `capture.witness_missing_words`: «tesseract's words found in the text: 98.7 % — 4 of tesseract's words not found». Then say `capture.unconfirmed_words`, and then the number counts (below).
    - When `capture.unconfirmed_words` is more than a quarter of `capture.compared_words`, say that first, in those terms: «201 of 370 words have no confirmation». Say what such a count can mean, without deciding which: a block that the local recognizer did not read, or text that the model added.
-   - When a count is above zero, say in one sentence what it means: the local recognizer did not confirm these; they can be text it cannot see, a word completed at the screen edge, or a misreading — check them against the image where they matter. List the unconfirmed numbers from the engine's `NOTE: unconfirmed numbers:` line.
-2. **Published, without a share** — the block has no `capture.witness_share`: neither reader found a word of three letters, so nothing was compared by words.
+   - When `capture.unconfirmed_words` is above zero, say in one sentence what it means: the local recognizer did not confirm these; they can be text it cannot see, a word completed at the screen edge, or a misreading — check them against the image where they matter.
+2. **Published, without a share** — the block has no `capture.witness_share`: neither reader found a word of three letters, so nothing was compared by words. Numbers are still compared: say the number counts (below).
 3. **Not published** — every other `RESULT:status`: `failed`, `integrity-error`, `locked`, or no `RESULT` block. The comparison is unavailable: name the outcome that ended the capture. Do not read a `source.md` for this form, even when `RESULT:path` is set. An absent number never reads as agreement.
+
+**The number counts — in forms 1 and 2.** The engine counts numbers in two directions.
+
+- `capture.unconfirmed_numbers`: numbers of the text that tesseract does not confirm. Above zero: list them from the engine's line `NOTE: unconfirmed numbers:`, and say what they can be: digits that tesseract cannot see, or a misreading.
+- `capture.witness_missing_numbers`: numbers that tesseract read and the text does not hold.
+  - The key is absent: the engine did not count them for this revision (`capture.compare_rule` is `mnemon-read-compare/1`). Say that they were not counted. Do not say zero.
+  - Zero: say so with the other counts.
+  - Above zero: say the count, and list the numbers from the engine's line `NOTE: missing numbers:`. Say what they can be: a number that the model skipped, or digits that tesseract read off an icon or a counter. The count does not decide which.
+- **Check each listed missing number yourself.** Use two things together: the image, and the published text (the body of the `source.md` under `RESULT:path`). A missing number names no place: the engine matches numbers by their spelling as written, with multiplicity and without positions. So the image alone decides nothing. Give each number one of three answers.
+  - *Lost*: the image shows the number at a place where the text does not hold it: the text has nothing there, or another number. Say where the number stands in the image: the text of the post, a chart, the phone's status bar, an overlay.
+  - *Tesseract's own*: nothing is lost. The image does not show the number, or the text holds the number at every place where the image shows it: tesseract wrote it once more than the image holds it. A number that tesseract spelled otherwise than the image (`10.15` for `10:15`, a number cut short) is tesseract's own too, when the text holds it as the image shows it.
+  - *Cannot tell*: the digits are unreadable, or the number stands several times and you cannot match the places.
+
+  Give each number one look. When a short number stands many times in the image, do not count its places: answer *cannot tell*. Say that this is your own look at the image, not the engine's finding. When the engine's line ends `(the first twenty of <k>)`, say how many numbers you did not check. Never retry or recapture because of what you found. A new reading of a published image is a new revision (`--recapture`): name it, and leave the choice to the user.
 
 **A retry and a replay are two things.**
 
@@ -142,11 +163,29 @@ The engine's notes, on stderr, for a published image revision:
 
 - `NOTE: the local recognizer does not confirm <n> word(s) and <m> number(s) of the text` — printed only when one of the two counts is above zero.
 - `NOTE: unconfirmed numbers: <up to twenty>` — printed only when the number count is above zero.
-- Without these lines, both counts are zero.
-- The first line can end `(the list is unavailable: this ledger holds no report of the reading)`: then say that the list is unavailable.
+- Without these two lines, both unconfirmed counts are zero.
+- `NOTE: the local recognizer read <k> number(s) that the text does not hold` — printed only when that count is above zero.
+- `NOTE: missing numbers: <up to twenty>` — printed with the line before it. Past twenty numbers it ends `… (the first twenty of <k>)`.
+- Without these two lines, the count of missing numbers is zero, or the engine did not count it: `capture.witness_missing_numbers` tells which. When that key is above zero and the engine printed no list of the numbers, say the count and say that the list is unavailable: there is nothing to check.
+- A count line can end `(the list is unavailable: this ledger holds no report of the reading)`: the engine then prints no list after it. Say that the list is unavailable.
+- `NOTE: the reading's report: <path>` — printed when the engine has the report file of the reading in place.
 - `NOTE: this attempt's reading differs from the previous attempt's`: say that this retry read the image again and its text differs from the earlier reading.
 
 The numbers are for the user, never a gate of this skill. The engine's own refusals (`reading-mismatch`, `no-text`) are the only ones: never refuse, retry or recapture because of a count.
+
+**The report file.** The line `NOTE: the reading's report: <path>` names it. Open it only when the user asks for the verdict, the cost of the reading or the lists. It is a JSON file, and the image report is its member `text`. Read `text.schema` first.
+
+- `mnemon-capture-image/2`: `text.comparison.verdict`, `text.reader.cost_usd` with the token counts, and two list objects, `text.comparison.unconfirmed` and `text.comparison.missing_lists`. Each list object has `words`, `numbers` and `truncated`. A published revision always holds the verdict `agree`.
+- `mnemon-capture-image/1`, from an earlier engine: the same without `missing_lists` and without the counts of the witness's numbers. Say that this report holds no list of tesseract's missing words.
+- A list object with `truncated: true` has a list that was cut at 200 entries: one of its two, or both. The cut list is shorter than its count: `missing_words` and `missing_numbers` for `missing_lists`, `unconfirmed_words` and `unconfirmed_numbers` for `unconfirmed`. Say which list is not whole.
+- The user asks for the verdict, the cost or the lists, and the engine printed no path line: say that the engine named no report file. Do not say that no report exists. When the user asks for none of them, say nothing about the report file.
+- After a failed capture you have the engine's message and no report file.
+
+**What carries text of the image.**
+
+- From the engine, four things: `RESULT:title=`, the line `NOTE: unconfirmed numbers:`, the line `NOTE: missing numbers:`, and the two list objects of the report file. Every other `RESULT:` line and every other note of an image capture holds identifiers, kinds and counts.
+- From you: everything that you read off the image. That is each line of the meta-reading (an address, a title, an author, a mention) and each number that you name in your check.
+- When you were told to pass on no text of an image, that instruction governs your whole answer. Give kinds, counts and lengths: «one address read and captured», «a title of 12 characters», the counts without the lists. For your check, give only how many numbers got each answer. Quote nothing from the report's lists.
 
 *A failed image capture.* The engine's message decides what you tell the user about the image. Never say more about the image than the message says.
 
@@ -176,8 +215,10 @@ The summary block, with the lines that apply:
 <first, when it applies: the title the image shows differs from the title in the library>
 Document: <address as read> → <RESULT:status> · in the library as "<RESULT:title>" · <RESULT:path>
 Mentioned, not captured: <each mention>
+Instance: <the library that received these captures and the rule that chose it; or «routing unclear: this session's own instance» — only in those two cases>
 Image: <RESULT:status> · <RESULT:path> · completeness unknown (read by a model, checked by tesseract)
-Comparison: <one of the three forms>
+Comparison: <one of the three forms; forms 1 and 2 with the number counts>
+Check: <your own look at the listed missing numbers, when there are any>
 Screenshot: not archived (it only points to the document)
 Next: <only when the outcome calls for one>
 ```

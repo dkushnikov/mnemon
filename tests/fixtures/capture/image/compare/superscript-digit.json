@@ -1,12 +1,12 @@
 {
   "name": "superscript-digit",
-  "what": "A superscript digit beside a word is neither a letter nor a number, and a Roman numeral sign is no letter. Witness 'footnote' + U+00B9, '10' + U+2076, 'Chapter' + U+216B: words the footnote says cells chapter = 5, numbers 10 = 1. Reading 'footnote1', '10^6', 'XII': words the footnote says cells chapter xii = 6, numbers 1 10 6 = 3. All 5 witness words found; 'XII' unconfirmed; numbers 1 and 6 unconfirmed.",
+  "what": "A superscript digit beside a word is neither a letter nor a number, and a Roman numeral sign is no letter. Witness 'footnote' + U+00B9, '10' + U+2076, 'Chapter' + U+216B: words the footnote says cells chapter = 5, numbers 10 = 1. Reading 'footnote1', '10^6', 'XII': words the footnote says cells chapter xii = 6, numbers 1 10 6 = 3. All 5 witness words found; 'XII' unconfirmed; numbers 1 and 6 unconfirmed. Rule /2: the witness's numbers 10 = 1, each with a partner in the reading.",
   "reading": "The footnote1 says 10^6 cells in Chapter XII.\n",
   "witness": "The footnote\u00b9 says 10\u2076 cells in Chapter \u216b.\n",
   "min_share": 90,
   "allowance": 20,
   "expected": {
-    "rule": "mnemon-read-compare/1",
+    "rule": "mnemon-read-compare/2",
     "verdict": "agree",
     "floor": {
       "min_share": 90.0,
@@ -14,13 +14,20 @@
     },
     "witness_words": 5,
     "found": 5,
-    "missing": 0,
+    "missing_words": 0,
     "share": 100.0,
+    "witness_numbers": 1,
+    "missing_numbers": 0,
     "reading_words": 6,
     "unconfirmed_words": 1,
     "reading_numbers": 3,
     "unconfirmed_numbers": 2,
     "hyphen_joined": 0,
+    "missing_lists": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    },
     "unconfirmed": {
       "words": [
         "XII"

@@ -1,4 +1,5 @@
-"""bin/capture-image.py — the image worker and its owner (capture layer A20, sections 21.6 and 21.7).
+"""bin/capture-image.py — the image worker and its owner (capture layer A20, sections 21.6 and 21.7; the report
+`mnemon-capture-image/2` of A21, section 22.3).
 
 Hermetic: the witness is the stub tesseract (through the test hook OCR_CMD), the reader is the stub `claude`
 (through --claude); no real tool, no network. Every run gets an attempt dir of its own. Stdlib only, python 3.9.
@@ -27,6 +28,7 @@ IMG = os.path.join(FIX, "image")
 STUB_TESSERACT = os.path.join(IMG, "stub-tesseract.py")
 STUB_CLAUDE = os.path.join(IMG, "stub-claude-image.py")
 FIXTURE = read_json(os.path.join(REPORTS_FIX, "image.json"))
+FIXTURE_V1 = read_json(os.path.join(REPORTS_FIX, "image-v1.json"))
 PROBES = read_json(os.path.join(REPORTS_FIX, "ocr-probe.json"))
 
 with open(os.path.join(IMG, "stub-text.txt"), "r", encoding="utf-8") as _fh:
@@ -100,6 +102,27 @@ def keys_match(testcase, actual, fixture, where: str) -> None:
             keys_match(testcase, actual[key], value, "%s.%s" % (where, key))
 
 
+def check_v2_keys(testcase, rep, where: str) -> None:
+    """Section 22.3: a /2 report has no key named `missing` — neither `witness.missing` nor `comparison.missing`;
+    when a comparison ran, each list's length equals its count when nothing was cut, and the two directions
+    agree on the matched numbers (section 22.6)."""
+    testcase.assertEqual(rep["schema"], "mnemon-capture-image/2", where)
+    testcase.assertIn("absent", rep["witness"], where)
+    testcase.assertNotIn("missing", rep["witness"], where)
+    c = rep["comparison"]
+    if c is None:
+        return
+    testcase.assertNotIn("missing", c, where)
+    testcase.assertEqual(c["rule"], "mnemon-read-compare/2", where)
+    for obj, words_key, numbers_key in (("missing_lists", "missing_words", "missing_numbers"),
+                                        ("unconfirmed", "unconfirmed_words", "unconfirmed_numbers")):
+        if not c[obj]["truncated"]:
+            testcase.assertEqual(len(c[obj]["words"]), c[words_key], "%s: %s.words" % (where, obj))
+            testcase.assertEqual(len(c[obj]["numbers"]), c[numbers_key], "%s: %s.numbers" % (where, obj))
+    testcase.assertEqual(c["witness_numbers"] - c["missing_numbers"], c["reading_numbers"] - c["unconfirmed_numbers"],
+                         where)
+
+
 class Bench:
     """One attempt: a work dir, a language model directory, the two counter files, the environment."""
 
@@ -166,7 +189,12 @@ class HappyPath(unittest.TestCase):
         rc, rep, err = b.run(b.env())
         self.assertEqual(rc, 0, err)
         keys_match(self, rep, FIXTURE["done"], "done")
-        self.assertEqual((rep["schema"], rep["stage"], rep["failure"]), ("mnemon-capture-image/1", "done", None))
+        check_v2_keys(self, rep, "done")
+        self.assertEqual((rep["schema"], rep["stage"], rep["failure"]), ("mnemon-capture-image/2", "done", None))
+        self.assertEqual(list(rep["comparison"]), list(FIXTURE["done"]["comparison"]), "the key order of section 22.3")
+        self.assertEqual((rep["comparison"]["missing_numbers"], rep["comparison"]["missing_lists"]),
+                         (0, {"words": [], "numbers": [], "truncated": False}), "the same text: nothing lacks")
+        self.assertEqual(rep["comparison"]["witness_numbers"], rep["comparison"]["reading_numbers"])
         self.assertEqual(rep["converter"], "image-reader")
         self.assertEqual(rep["completeness"], "unknown")
         self.assertRegex(rep["method"], r"^read:[A-Za-z0-9._:@-]+$")
@@ -245,6 +273,7 @@ class StageReports(unittest.TestCase):
         self.assertEqual(rc, rc_want, err)
         self.assertIsNotNone(rep, err)
         keys_match(self, rep, FIXTURE[name], name)
+        check_v2_keys(self, rep, name)
         self.assertEqual((rep["stage"], rep["failure"]["class"]), (stage, cls), rep)
         for key in ("method", "converter", "completeness"):
             self.assertIsNone(rep[key], key)
@@ -271,7 +300,7 @@ class StageReports(unittest.TestCase):
         b, rep = self.check("probe", 3, "probe", "environment", languages="rus+eng")
         self.assertEqual(rep["failure"], {"class": "environment", "acquisition": None, "reason": "model-missing",
                                           "retryable": True})
-        self.assertEqual(rep["witness"]["missing"], ["lang:rus"])
+        self.assertEqual(rep["witness"]["absent"], ["lang:rus"], "absent holds what missing held at the stage probe")
         self.assertIsNone(rep["execution"])
         self.assertEqual(rep["validation"]["outcome"], "ok")
         self.assertEqual((b.runs_made(), b.reader_calls_made()), (0, 0))
@@ -309,6 +338,9 @@ class StageReports(unittest.TestCase):
                                           "retryable": False})
         self.assertEqual(rep["comparison"]["verdict"], "loss")
         self.assertIsNotNone(rep["result"])
+        # section 22.3: after a refusal the object is complete — after a loss it holds the words whose absence refused
+        self.assertEqual(len(rep["comparison"]["missing_lists"]["words"]), min(200, rep["comparison"]["missing_words"]))
+        self.assertGreater(rep["comparison"]["missing_words"], 20)
 
     def test_timeout(self):
         b, rep = self.check("timeout", 124, "reader", "timeout", reader="hang", timeout=1.5)
@@ -365,7 +397,8 @@ class WitnessOutcomes(unittest.TestCase):
         self.assertEqual(rep["stage"], "witness")
         self.assertEqual(rep["failure"], {"class": "environment", "acquisition": None, "reason": "model-load",
                                           "retryable": True})
-        self.assertEqual(rep["witness"]["missing"], ["lang:rus"])
+        self.assertEqual(rep["witness"]["absent"], ["lang:rus"], "absent holds what missing held at the stage witness")
+        self.assertNotIn("missing", rep["witness"])
         self.assertFalse(os.path.exists(b.out))
         self.assertEqual(b.reader_calls_made(), 0)
         b, rc, rep = self.outcome("no-lang", languages="rus+eng", models=("eng", "rus"))
@@ -385,11 +418,11 @@ class WitnessOutcomes(unittest.TestCase):
     def test_the_probes_failures_never_fall_back_to_another_sequence(self):
         for mode, reason, missing in (("version-old", "version", ["version"]), ("no-version", "version", ["version"])):
             b, rc, rep = self.outcome(mode)
-            self.assertEqual((rc, rep["stage"], rep["failure"]["reason"], rep["witness"]["missing"]),
+            self.assertEqual((rc, rep["stage"], rep["failure"]["reason"], rep["witness"]["absent"]),
                              (3, "probe", reason, missing), mode)
             self.assertEqual(b.runs_made(), 0)
         b, rc, rep = self.outcome("ok", languages="rus")
-        self.assertEqual((rc, rep["failure"]["reason"], rep["witness"]["missing"]), (3, "model-missing", ["lang:rus"]))
+        self.assertEqual((rc, rep["failure"]["reason"], rep["witness"]["absent"]), (3, "model-missing", ["lang:rus"]))
         self.assertEqual(b.runs_made(), 0, "no run under eng in place of rus")
 
     def test_a_probe_command_over_its_output_cap(self):
@@ -437,7 +470,7 @@ class Comparison(unittest.TestCase):
         # languages and its mean confidence — and no word of either text
         sentence = rep["error"]
         share = "none" if rep["comparison"]["share"] is None else "%.1f %%" % rep["comparison"]["share"]
-        for part in ("%s found" % share, "%d missing" % rep["comparison"]["missing"], "the floor is 90 % and 20 words",
+        for part in ("%s found" % share, "%d missing" % rep["comparison"]["missing_words"], "the floor is 90 % and 20 words",
                      "witness languages eng", "mean word confidence"):
             self.assertIn(part, sentence)
         for word in ("picture", "brillig", "Field notes"):
@@ -449,9 +482,41 @@ class Comparison(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         self.assertEqual(rep["comparison"]["verdict"], "agree")
         self.assertGreater(rep["comparison"]["unconfirmed_words"], 0)
-        self.assertEqual(rep["comparison"]["missing"], 0)
+        self.assertEqual(rep["comparison"]["missing_words"], 0)
         self.assertEqual(len(rep["comparison"]["unconfirmed"]["words"]), rep["comparison"]["unconfirmed_words"])
         self.assertTrue(os.path.exists(b.out))
+
+    def test_numbers_the_reading_lacks_are_counted_and_listed_and_never_refused(self):
+        # section 22.2: the witness's `numbers` mode is the text of `ok` and a line `10:15 - 11:30` that the stub
+        # reader's text does not hold — four numbers, no word
+        b = Bench(self)
+        rc, rep, err = b.run(b.env(tesseract="numbers"))
+        self.assertEqual(rc, 0, err)
+        check_v2_keys(self, rep, "numbers")
+        c = rep["comparison"]
+        self.assertEqual((c["verdict"], c["missing_words"], c["unconfirmed_numbers"]), ("agree", 0, 0))
+        self.assertEqual((c["missing_numbers"], c["witness_numbers"]), (4, c["reading_numbers"] + 4))
+        self.assertEqual(c["missing_lists"], {"words": [], "numbers": ["10", "15", "11", "30"], "truncated": False})
+        self.assertTrue(os.path.exists(b.out), "a missing number never refuses")
+        for number in ("10", "15", "11", "30"):
+            self.assertNotIn(number, err.split(), "the worker prints no list on stderr")
+
+    def test_the_sentence_of_a_refused_reading_reads_missing_words(self):
+        cli = load_cli()
+        comparison = FIXTURE["compare"]["comparison"]
+        sentence = cli.mismatch_sentence(comparison, "eng", FIXTURE["compare"]["witness"]["confidence"])
+        self.assertEqual(sentence, FIXTURE["compare"]["error"], "the same sentence as for a /1 report")
+        self.assertIn("lacks %d of the %d words" % (comparison["missing_words"], comparison["witness_words"]), sentence)
+        no_conf = dict(comparison, verdict="no-confirmation")
+        self.assertIn("%d missing" % comparison["missing_words"], cli.mismatch_sentence(no_conf, "eng", None))
+        # no word and no number of either text: none of the two list objects reaches the sentence
+        listed = (comparison["missing_lists"]["words"] + comparison["missing_lists"]["numbers"]
+                  + comparison["unconfirmed"]["words"] + comparison["unconfirmed"]["numbers"])
+        for text in (sentence, cli.mismatch_sentence(no_conf, "eng", None)):
+            for token in listed:
+                self.assertNotIn(token, text)
+        with self.assertRaises(KeyError, msg="a /1 comparison has no missing_words: the sentence takes /2 only"):
+            cli.mismatch_sentence(dict(FIXTURE_V1["done"]["comparison"], verdict="loss"), "eng", None)
 
     def test_the_floors_two_keys_are_limits_read_at_run_time(self):
         b = Bench(self)
@@ -729,7 +794,7 @@ class Cleanup(unittest.TestCase):
         self.assertFalse(cli.report_contradicts(1, failed))
         self.assertFalse(cli.report_contradicts(3, environment))
         for rc, rep in ((0, failed), (0, environment), (1, done), (1, environment), (1, timeout), (3, done), (3, failed),
-                        (0, None), (1, {}), (3, {"schema": "other"})):
+                        (0, None), (1, {}), (3, {"schema": "other"}), (0, dict(FIXTURE_V1["done"]))):
             self.assertTrue(cli.report_contradicts(rc, rep), (rc, rep and rep.get("stage")))
 
 

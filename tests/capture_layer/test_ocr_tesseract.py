@@ -32,7 +32,7 @@ with open(os.path.join(IMAGE_FIX, "stub-text.txt"), "r", encoding="utf-8") as _f
     STUB_TEXT = _fh.read()
 
 SPEC_OPTIONS = {"psm": "3", "oem": "default", "variables": {"tessedit_create_tsv": "1", "tessedit_create_txt": "1"}}
-WITNESS_KEYS = ["adapter", "backend", "version", "detail", "tessdata_dir", "languages", "data", "options", "missing",
+WITNESS_KEYS = ["adapter", "backend", "version", "detail", "tessdata_dir", "languages", "data", "options", "absent",
                 "text_sha256", "words", "confidence"]
 PROBE_KEYS = ["schema", "ok", "adapter", "backend", "version", "detail", "tessdata_dir", "languages", "available",
               "present", "missing", "reason", "error"]
@@ -664,6 +664,18 @@ class RecognizeTests(_Witness):
         self.assertGreater(w.words, 0)
         self.assertFalse(stub_words & set(x.lower().strip(".") for x in w.text.split()))
 
+    def test_numbers_holds_numbers_the_stub_reader_lacks_and_no_new_word(self):
+        # capture layer §22.6: a witness text with numbers that the reading lacks — the text of `ok` and a line of
+        # an overlay's time range
+        from capture import read_compare
+        self.mode("numbers")
+        _, w = self.recognize("eng")
+        self.assertIsNone(w.failure, w)
+        self.assertTrue(w.text.startswith(ot.normalize(STUB_TEXT).rstrip("\n")))
+        self.assertEqual(w.text[len(ot.normalize(STUB_TEXT)):], "10:15 - 11:30\n")
+        c = read_compare.compare(STUB_TEXT, w.text, min_share=90, allowance=20)
+        self.assertEqual((c.missing_words, c.missing_number_list, c.verdict), (0, ["10", "15", "11", "30"], "agree"))
+
     def test_decode(self):
         self.mode("decode")
         _, w = self.recognize()
@@ -972,7 +984,8 @@ class ConfidenceTests(unittest.TestCase):
 # --- the report object ---------------------------------------------------------------------------------------
 
 class WitnessReportTests(_Witness):
-    """The `witness` object of §21.7, stage by stage, against `tests/fixtures/capture/reports/image.json`."""
+    """The `witness` object of §21.7 under the key names of §22.3 (`absent`, never `missing`: J3), stage by
+    stage, against `tests/fixtures/capture/reports/image.json`."""
 
     def setUp(self):
         _Witness.setUp(self)
@@ -981,6 +994,7 @@ class WitnessReportTests(_Witness):
     def check(self, stage: str, obj: dict):
         fix = self.fixture[stage]["witness"]
         self.assertEqual(list(obj), WITNESS_KEYS)
+        self.assertNotIn("missing", obj, "a /2 report has no key witness.missing (§22.3)")
         assert_same_keys(self, obj, fix, "witness at %s" % stage)
         self.assertEqual({k: obj[k] is None for k in obj}, {k: fix[k] is None for k in fix}, stage)
         self.assertEqual((obj["adapter"], obj["backend"], obj["options"]), ("ocr-tesseract/1", "tesseract", SPEC_OPTIONS))
@@ -993,7 +1007,10 @@ class WitnessReportTests(_Witness):
         p = self.probe("rus+eng")
         obj = ot.witness_report(p, "rus+eng", None)
         self.check("probe", obj)
-        self.assertEqual(obj["missing"], ["lang:rus"])
+        self.assertEqual(obj["absent"], ["lang:rus"], "absent holds what missing held at the stage probe")
+        # the probe document keeps its key `missing` beside `present` (§22.1 J3)
+        doc = ot.probe_document(p, "rus+eng")
+        self.assertEqual((doc["missing"], "absent" in doc), (["lang:rus"], False))
 
     def test_witness_and_output(self):
         self.mode("decode")
@@ -1007,7 +1024,7 @@ class WitnessReportTests(_Witness):
         p, w = self.recognize("eng")
         obj = ot.witness_report(p, "eng", w)
         self.check("done", obj)
-        self.assertEqual((obj["text_sha256"], obj["words"], obj["confidence"], obj["missing"]),
+        self.assertEqual((obj["text_sha256"], obj["words"], obj["confidence"], obj["absent"]),
                          (w.text_sha256, 100, w.confidence, []))
         self.assertEqual(obj["data"], p.data)
 
@@ -1017,7 +1034,7 @@ class WitnessReportTests(_Witness):
         p, w = self.recognize("rus+eng")
         obj = ot.witness_report(p, "rus+eng", w)
         self.check("witness", obj)
-        self.assertEqual(obj["missing"], ["lang:rus"])
+        self.assertEqual(obj["absent"], ["lang:rus"], "absent holds what missing held at the stage witness")
 
 
 # --- the stub itself -----------------------------------------------------------------------------------------

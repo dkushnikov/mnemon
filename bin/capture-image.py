@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """capture-image.py — the capture-text of a retained image raw: a model reads, tesseract witnesses
-(capture layer A20, section 21.6; capture contracts A15).
+(capture layer A20, section 21.6, and A21, section 22.3; capture contracts A15 and A16).
 
     capture-image.py <raw image> --input-name <basename> --languages <sequence> --out <capture.md> --report <json>
                      --reader-model <model> --reader-effort <level> --reader-max-usd <usd> [--claude <command>]
@@ -10,10 +10,14 @@
 
 One attempt, in this order: the envelope check of the raw (capture/image.py), the witness's probe and run
 (capture/ocr_tesseract.py), the reader's one call with the raw's bytes (capture/image_reader.py), the
-normalization of the reading, the comparison of the two texts (capture/read_compare.py). The reading is
-written to --out only when the comparison's verdict is `agree`. The report `mnemon-capture-image/1` is
-written on every outcome; the directory of --report is the attempt dir, where `progress.json`, `witness.txt`,
-`reading.txt`, `argv.txt` and `argv.json` stay.
+normalization of the reading, the comparison of the two texts (capture/read_compare.py, rule
+`mnemon-read-compare/2`). The reading is written to --out only when the comparison's verdict is `agree`. The
+report `mnemon-capture-image/2` is written on every outcome; the directory of --report is the attempt dir, where
+`progress.json`, `witness.txt`, `reading.txt`, `argv.txt` and `argv.json` stay. In that report the word
+`missing` names one thing, what the witness read and the reading lacks (`comparison.missing_words`,
+`comparison.missing_numbers`, `comparison.missing_lists`); what the witness's installation lacks is
+`witness.absent` (section 22.1 J3). The two list objects are text of the image: the report keeps them, and no
+line on stdout or stderr carries them.
 
 The owner (D11, A9): the process the gateway starts is a thin supervisor. It computes the deadline and
 starts itself again as the worker (`--_worker`), the leader of a process group of its own. The unit of
@@ -52,7 +56,7 @@ from capture import policy as policymod  # noqa: E402
 from capture import proc  # noqa: E402
 from capture import read_compare as comparemod  # noqa: E402
 
-SCHEMA = "mnemon-capture-image/1"
+SCHEMA = "mnemon-capture-image/2"
 CONVERTER = "image-reader"
 EXIT_TIMEOUT = 124
 STAGES = ("envelope", "probe", "witness", "output", "reader", "text", "compare")
@@ -133,7 +137,8 @@ def report_of(stage: str, failure, *, validation, witness, execution, reader, pr
 
 
 def mismatch_sentence(comparison: dict, languages: str, confidence) -> str:
-    """The engine's own sentence for a refused reading: numbers only, never text of the image."""
+    """The engine's own sentence for a refused reading: numbers only, never text of the image — the count of the
+    witness's missing words (`missing_words`, the number rule /1 named `missing`), never an entry of a list."""
     mean = "none" if not confidence else "%.1f" % confidence.get("mean", 0.0)
     floor = comparison["floor"]
     share = "none" if comparison["share"] is None else "%.1f %%" % comparison["share"]
@@ -141,11 +146,11 @@ def mismatch_sentence(comparison: dict, languages: str, confidence) -> str:
         # the class's sentence names the share, the missing count and the floor too (contracts A15 §3.6)
         head = ("the local recognizer confirms none of the reading's %d words (it read %d words itself: %s found, "
                 "%d missing, the floor is %g %% and %d words)"
-                % (comparison["reading_words"], comparison["witness_words"], share, comparison["missing"],
+                % (comparison["reading_words"], comparison["witness_words"], share, comparison["missing_words"],
                    floor["min_share"], floor["allowance"]))
     else:
         head = ("the reading lacks %d of the %d words the local recognizer read: %s found, the floor is %g %% and %d words"
-                % (comparison["missing"], comparison["witness_words"], share, floor["min_share"], floor["allowance"]))
+                % (comparison["missing_words"], comparison["witness_words"], share, floor["min_share"], floor["allowance"]))
     return "%s; witness languages %s, mean word confidence %s; the image is kept" % (head, languages, mean)
 
 
@@ -442,7 +447,7 @@ def parse(argv):
     ap.add_argument("--input-name", default=None, help="the basename of the input as given (for the extension diagnostics)")
     ap.add_argument("--languages", default=None, help="the witness's languages: tesseract codes joined by +")
     ap.add_argument("--out", default=None, help="where to write the capture-text")
-    ap.add_argument("--report", default=None, help="where to write the report (mnemon-capture-image/1); its directory is the attempt dir")
+    ap.add_argument("--report", default=None, help="where to write the report (mnemon-capture-image/2); its directory is the attempt dir")
     ap.add_argument("--reader-model", default=None)
     ap.add_argument("--reader-effort", default=None)
     ap.add_argument("--reader-max-usd", default=None)

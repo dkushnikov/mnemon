@@ -1,6 +1,6 @@
 {
  "done": {
-  "schema": "mnemon-capture-image/1",
+  "schema": "mnemon-capture-image/2",
   "stage": "done",
   "failure": null,
   "method": "read:claude-haiku-5-5",
@@ -46,7 +46,7 @@
      "tessedit_create_txt": "1"
     }
    },
-   "missing": [],
+   "absent": [],
    "text_sha256": "c55787267a1e41311a8c160606bc077ecaa24cea9f88ac67b87e30e0509962c2",
    "words": 255,
    "confidence": {
@@ -73,7 +73,7 @@
   },
   "previous_text": null,
   "comparison": {
-   "rule": "mnemon-read-compare/1",
+   "rule": "mnemon-read-compare/2",
    "verdict": "agree",
    "floor": {
     "min_share": 90.0,
@@ -81,13 +81,34 @@
    },
    "witness_words": 194,
    "found": 186,
-   "missing": 8,
+   "missing_words": 8,
    "share": 95.9,
+   "witness_numbers": 11,
+   "missing_numbers": 4,
    "reading_words": 187,
    "unconfirmed_words": 1,
    "reading_numbers": 9,
    "unconfirmed_numbers": 2,
    "hyphen_joined": 0,
+   "missing_lists": {
+    "words": [
+     "menu",
+     "home",
+     "share",
+     "reply",
+     "follow",
+     "views",
+     "likes",
+     "more"
+    ],
+    "numbers": [
+     "10.15",
+     "11.30",
+     "4",
+     "128"
+    ],
+    "truncated": false
+   },
    "unconfirmed": {
     "words": [
      "example"
@@ -109,7 +130,7 @@
   "elapsed_ms": 13200
  },
  "envelope": {
-  "schema": "mnemon-capture-image/1",
+  "schema": "mnemon-capture-image/2",
   "stage": "envelope",
   "failure": {
    "class": "unsupported",
@@ -155,7 +176,7 @@
      "tessedit_create_txt": "1"
     }
    },
-   "missing": null,
+   "absent": null,
    "text_sha256": null,
    "words": null,
    "confidence": null
@@ -182,7 +203,7 @@
   "elapsed_ms": 13200
  },
  "probe": {
-  "schema": "mnemon-capture-image/1",
+  "schema": "mnemon-capture-image/2",
   "stage": "probe",
   "failure": {
    "class": "environment",
@@ -228,7 +249,7 @@
      "tessedit_create_txt": "1"
     }
    },
-   "missing": [
+   "absent": [
     "lang:rus"
    ],
    "text_sha256": null,
@@ -257,7 +278,7 @@
   "elapsed_ms": 13200
  },
  "witness": {
-  "schema": "mnemon-capture-image/1",
+  "schema": "mnemon-capture-image/2",
   "stage": "witness",
   "failure": {
    "class": "unsupported",
@@ -308,7 +329,7 @@
      "tessedit_create_txt": "1"
     }
    },
-   "missing": [],
+   "absent": [],
    "text_sha256": null,
    "words": null,
    "confidence": null
@@ -335,7 +356,7 @@
   "elapsed_ms": 13200
  },
  "output": {
-  "schema": "mnemon-capture-image/1",
+  "schema": "mnemon-capture-image/2",
   "stage": "output",
   "failure": {
    "class": "convert",
@@ -386,7 +407,7 @@
      "tessedit_create_txt": "1"
     }
    },
-   "missing": [],
+   "absent": [],
    "text_sha256": null,
    "words": null,
    "confidence": null
@@ -413,7 +434,7 @@
   "elapsed_ms": 13200
  },
  "reader": {
-  "schema": "mnemon-capture-image/1",
+  "schema": "mnemon-capture-image/2",
   "stage": "reader",
   "failure": {
    "class": "convert",
@@ -464,7 +485,7 @@
      "tessedit_create_txt": "1"
     }
    },
-   "missing": [],
+   "absent": [],
    "text_sha256": "c55787267a1e41311a8c160606bc077ecaa24cea9f88ac67b87e30e0509962c2",
    "words": 255,
    "confidence": {
@@ -496,7 +517,7 @@
   "elapsed_ms": 13200
  },
  "text": {
-  "schema": "mnemon-capture-image/1",
+  "schema": "mnemon-capture-image/2",
   "stage": "text",
   "failure": {
    "class": "no-text",
@@ -547,7 +568,7 @@
      "tessedit_create_txt": "1"
     }
    },
-   "missing": [],
+   "absent": [],
    "text_sha256": "c55787267a1e41311a8c160606bc077ecaa24cea9f88ac67b87e30e0509962c2",
    "words": 255,
    "confidence": {
@@ -584,7 +605,7 @@
   "elapsed_ms": 13200
  },
  "compare": {
-  "schema": "mnemon-capture-image/1",
+  "schema": "mnemon-capture-image/2",
   "stage": "compare",
   "failure": {
    "class": "reading-mismatch",
@@ -635,7 +656,7 @@
      "tessedit_create_txt": "1"
     }
    },
-   "missing": [],
+   "absent": [],
    "text_sha256": "c55787267a1e41311a8c160606bc077ecaa24cea9f88ac67b87e30e0509962c2",
    "words": 255,
    "confidence": {
@@ -662,7 +683,7 @@
   },
   "previous_text": null,
   "comparison": {
-   "rule": "mnemon-read-compare/1",
+   "rule": "mnemon-read-compare/2",
    "verdict": "loss",
    "floor": {
     "min_share": 90.0,
@@ -670,13 +691,129 @@
    },
    "witness_words": 194,
    "found": 89,
-   "missing": 105,
+   "missing_words": 105,
    "share": 45.9,
+   "witness_numbers": 11,
+   "missing_numbers": 2,
    "reading_words": 90,
    "unconfirmed_words": 1,
    "reading_numbers": 9,
    "unconfirmed_numbers": 0,
    "hyphen_joined": 0,
+   "missing_lists": {
+    "words": [
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember",
+     "amber",
+     "birch",
+     "cedar",
+     "daisy",
+     "ember"
+    ],
+    "numbers": [
+     "10.15",
+     "11.30"
+    ],
+    "truncated": false
+   },
    "unconfirmed": {
     "words": [
      "example"
@@ -695,7 +832,7 @@
   "elapsed_ms": 13200
  },
  "timeout": {
-  "schema": "mnemon-capture-image/1",
+  "schema": "mnemon-capture-image/2",
   "stage": "reader",
   "failure": {
    "class": "timeout",
@@ -746,7 +883,7 @@
      "tessedit_create_txt": "1"
     }
    },
-   "missing": [],
+   "absent": [],
    "text_sha256": "c55787267a1e41311a8c160606bc077ecaa24cea9f88ac67b87e30e0509962c2",
    "words": 255,
    "confidence": {
@@ -778,7 +915,7 @@
   "elapsed_ms": 13200
  },
  "worker": {
-  "schema": "mnemon-capture-image/1",
+  "schema": "mnemon-capture-image/2",
   "stage": "worker",
   "failure": {
    "class": "convert",
@@ -829,7 +966,7 @@
      "tessedit_create_txt": "1"
     }
    },
-   "missing": [],
+   "absent": [],
    "text_sha256": "c55787267a1e41311a8c160606bc077ecaa24cea9f88ac67b87e30e0509962c2",
    "words": 255,
    "confidence": {

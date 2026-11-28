@@ -1,0 +1,41 @@
+{
+  "name": "numbers-missing-words-agree",
+  "what": "Numbers missing while every word matches (rule /2): words posted march with replies and views = 6 in each, all matched ('at' is a short run), share 100.0. Witness numbers 14 09.30 87 1,240 = 4, reading 14 = 1: 09.30, 87 and 1,240 are missing (3), each as the witness text spells it, its leading zero and its comma kept. Verdict agree.",
+  "reading": "Posted 14 March with replies and views.\n",
+  "witness": "Posted 14 March at 09.30 with 87 replies and 1,240 views.\n",
+  "min_share": 90,
+  "allowance": 20,
+  "expected": {
+    "rule": "mnemon-read-compare/2",
+    "verdict": "agree",
+    "floor": {
+      "min_share": 90.0,
+      "allowance": 20
+    },
+    "witness_words": 6,
+    "found": 6,
+    "missing_words": 0,
+    "share": 100.0,
+    "witness_numbers": 4,
+    "missing_numbers": 3,
+    "reading_words": 6,
+    "unconfirmed_words": 0,
+    "reading_numbers": 1,
+    "unconfirmed_numbers": 0,
+    "hyphen_joined": 0,
+    "missing_lists": {
+      "words": [],
+      "numbers": [
+        "09.30",
+        "87",
+        "1,240"
+      ],
+      "truncated": false
+    },
+    "unconfirmed": {
+      "words": [],
+      "numbers": [],
+      "truncated": false
+    }
+  }
+}

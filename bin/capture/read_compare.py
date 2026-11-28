@@ -1,9 +1,13 @@
-"""capture.read_compare — the comparison of two readings of one image (rule `mnemon-read-compare/1`, capture
-layer §21.5; the `comparison` object of the report, §21.7).
+"""capture.read_compare — the comparison of two readings of one image (rule `mnemon-read-compare/2`, capture
+layer §22.2 over §21.5; the `comparison` object of the report, §22.3 over §21.7).
 
 The reading is the model's text of the image, the witness text is the local recognizer's. The comparison
-counts what the witness saw and the reading lacks (the loss, which can refuse the capture) and what the
-reading holds and the witness lacks (the unconfirmed words and numbers, which are counted and never refused).
+counts what the witness saw and the reading lacks (the loss of words, which can refuse the capture, and the
+missing numbers, which never refuse) and what the reading holds and the witness lacks (the unconfirmed words
+and numbers, which are counted and never refused). Rule `/2` is rule `/1` plus three things: the witness's
+numbers, the missing numbers (the matching of the unconfirmed numbers with the two texts exchanged), and the
+lists of the witness's missing words and numbers, as the witness text spells them, in its order. For the
+same two texts and the same floor it gives the verdict and every count that rule `/1` gave.
 
 - A run is a maximal run of letters (`str.isalpha`: a Unicode general category that starts with `L`), folded:
   `str.lower`, then every small `l` written as `i`. A word is a folded run of three code points or more; the
@@ -25,7 +29,7 @@ from collections import Counter
 from fractions import Fraction
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
-RULE = "mnemon-read-compare/1"
+RULE = "mnemon-read-compare/2"
 LIST_LIMIT = 200
 
 AGREE = "agree"
@@ -45,13 +49,17 @@ class Comparison(NamedTuple):
     verdict: str                    # agree | loss | no-confirmation
     witness_words: int
     found: int
-    missing: int
+    missing_words: int              # the witness's words left unmatched (rule /1's `missing`, its value unchanged)
     share: Optional[float]          # one decimal, rounded half to even; None when the witness text has no word
+    witness_numbers: int            # the numbers of the witness text (§22.2)
+    missing_numbers: int            # the witness's numbers left unmatched against the reading's (§22.2)
     reading_words: int
     unconfirmed_words: int
     reading_numbers: int
     unconfirmed_numbers: int
     hyphen_joined: int
+    missing_word_list: List[str]         # as the witness spells them, in the witness's order, all of them
+    missing_number_list: List[str]
     unconfirmed_word_list: List[str]     # as the reading spells them, in the reading's order, all of them
     unconfirmed_number_list: List[str]
 
@@ -152,7 +160,8 @@ def _zero_text(text: str) -> bool:
 
 
 def compare(reading: str, witness_text: str, *, min_share, allowance: int) -> Comparison:
-    """The comparison of §21.5. A zero reading never reaches it (it is `no-text`, §21.6): ValueError."""
+    """The comparison of §21.5 with the additions of §22.2. A zero reading never reaches it (it is `no-text`,
+    §21.6): ValueError."""
     if not isinstance(reading, str) or not isinstance(witness_text, str):
         raise TypeError("the reading and the witness text must be str")
     floor = _floor(min_share)
@@ -167,13 +176,16 @@ def compare(reading: str, witness_text: str, *, min_share, allowance: int) -> Co
     r_folded = [w[0] for w in r_words]
     w_folded = [w[0] for w in w_words]
 
-    missing = len(_unmatched(w_folded, r_folded))
+    missing_at = _unmatched(w_folded, r_folded)
+    missing = len(missing_at)
     unconfirmed_at = _unmatched(r_folded, w_folded)
     found = len(w_folded) - missing
     confirmed = len(r_folded) - len(unconfirmed_at)
 
     r_numbers, w_numbers = NUMBER.findall(reading), NUMBER.findall(witness_text)
     unconfirmed_numbers = [r_numbers[i] for i in _unmatched(r_numbers, w_numbers)]
+    # §22.2: the same matching with the two texts exchanged — the witness's numbers without a partner
+    missing_numbers = [w_numbers[i] for i in _unmatched(w_numbers, r_numbers)]
 
     if r_folded and confirmed == 0:
         verdict = NO_CONFIRMATION
@@ -191,37 +203,48 @@ def compare(reading: str, witness_text: str, *, min_share, allowance: int) -> Co
         verdict=verdict,
         witness_words=len(w_folded),
         found=found,
-        missing=missing,
+        missing_words=missing,
         share=share,
+        witness_numbers=len(w_numbers),
+        missing_numbers=len(missing_numbers),
         reading_words=len(r_folded),
         unconfirmed_words=len(unconfirmed_at),
         reading_numbers=len(r_numbers),
         unconfirmed_numbers=len(unconfirmed_numbers),
         hyphen_joined=r_joined + w_joined,
+        missing_word_list=[w_words[i][1] for i in missing_at],
+        missing_number_list=missing_numbers,
         unconfirmed_word_list=[r_words[i][1] for i in unconfirmed_at],
         unconfirmed_number_list=unconfirmed_numbers,
     )
 
 
+def _cut(word_list: List[str], number_list: List[str]) -> Dict[str, object]:
+    """One list object of the report: each list cut to LIST_LIMIT, `truncated` when one of the two was cut."""
+    return {"words": list(word_list[:LIST_LIMIT]), "numbers": list(number_list[:LIST_LIMIT]),
+            "truncated": len(word_list) > LIST_LIMIT or len(number_list) > LIST_LIMIT}
+
+
 def as_report(c: Comparison, *, min_share, allowance: int) -> Dict[str, object]:
-    """The `comparison` object of §21.7; each unconfirmed list cut to LIST_LIMIT, `truncated` when one was cut."""
-    words = list(c.unconfirmed_word_list[:LIST_LIMIT])
-    numbers = list(c.unconfirmed_number_list[:LIST_LIMIT])
-    truncated = len(c.unconfirmed_word_list) > LIST_LIMIT or len(c.unconfirmed_number_list) > LIST_LIMIT
+    """The `comparison` object of §22.3, in the key order of its example. The two list objects are cut apart:
+    `missing_lists` and `unconfirmed` each keep their own `truncated` flag."""
     return {
         "rule": RULE,
         "verdict": c.verdict,
         "floor": {"min_share": float(_floor(min_share)), "allowance": _allowance(allowance)},
         "witness_words": c.witness_words,
         "found": c.found,
-        "missing": c.missing,
+        "missing_words": c.missing_words,
         "share": c.share,
+        "witness_numbers": c.witness_numbers,
+        "missing_numbers": c.missing_numbers,
         "reading_words": c.reading_words,
         "unconfirmed_words": c.unconfirmed_words,
         "reading_numbers": c.reading_numbers,
         "unconfirmed_numbers": c.unconfirmed_numbers,
         "hyphen_joined": c.hyphen_joined,
-        "unconfirmed": {"words": words, "numbers": numbers, "truncated": truncated},
+        "missing_lists": _cut(c.missing_word_list, c.missing_number_list),
+        "unconfirmed": _cut(c.unconfirmed_word_list, c.unconfirmed_number_list),
     }
 
 
